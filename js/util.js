@@ -102,6 +102,9 @@ export const icon = {
   trash: S('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
   chart: S('<path d="M4 19h16M7 16V10M12 16V6M17 16v-4"/>'),
   close: S('<path d="M6 6l12 12M18 6L6 18"/>'),
+  mic: S('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'),
+  speaker: S('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>'),
+  speakerOff: S('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>'),
   up: S('<path d="M12 19V5M6 11l6-6 6 6"/>'),
   down: S('<path d="M12 5v14M6 13l6 6 6-6"/>'),
 };

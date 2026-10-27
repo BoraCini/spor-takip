@@ -3,7 +3,7 @@ import { showLock, hasPin, setupPinFlow } from './lock.js';
 import { confirmSheet, esc, toast } from './util.js';
 import { initRest } from './rest.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {

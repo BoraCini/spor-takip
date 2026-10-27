@@ -511,3 +511,10 @@ select.input {
 }
 .suggest { background: var(--card) !important; text-align: left; font-weight: 500 !important; }
 .ed-ic { width: 36px !important; height: 40px !important; background: transparent !important; }
+
+.composer .mic.rec { background: var(--warn); color: #fff; animation: recpulse 1.2s infinite; }
+@keyframes recpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(194, 69, 26, .45); } 50% { box-shadow: 0 0 0 8px rgba(194, 69, 26, 0); } }
+@media (prefers-reduced-motion: reduce) { .composer .mic.rec { animation: none; } }
+#voicetog[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.speak-btn { font-size: 11px; color: var(--accent); font-weight: 600; min-height: 28px; padding: 0 2px; }
+.model-tag { display: flex; align-items: center; gap: 0; }

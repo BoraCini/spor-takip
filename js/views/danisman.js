@@ -4,6 +4,10 @@ import { go, refresh } from '../app.js';
 import { dayNutrition, targetsOf, programDay, dueOn, mealLabel, slotLabel, suggestSite, SITES } from '../context.js';
 import { weekday } from '../util.js';
 import { runTurn, commitCard, cardNutrition, AIError } from '../ai.js';
+import { listen, sttSupported, ttsSupported, speak, stopSpeaking, unlockSpeech } from '../voice.js';
+
+let voiceReply = false;
+let stopListen = null;
 
 let busy = false;
 let pendingImage = null; // { media_type, data, thumb }
@@ -11,6 +15,9 @@ let rootEl = null;
 let vvHandler = null;
 
 export function destroy() {
+  if (stopListen) stopListen();
+  stopListen = null;
+  stopSpeaking();
   document.body.classList.remove('chat-mode', 'kb-open');
   if (vvHandler && window.visualViewport) {
     window.visualViewport.removeEventListener('resize', vvHandler);
@@ -29,6 +36,7 @@ export async function render(root, params) {
   const { day, items } = await programDay(weekday(t));
   const due = await dueOn(t);
   const hasKey = !!(await db.getSetting('api_key'));
+  voiceReply = !!(await db.getSetting('voice_reply', false));
   const left = tg.kcal ? tg.kcal - totals.kcal : null;
 
   root.innerHTML = `
@@ -39,7 +47,10 @@ export async function render(root, params) {
             <span class="eyebrow">${esc(trDate(t, true))}</span>
             <h1 class="title">Danışman</h1>
           </div>
-          <a href="#/profil" class="icon-btn" aria-label="Profil ve ayarlar">${icon.person}</a>
+          <div class="hdr-actions">
+            ${ttsSupported() ? `<button type="button" class="icon-btn" id="voicetog" aria-pressed="${voiceReply}" aria-label="Cevapları sesli oku">${voiceReply ? icon.speaker : icon.speakerOff}</button>` : ''}
+            <a href="#/profil" class="icon-btn" aria-label="Profil ve ayarlar">${icon.person}</a>
+          </div>
         </header>
         <nav class="chips" aria-label="Bugünün özeti">
           <a href="#/beslenme?tab=log" class="chipcard">
@@ -69,6 +80,7 @@ export async function render(root, params) {
         </label>
         <label for="msg" class="sr-only">Mesaj</label>
         <textarea id="msg" rows="1" placeholder="Yaz ya da sor…" enterkeyhint="send"></textarea>
+        <button type="button" class="icon-btn mic" id="micbtn" aria-pressed="false" aria-label="Sesli mesaj">${icon.mic}</button>
         <button type="submit" class="icon-btn send" aria-label="Gönder">${icon.send}</button>
       </form>
     </div>`;
@@ -90,9 +102,67 @@ export async function render(root, params) {
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (voiceReply) unlockSpeech();
     send(ta.value);
   });
   root.querySelector('#photo').addEventListener('change', onPhoto);
+
+  // ---- Ses ----
+  const vt = root.querySelector('#voicetog');
+  if (vt)
+    vt.addEventListener('click', async () => {
+      voiceReply = !voiceReply;
+      await db.setSetting('voice_reply', voiceReply);
+      vt.setAttribute('aria-pressed', String(voiceReply));
+      vt.innerHTML = voiceReply ? icon.speaker : icon.speakerOff;
+      if (voiceReply) {
+        unlockSpeech();
+        toast('Cevaplar sesli okunacak');
+      } else {
+        stopSpeaking();
+        toast('Sesli okuma kapalı');
+      }
+    });
+  const mic = root.querySelector('#micbtn');
+  mic.addEventListener('click', () => {
+    if (stopListen) {
+      stopListen();
+      return;
+    }
+    if (!sttSupported()) {
+      toast('Bu cihazda uygulama içi ses tanıma yok. Klavyedeki mikrofon simgesiyle dikte edebilirsin.', 4000);
+      ta.focus();
+      return;
+    }
+    if (busy) return;
+    if (voiceReply) unlockSpeech();
+    const before = ta.value.trim();
+    mic.classList.add('rec');
+    mic.setAttribute('aria-pressed', 'true');
+    ta.placeholder = 'Dinliyorum…';
+    stopListen = listen({
+      onInterim: (txt) => {
+        ta.value = (before ? before + ' ' : '') + txt;
+        autosize();
+      },
+      onFinal: (txt) => {
+        const full = (before ? before + ' ' : '') + txt;
+        ta.value = full;
+        autosize();
+        send(full);
+      },
+      onError: (err) => {
+        if (err === 'not-allowed' || err === 'service-not-allowed') toast('Mikrofon izni verilmedi. Ayarlar > Safari > Mikrofon\'dan izin verebilirsin.', 4000);
+        else if (err !== 'no-speech' && err !== 'aborted') toast('Ses anlaşılamadı, tekrar dene.');
+      },
+      onEnd: () => {
+        stopListen = null;
+        mic.classList.remove('rec');
+        mic.setAttribute('aria-pressed', 'false');
+        ta.placeholder = 'Yaz ya da sor…';
+      },
+    });
+  });
 
   if (params.ask === 'lab' && params.test) {
     const test = await db.get('lab_tests', params.test);
@@ -162,7 +232,8 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
       html += `<div class="bubble me">${m.image ? `<img src="${m.image}" alt="Gönderilen fotoğraf">` : ''}${esc(m.text || '')}</div>`;
     } else if (m.role === 'assistant') {
       html += `<div class="bubble ai">${miniMarkdown(m.text || '')}</div>`;
-      if (m.model) html += `<span class="model-tag">${esc(m.model)}</span>`;
+      if (m.model || ttsSupported())
+        html += `<span class="model-tag">${m.model ? esc(m.model) : ''}${ttsSupported() ? `${m.model ? ' · ' : ''}<button type="button" class="speak-btn" data-speak="${m.id}">Dinle</button>` : ''}</span>`;
     } else if (m.role === 'card') {
       html += cardHTML(m);
     } else if (m.role === 'error') {
@@ -284,6 +355,15 @@ function cardHTML(m) {
 }
 
 async function onListClick(e) {
+  const sp = e.target.closest('[data-speak]');
+  if (sp) {
+    const m = await db.get('chat_messages', sp.dataset.speak);
+    if (m) {
+      unlockSpeech();
+      speak(m.text);
+    }
+    return;
+  }
   const sug = e.target.closest('[data-suggest]');
   if (sug) {
     const ta = rootEl.querySelector('#msg');
@@ -298,6 +378,9 @@ async function onListClick(e) {
     const id = b.dataset.rmitem || b.dataset.rmval;
     const m = await db.get('chat_messages', id);
     if (!m || m.status !== 'pending') return;
+    clearTimeout(pendingSaves[id]);
+    if (edits[id]) m.card = edits[id];
+    delete edits[id];
     const arr = b.dataset.rmitem ? m.card.items : m.card.values;
     arr.splice(Number(b.dataset.i), 1);
     if (!arr.length) m.status = 'cancelled';
@@ -306,6 +389,9 @@ async function onListClick(e) {
   }
   const m = await db.get('chat_messages', b.dataset.id);
   if (!m || m.status !== 'pending') return;
+  clearTimeout(pendingSaves[m.id]);
+  if (edits[m.id]) m.card = edits[m.id];
+  delete edits[m.id];
   if (b.dataset.card === 'cancel') {
     m.status = 'cancelled';
   } else {
@@ -326,6 +412,7 @@ async function onListClick(e) {
 }
 
 const pendingSaves = {};
+const edits = {}; // onaylanmamış kartlardaki düzenlemeler (id → kart)
 async function onListInput(e) {
   const g = e.target.closest('[data-grams]');
   const site = e.target.closest('[data-site]');
@@ -334,6 +421,7 @@ async function onListInput(e) {
   const id = (g || site || meal).dataset.grams || (g || site || meal).dataset.site || (g || site || meal).dataset.meal;
   const m = await db.get('chat_messages', id);
   if (!m || m.status !== 'pending') return;
+  if (edits[id]) m.card = edits[id];
   if (g) {
     const v = parseNum(g.value);
     if (isNaN(v) || v <= 0) return;
@@ -359,8 +447,15 @@ async function onListInput(e) {
   } else if (meal) {
     m.card.meal = meal.value;
   }
+  edits[id] = m.card;
   clearTimeout(pendingSaves[id]);
-  pendingSaves[id] = setTimeout(() => db.put('chat_messages', m), 250);
+  pendingSaves[id] = setTimeout(async () => {
+    const cur = await db.get('chat_messages', id);
+    if (cur && cur.status === 'pending' && edits[id]) {
+      cur.card = edits[id];
+      await db.put('chat_messages', cur);
+    }
+  }, 250);
 }
 
 // ---------- Fotoğraf ----------
@@ -410,6 +505,7 @@ async function onPhoto(e) {
 async function send(raw) {
   const text = (raw || '').trim();
   if (busy || (!text && !pendingImage)) return;
+  stopSpeaking();
   const image = pendingImage;
   pendingImage = null;
   const ta = rootEl.querySelector('#msg');
@@ -431,7 +527,10 @@ async function send(raw) {
       }
       await db.put('chat_messages', { role: 'card', card, status: 'pending' });
     }
-    if (res.text) await db.put('chat_messages', { role: 'assistant', text: res.text, model: res.model.label });
+    if (res.text) {
+      await db.put('chat_messages', { role: 'assistant', text: res.text, model: res.model.label });
+      if (voiceReply) speak(res.text);
+    }
     else if (!res.cards.length) await db.put('chat_messages', { role: 'assistant', text: 'Bir cevap oluşturamadım, yeniden dener misin?', model: res.model.label });
   } catch (err) {
     console.error(err);
