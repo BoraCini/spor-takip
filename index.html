@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SporCoach">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Kişisel antrenman, beslenme, kür ve kan testi takibi">
+<title>SporCoach</title>
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <main id="view" aria-live="polite"></main>
+</div>
+
+<div id="restbar" class="restbar" hidden></div>
+
+<nav id="tabbar" class="tabbar" aria-label="Sekmeler">
+  <a href="#/danisman" data-tab="danisman">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V5a1 1 0 0 1 1-1z"/></svg>
+    <span>Danışman</span>
+  </a>
+  <a href="#/beslenme" data-tab="beslenme">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11h18a9 7 0 0 1-18 0z"/><path d="M9 7c0-1.5 1.5-1.5 1.5-3M14 7c0-1.5 1.5-1.5 1.5-3"/></svg>
+    <span>Beslenme</span>
+  </a>
+  <a href="#/antrenman" data-tab="antrenman">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7v10M3.5 9.5v5M17.5 7v10M20.5 9.5v5M6.5 12h11"/></svg>
+    <span>Antrenman</span>
+  </a>
+  <a href="#/kur" data-tab="kur">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="8" width="19" height="8" rx="4" transform="rotate(-45 12 12)"/><path d="M9.2 9.2l5.6 5.6"/></svg>
+    <span>Kür</span>
+  </a>
+  <a href="#/kan" data-tab="kan">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5s6 6.4 6 10.5a6 6 0 0 1-12 0c0-4.1 6-10.5 6-10.5z"/></svg>
+    <span>Kan</span>
+  </a>
+</nav>
+
+<div id="overlay-root"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
