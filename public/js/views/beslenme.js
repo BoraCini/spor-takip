@@ -2,7 +2,7 @@ import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1 } from '../util.js';
 import { refresh, go } from '../app.js';
 import { dayNutrition, targetsOf, MEALS, mealLabel, waterDay, waterTarget } from '../context.js';
-import { scanBarcode, foodFromBarcode } from '../barcode.js';
+import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, nutrientsFor, findFood } from '../data/foods.js';
 
 let state = { tab: 'log', date: today() };
@@ -282,7 +282,8 @@ async function openAddFood(meal) {
       <label class="sr-only" for="fsearch">Besin ara</label>
       <input id="fsearch" class="input" type="search" placeholder="Ara: yumurta, tavuk, pilav…" autocomplete="off" style="margin-bottom:10px">
       <div id="frecent"></div>
-      <div class="card flush search-res" id="fres"></div>`,
+      <div class="card flush search-res" id="fres"></div>
+      <div id="fmore"></div>`,
   });
   const res = s.el.querySelector('#fres');
   const rec = s.el.querySelector('#frecent');
@@ -307,10 +308,20 @@ async function openAddFood(meal) {
           .map(
             (f) => `<button type="button" class="row" data-id="${esc(f.id)}">
               <span class="row-main"><span class="row-title normal">${esc(f.name)}${f.custom ? ' <span class="muted small">(benim)</span>' : ''}</span>
-              <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`
+              <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}${f.approx ? ' · yaklaşık' : ''}${f.portions && f.portions[0] ? ` · 1 ${esc(f.portions[0][0])} ${fmt(f.portions[0][1])} g` : ''}</span></span>${icon.chev}</button>`
           )
           .join('')
-      : `<div class="empty">Bulunamadı. Aşağıdan kendi besinini ekleyebilirsin.</div>`;
+      : `<div class="empty">Listede "${esc(q)}" bulunamadı.</div>`;
+    const more = s.el.querySelector('#fmore');
+    more.innerHTML = q.trim()
+      ? `<div class="sec" style="padding:14px 14px 6px"><h2>${list.length ? 'Aradığın bu değil mi?' : 'Başka yollar'}</h2></div>
+         <div class="card flush">
+           <button type="button" class="row" data-act="ai-est"><span class="row-main"><span class="row-title" style="color:var(--accent)">Yapay zekâyla hesapla: "${esc(q.trim())}"</span>
+             <span class="row-sub">Standart tarife göre kalori, protein, karbonhidrat, yağ ve lif tahmini</span></span>${icon.chev}</button>
+           <button type="button" class="row" data-act="off-search"><span class="row-main"><span class="row-title" style="color:var(--accent)">Paketli ürünlerde ara</span>
+             <span class="row-sub">Open Food Facts veritabanında marka/ürün adıyla</span></span>${icon.chev}</button>
+         </div>`
+      : '';
   };
   draw('');
   const inp = s.el.querySelector('#fsearch');
@@ -333,7 +344,17 @@ async function openAddFood(meal) {
     }
     if (b.dataset.act === 'custom') {
       s.close();
-      openCustomFood(meal);
+      openSmartCustom(meal, inp.value.trim());
+      return;
+    }
+    if (b.dataset.act === 'ai-est') {
+      s.close();
+      openEstimate(meal, inp.value.trim());
+      return;
+    }
+    if (b.dataset.act === 'off-search') {
+      s.close();
+      openProductSearch(meal, inp.value.trim());
       return;
     }
     const food = findFood(b.dataset.id, custom);
@@ -477,6 +498,128 @@ async function openEditEntry(entry) {
     toast('Silindi');
     refresh();
   });
+}
+
+// ---------- Akıllı ekleme: değerleri bilmeden besin ekle ----------
+async function saveAndAmount(food, meal) {
+  const saved = await reviewFood(food);
+  if (saved) openAmount({ ...saved, custom: true }, meal);
+}
+
+function openSmartCustom(meal, name = '') {
+  const s = openSheet({
+    title: 'Kendi besinini ekle',
+    body: `
+      <p style="margin:0 4px 12px;font-size:15px;line-height:21px">Değerleri bilmen gerekmiyor. Nasıl eklemek istersin?</p>
+      <div class="card flush">
+        <button type="button" class="row" data-m="ai"><span class="row-main"><span class="row-title">Adını yaz, yapay zekâ hesaplasın</span>
+          <span class="row-sub">Ev yemekleri ve restoran yemekleri için. İstersen tarifini de yazabilirsin.</span></span>${icon.chev}</button>
+        <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">Besin etiketinin fotoğrafını çek</span>
+          <span class="row-sub">Paketli ürünler: arkadaki besin tablosunu okur.</span></span>${icon.chev}
+          <input type="file" accept="image/*" capture="environment" class="sr-only" data-m="label"></label>
+        <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">Tabağın fotoğrafını çek</span>
+          <span class="row-sub">Yemeği tanıyıp porsiyonu tahmin eder (en az kesin yöntem).</span></span>${icon.chev}
+          <input type="file" accept="image/*" capture="environment" class="sr-only" data-m="photo"></label>
+        <button type="button" class="row" data-m="off"><span class="row-main"><span class="row-title">Paketli ürünlerde ara</span>
+          <span class="row-sub">Open Food Facts'te marka veya ürün adıyla.</span></span>${icon.chev}</button>
+        <button type="button" class="row" data-m="manual"><span class="row-main"><span class="row-title">Değerleri elle gir</span></span>${icon.chev}</button>
+      </div>`,
+  });
+  s.el.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-m]');
+    if (!b) return;
+    s.close();
+    if (b.dataset.m === 'ai') openEstimate(meal, name);
+    else if (b.dataset.m === 'off') openProductSearch(meal, name);
+    else openCustomFood(meal);
+  });
+  s.el.querySelectorAll('input[data-m]').forEach((inp) =>
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      s.close();
+      await runEstimate(meal, { name, image: await fileToImage(f), mode: inp.dataset.m });
+    })
+  );
+}
+
+function openEstimate(meal, name = '') {
+  const s = openSheet({
+    title: 'Yapay zekâyla hesapla',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Hesapla',
+    body: `
+      <div class="field"><label for="es-name">Yemek veya ürün</label><input id="es-name" class="input" value="${esc(name)}" placeholder="Örn. Kayseri mantısı, annemin karnıyarığı"></div>
+      <div class="field"><label for="es-det">Ayrıntı – isteğe bağlı</label>
+        <textarea id="es-det" class="input" placeholder="Örn. yoğurtlu ve tereyağlı sos, bol kıymalı; ya da kısa tarif"></textarea></div>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Sonucu kaydetmeden önce görüp düzeltebilirsin. Kaydettiğin besin listende kalır, bir dahaki sefere tekrar hesaplatman gerekmez.</p>`,
+    onRight: async (api) => {
+      const n = s.el.querySelector('#es-name').value.trim();
+      if (!n) return toast('Yemeğin adını yaz');
+      api.close();
+      await runEstimate(meal, { name: n, details: s.el.querySelector('#es-det').value.trim(), mode: 'dish' });
+    },
+  });
+  setTimeout(() => s.el.querySelector(name ? '#es-det' : '#es-name').focus(), 250);
+}
+
+async function runEstimate(meal, opts) {
+  const { estimateFood } = await import('../ai.js');
+  const wait = openSheet({ title: 'Hesaplanıyor', body: `<div class="empty" style="padding:30px 0"><div class="typing" style="margin:0 auto 12px;align-self:center;display:inline-flex"><i></i><i></i><i></i></div><br>${opts.mode === 'label' ? 'Etiket okunuyor…' : 'Besin değerleri hesaplanıyor…'}</div>` });
+  try {
+    const food = await estimateFood(opts);
+    wait.close();
+    await saveAndAmount(food, meal);
+  } catch (e) {
+    wait.close();
+    toast(e.message, 4500);
+  }
+}
+
+async function openProductSearch(meal, q = '') {
+  const s = openSheet({
+    title: 'Paketli ürün ara',
+    body: `
+      <form data-f style="display:flex;gap:8px;margin-bottom:10px">
+        <label class="sr-only" for="ps-q">Ürün adı</label>
+        <input id="ps-q" class="input" type="search" value="${esc(q)}" placeholder="Örn. Eti Burçak, Pınar labne" style="flex:1">
+        <button type="submit" class="btn primary">Ara</button>
+      </form>
+      <div id="ps-res"></div>
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Kaynak: Open Food Facts (gönüllülerin girdiği açık veritabanı). Değerleri kaydetmeden önce kontrol edebilirsin.</p>`,
+  });
+  const res = s.el.querySelector('#ps-res');
+  let items = [];
+  const run = async () => {
+    const v = s.el.querySelector('#ps-q').value.trim();
+    if (v.length < 2) return;
+    res.innerHTML = '<div class="empty">Aranıyor…</div>';
+    try {
+      items = await searchProducts(v);
+      res.innerHTML = items.length
+        ? `<div class="card flush">${items
+            .map((f, i) => `<button type="button" class="row" data-i="${i}"><span class="row-main"><span class="row-title normal">${esc(f.name)}</span>
+              <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`)
+            .join('')}</div>`
+        : `<div class="empty">Sonuç yok. Yapay zekâyla hesaplatmayı ya da etiketin fotoğrafını çekmeyi deneyebilirsin.</div>`;
+    } catch (e) {
+      res.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
+  };
+  s.el.querySelector('[data-f]').addEventListener('submit', (e) => {
+    e.preventDefault();
+    run();
+  });
+  res.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-i]');
+    if (!b) return;
+    const f = items[Number(b.dataset.i)];
+    s.close();
+    const mine = f.barcode ? (await db.list('custom_foods', (x) => x.barcode === f.barcode))[0] : null;
+    if (mine) openAmount({ ...mine, custom: true }, meal);
+    else saveAndAmount(f, meal);
+  });
+  if (q.length >= 2) run();
 }
 
 function openCustomFood(meal) {

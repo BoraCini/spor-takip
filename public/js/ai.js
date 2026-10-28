@@ -569,4 +569,74 @@ export async function runTurn({ text, image, onModel, onText }) {
   return { text: finalText.trim(), cards, model };
 }
 
+
+// ---------- Besin değeri tahmini (yemek adı/tarif ya da etiket fotoğrafı) ----------
+const ESTIMATE_TOOL = {
+  name: 'food_values',
+  description: 'Besinin 100 g (sıvılarda 100 ml) başına besin değerleri ve tipik porsiyonu.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Besinin kısa Türkçe adı' },
+      kcal: { type: 'number' },
+      protein_g: { type: 'number' },
+      carb_g: { type: 'number' },
+      fat_g: { type: 'number' },
+      fiber_g: { type: 'number' },
+      sodium_mg: { type: 'number' },
+      portion_label: { type: 'string', description: 'Tipik porsiyon adı (porsiyon, adet, dilim, kase, paket…)' },
+      portion_g: { type: 'number', description: 'O porsiyonun gram karşılığı' },
+      source: { type: 'string', enum: ['etiket', 'tahmin'], description: 'Değerler etiketten mi okundu yoksa tahmin mi' },
+      note: { type: 'string', description: 'Kısa not: varsayımlar (tarif, pişirme yöntemi) veya etiketin okunamayan kısımları. En fazla 1 cümle.' },
+    },
+    required: ['name', 'kcal', 'protein_g', 'carb_g', 'fat_g', 'source'],
+  },
+};
+
+// mode: 'dish' (ad + açıklama) | 'label' (besin tablosu fotoğrafı) | 'photo' (tabak fotoğrafı)
+export async function estimateFood({ name = '', details = '', image = null, mode = 'dish' }) {
+  const apiKey = await db.getSetting('api_key');
+  if (!apiKey) throw new AIError('Bu özellik için Profil ve ayarlar sayfasından API anahtarını eklemelisin.');
+  const model = image ? MODELS.smart : MODELS.fast;
+  const instr =
+    mode === 'label'
+      ? 'Fotoğraftaki besin değerleri tablosunu oku ve 100 g (veya 100 ml) başına değerleri ver. Tablo sadece porsiyon başına değer veriyorsa 100 g\'a çevir. Tuz verilmişse sodyum = tuz / 2,5. Ürün adı paketten okunabiliyorsa onu kullan. source = "etiket".'
+      : mode === 'photo'
+      ? 'Fotoğraftaki yemeği tanı; standart Türk ev/restoran tarifine göre 100 g başına gerçekçi değerleri ve fotoğraftaki porsiyonun yaklaşık gramını ver. source = "tahmin".'
+      : 'Verilen yemek ya da ürün için standart Türk ev/restoran tarifine (veya piyasadaki tipik ürüne) göre 100 g başına gerçekçi besin değerlerini ver. Kullanıcının verdiği tarif/açıklama varsa ona göre hesapla. source = "tahmin".';
+  const content = [];
+  if (image) content.push({ type: 'image', source: { type: 'base64', media_type: image.media_type, data: image.data } });
+  content.push({ type: 'text', text: `${instr}\n\nAd: ${name || '(belirtilmedi)'}${details ? `\nAçıklama/tarif: ${details}` : ''}` });
+  const data = await callAPIStream(
+    apiKey,
+    {
+      model: model.id,
+      max_tokens: 600,
+      system: 'Sen bir beslenme veritabanı uzmanısın. Değerleri USDA ve TürKomp gibi kaynaklardaki tipik değerlere dayandır; uydurma kesinlik gösterme ama her zaman bir sayı ver. Kalori ile makrolar tutarlı olsun (≈ 4×protein + 4×karbonhidrat + 9×yağ).',
+      messages: [{ role: 'user', content }],
+      tools: [ESTIMATE_TOOL],
+      tool_choice: { type: 'tool', name: 'food_values' },
+    },
+    null
+  );
+  await recordUsage(model, data.usage);
+  const use = (data.content || []).find((b) => b.type === 'tool_use');
+  if (!use || !use.input) throw new AIError('Değerler hesaplanamadı, yeniden dene.');
+  const v = use.input;
+  const num = (x) => (x == null || isNaN(Number(x)) ? 0 : Number(x));
+  return {
+    name: String(v.name || name || 'Besin').slice(0, 80),
+    k: Math.round(num(v.kcal)),
+    p: round1(num(v.protein_g)),
+    c: round1(num(v.carb_g)),
+    f: round1(num(v.fat_g)),
+    fb: round1(num(v.fiber_g)),
+    na: Math.round(num(v.sodium_mg)),
+    ka: 0,
+    portions: v.portion_g > 0 ? [[String(v.portion_label || 'porsiyon').slice(0, 20), round1(num(v.portion_g))]] : [],
+    source: v.source === 'etiket' ? 'Etiketten okundu' : 'Yapay zekâ tahmini',
+    note: v.note ? String(v.note).slice(0, 200) : '',
+  };
+}
+
 export { slotLabel, round1, labByKey };

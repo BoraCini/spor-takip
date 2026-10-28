@@ -2,7 +2,9 @@
 // Kaynak: USDA FoodData Central ortalamaları; "~" ile işaretli yerel ürünler marka ve tarife göre değişir, yaklaşıktır.
 // Alanlar: k=kcal, p=protein g, c=karbonhidrat g, f=yağ g, fb=lif g, na=sodyum mg, ka=potasyum mg
 // portions: [etiket, gram]
-export const FOODS = [
+import { FOODS_TR } from './foods_tr.js';
+
+const BASE_FOODS = [
   // --- Yumurta, et, balık ---
   { id: 'f_egg', name: 'Yumurta', alias: 'yumurta haşlanmış haslanmis omlet', k: 143, p: 12.6, c: 0.7, f: 9.5, fb: 0, na: 142, ka: 138, portions: [['adet', 50]] },
   { id: 'f_eggwhite', name: 'Yumurta beyazı', alias: 'yumurta aki', k: 52, p: 10.9, c: 0.7, f: 0.2, fb: 0, na: 166, ka: 163, portions: [['adet', 33]] },
@@ -112,6 +114,8 @@ export const FOODS = [
   { id: 'f_tea', name: 'Çay (şekersiz)', alias: 'cay', k: 1, p: 0, c: 0.3, f: 0, fb: 0, na: 3, ka: 37, portions: [['ince belli', 100]] },
 ];
 
+export const FOODS = [...BASE_FOODS, ...FOODS_TR];
+
 // Besin değerini miktara göre hesapla
 export function nutrientsFor(food, grams) {
   const r = grams / 100;
@@ -140,26 +144,53 @@ const norm = (s) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+// Basit Levenshtein (kısa kelimeler için yazım hatası toleransı)
+function lev(a, b) {
+  if (Math.abs(a.length - b.length) > 1) return 2;
+  const m = a.length;
+  const n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+
+function wordScore(w, nameN, hayWords) {
+  if (nameN.startsWith(w)) return 4;
+  if (hayWords.some((h) => h.startsWith(w))) return 3;
+  if (hayWords.some((h) => h.includes(w))) return 2;
+  if (w.length >= 4 && hayWords.some((h) => lev(w, h.slice(0, w.length)) <= 1 || lev(w, h) <= 1)) return 1;
+  return -1;
+}
+
 export function searchFoods(query, custom = []) {
   const all = [...custom.map((c) => ({ ...c, custom: true })), ...FOODS];
   const q = norm(query);
   if (!q) return all.slice(0, 40);
   const words = q.split(' ');
   const scored = [];
+  const partial = [];
   for (const f of all) {
-    const hay = norm(f.name + ' ' + (f.alias || ''));
+    const nameN = norm(f.name);
+    const hayWords = (nameN + ' ' + norm(f.alias || '')).split(' ').filter(Boolean);
     let score = 0;
+    let hits = 0;
     for (const w of words) {
-      if (!hay.includes(w)) {
-        score = -1;
-        break;
-      }
-      score += norm(f.name).startsWith(w) ? 3 : 1;
+      const sc = wordScore(w, nameN, hayWords);
+      if (sc < 0) continue;
+      score += sc;
+      hits++;
     }
-    if (score >= 0) scored.push([score, f]);
+    if (f.custom) score += 0.5;
+    if (hits === words.length) scored.push([score, f]);
+    else if (hits > 0 && words.length > 1) partial.push([score, f]);
   }
   scored.sort((a, b) => b[0] - a[0]);
-  return scored.map((x) => x[1]).slice(0, 40);
+  partial.sort((a, b) => b[0] - a[0]);
+  return [...scored, ...partial].map((x) => x[1]).slice(0, 40);
 }
 
 export function bestMatch(name, custom = []) {

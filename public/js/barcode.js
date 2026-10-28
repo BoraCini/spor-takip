@@ -201,11 +201,20 @@ export function reviewFood(food, notFound = false) {
     const v = (x) => (x == null ? '' : String(x).replace('.', ','));
     const pl = food.portions && food.portions[0];
     const s = openSheet({
-      title: notFound ? 'Ürün bulunamadı' : 'Ürünü kontrol et',
+      title: notFound ? 'Ürün bulunamadı' : food.source === 'Yapay zekâ tahmini' ? 'Tahmini değerler' : food.source === 'Etiketten okundu' ? 'Etiketten okunanlar' : 'Ürünü kontrol et',
       leftLabel: 'Vazgeç',
       rightLabel: 'Kaydet',
       body: `
-        ${notFound ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Bu barkod Open Food Facts'te yok. Paketin üzerindeki besin tablosundan değerleri bir kez gir; bir dahaki okutmada hazır gelir.</p>` : `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Değerler Open Food Facts'ten geldi (gönüllülerin girdiği veriler). Paketin üzerindekiyle karşılaştırıp gerekirse düzelt.</p>`}
+        ${
+          notFound
+            ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Bu barkod Open Food Facts'te yok. Paketin arkasındaki besin tablosunun fotoğrafını çekersen değerleri senin için okuyabilirim${food.barcode ? '' : ''}.</p>
+               <label class="btn primary block" style="margin-bottom:14px;cursor:pointer">Etiketin fotoğrafını çek<input type="file" accept="image/*" capture="environment" class="sr-only" data-label-photo></label>`
+            : food.source === 'Yapay zekâ tahmini'
+            ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Değerler yapay zekâ tarafından standart tariflere göre tahmin edildi; ±%20 sapabilir.${food.note ? ' ' + esc(food.note) : ''} İstersen düzelt, sonra kaydet; bir dahaki sefere listende hazır olur.</p>`
+            : food.source === 'Etiketten okundu'
+            ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Değerler etiketin fotoğrafından okundu.${food.note ? ' ' + esc(food.note) : ''} Paketteki tabloyla bir kez karşılaştır.</p>`
+            : `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Değerler Open Food Facts'ten geldi (gönüllülerin girdiği veriler). Paketin üzerindekiyle karşılaştırıp gerekirse düzelt.</p>`
+        }
         <div class="field"><label for="rf-name">Ad</label><input id="rf-name" class="input" value="${esc(food.name)}"></div>
         <p class="small muted" style="margin:0 0 10px">100 g (veya 100 ml) için:</p>
         <div class="grid2">
@@ -217,7 +226,7 @@ export function reviewFood(food, notFound = false) {
           <div class="field"><label for="rf-na">Sodyum (mg)</label><input id="rf-na" class="input" inputmode="decimal" value="${v(food.na)}"></div>
         </div>
         <div class="field"><label for="rf-pg">Bir porsiyon (g) – isteğe bağlı</label><input id="rf-pg" class="input" inputmode="decimal" value="${v(pl ? pl[1] : '')}"></div>
-        <p class="small muted" style="margin:0 4px">Barkod: ${esc(food.barcode || '')}</p>`,
+        ${food.barcode ? `<p class="small muted" style="margin:0 4px">Barkod: ${esc(food.barcode)}</p>` : ''}`,
       onRight: async (api) => {
         const g = (id) => parseNum(s.el.querySelector(id).value);
         const name = s.el.querySelector('#rf-name').value.trim();
@@ -243,5 +252,97 @@ export function reviewFood(food, notFound = false) {
       },
       onClose: () => resolve(saved),
     });
+    const lp = s.el.querySelector('[data-label-photo]');
+    if (lp)
+      lp.addEventListener('change', async () => {
+        const f = lp.files && lp.files[0];
+        if (!f) return;
+        try {
+          toast('Etiket okunuyor…', 4000);
+          const image = await fileToImage(f);
+          const { estimateFood } = await import('./ai.js');
+          const est = await estimateFood({ name: s.el.querySelector('#rf-name').value, image, mode: 'label' });
+          const set = (id, v) => (s.el.querySelector(id).value = v == null ? '' : String(v).replace('.', ','));
+          if (!s.el.querySelector('#rf-name').value) set('#rf-name', est.name);
+          set('#rf-k', est.k);
+          set('#rf-p', est.p);
+          set('#rf-c', est.c);
+          set('#rf-f', est.f);
+          set('#rf-fb', est.fb);
+          set('#rf-na', est.na);
+          if (est.portions[0]) set('#rf-pg', est.portions[0][1]);
+          food.source = 'Etiketten okundu';
+          toast('Değerler etiketten okundu; kontrol edip kaydet', 3000);
+        } catch (e) {
+          toast(e.message, 4000);
+        }
+      });
   });
+}
+
+// Fotoğraf dosyasını yapay zekâya gönderilecek JPEG'e çevir
+export function fileToImage(file, max = 1568) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const sc = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * sc);
+      c.height = Math.round(img.naturalHeight * sc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve({ media_type: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.85).split(',')[1] });
+    };
+    img.onerror = () => reject(new Error('Fotoğraf açılamadı'));
+    img.src = url;
+  });
+}
+
+// Open Food Facts'te ada göre paketli ürün ara
+export async function searchProducts(q) {
+  const fields = 'code,product_name,product_name_tr,brands,nutriments,serving_quantity';
+  const parse = (pr) => {
+    const n = pr.nutriments || {};
+    let kcal = n['energy-kcal_100g'];
+    if (kcal == null && n.energy_100g != null) kcal = n.energy_100g / 4.184;
+    if (kcal == null) return null;
+    const brand = Array.isArray(pr.brands) ? pr.brands[0] : String(pr.brands || '').split(',')[0];
+    let sodium = n.sodium_100g;
+    if (sodium == null && n.salt_100g != null) sodium = n.salt_100g / 2.5;
+    return {
+      barcode: pr.code || null,
+      name: [pr.product_name_tr || pr.product_name || '', brand ? `(${String(brand).trim()})` : ''].join(' ').trim(),
+      k: Math.round(Number(kcal)),
+      p: round1(Number(n.proteins_100g) || 0),
+      c: round1(Number(n.carbohydrates_100g) || 0),
+      f: round1(Number(n.fat_100g) || 0),
+      fb: round1(Number(n.fiber_100g) || 0),
+      na: sodium == null ? 0 : Math.round(Number(sodium) * 1000),
+      ka: 0,
+      portions: pr.serving_quantity > 0 ? [['porsiyon', round1(Number(pr.serving_quantity))]] : [],
+      source: 'Open Food Facts',
+    };
+  };
+  const tries = [
+    async () => {
+      const r = await fetch(`https://search.openfoodfacts.org/search?q=${encodeURIComponent(q)}&page_size=24&langs=tr,en&fields=${fields}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      return d.hits || [];
+    },
+    async () => {
+      const r = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=24&fields=${fields}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      return d.products || [];
+    },
+  ];
+  for (const t of tries) {
+    try {
+      const list = (await t()).map(parse).filter((x) => x && x.name);
+      return list;
+    } catch {}
+  }
+  throw new Error('Open Food Facts\'e ulaşılamadı. Biraz sonra yeniden dene.');
 }
