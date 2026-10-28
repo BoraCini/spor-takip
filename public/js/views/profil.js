@@ -43,6 +43,7 @@ export async function render(root, params) {
   const prefs = await push.getPrefs();
   const pushSupported = push.isSupported();
   const standalone = push.isStandalone();
+  const pushDiag = [`ana ekran: ${standalone ? 'evet' : 'hayır'}`, `push: ${'PushManager' in window ? 'var' : 'yok'}`, `bildirim: ${'Notification' in window ? 'var' : 'yok'}`, `sw: ${'serviceWorker' in navigator ? 'var' : 'yok'}`].join(' · ');
   const backupPhotos = await db.getSetting('backup_photos', true);
   const photoCount = (await db.list('progress_photos')).length;
   const lastBackup = await db.getSetting('last_backup');
@@ -160,10 +161,18 @@ export async function render(root, params) {
     <div class="sec"><h2>Bildirimler</h2></div>
     <section class="card">
       ${
-        !pushSupported
-          ? `<p style="margin:0;font-size:15px;line-height:21px">Bu cihaz ya da tarayıcı bildirimleri desteklemiyor. iPhone'da iOS 16.4 veya üstü ve uygulamanın ana ekrandan açılması gerekir.</p>`
-          : !standalone && !pushOn
-          ? `<p style="margin:0;font-size:15px;line-height:21px">Bildirimler için uygulamayı Safari'den değil, <b>ana ekrandaki SporCoach simgesinden</b> açman gerekiyor.</p>`
+        !standalone && !pushOn
+          ? `<p style="margin:0 0 10px;font-size:15px;line-height:21px">Şu an uygulama <b>Safari içinde</b> açık görünüyor. iPhone bildirimlere sadece ana ekrandan <b>web uygulaması olarak</b> açılan uygulamalarda izin veriyor.</p>
+             <ol style="margin:0;padding-left:20px;font-size:15px;line-height:22px">
+               <li>Ana ekrandaki eski SporCoach simgesini sil (önce Yedek al ile verilerini yedekle).</li>
+               <li>Safari'de siteyi aç → Paylaş → <b>Ana Ekrana Ekle</b>.</li>
+               <li>Açılan ekranda <b>"Web Uygulaması Olarak Aç"</b> seçeneğinin açık olduğundan emin ol → Ekle.</li>
+               <li>Yeni simgeden aç; üstte Safari adres çubuğu görünmemeli. Yedeğini Profil'den geri yükle.</li>
+             </ol>
+             <p class="small muted" style="margin:10px 0 0">Durum: ${pushDiag}</p>`
+          : !pushSupported
+          ? `<p style="margin:0;font-size:15px;line-height:21px">Uygulama ana ekrandan açık ama iPhone bildirim özelliğini sunmuyor. Ayarlar → Uygulamalar → Safari → Gelişmiş → Özellik Bayrakları bölümünde "Notifications" ve "Push API" açık olmalı.</p>
+             <p class="small muted" style="margin:10px 0 0">Durum: ${pushDiag}</p>`
           : `<div class="kv" style="border-top:0"><label class="k" for="push-on">Hatırlatmalar</label><span class="switch"><input id="push-on" type="checkbox" ${pushOn ? 'checked' : ''}><span></span></span></div>
              ${
                pushOn
