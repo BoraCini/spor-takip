@@ -39,6 +39,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Hızlı art arda dokunmada (örn. +/− butonları) iOS'un çift dokunma yakınlaştırmasını kapat */
+html, body, *, *::before, *::after { touch-action: manipulation; }
 
 html, body {
   margin: 0;
