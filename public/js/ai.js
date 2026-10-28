@@ -1,7 +1,7 @@
-// Danışman: Claude API bağlantısı, model seçimi, araçlar (onay kartları) ve harcama takibi
+// Danışman: Claude API bağlantısı (canlı akış + önbellek), model seçimi, araçlar (onay kartları) ve harcama takibi
 import * as db from './db.js';
 import { today, round1 } from './util.js';
-import { buildContext, findOrCreateExercise, dueOn, MEALS, slotLabel } from './context.js';
+import { buildContext, findOrCreateExercise, dueOn, MEALS, slotLabel, MEASURES } from './context.js';
 import { FOODS, findFood, bestMatch, nutrientsFor } from './data/foods.js';
 import { matchLab, labByKey } from './data/labs.js';
 
@@ -11,28 +11,33 @@ export const MODELS = {
   smart: { id: 'claude-sonnet-5-5', label: 'Sonnet', inPrice: 2, outPrice: 10, maxTokens: 3000 },
 };
 const HISTORY_LIMIT = 16;
+const CACHE_WRITE = 1.25; // önbelleğe yazma, normal girişin 1,25 katı
+const CACHE_READ = 0.1; // önbellekten okuma, normal girişin 0,1 katı
 
 // ---------- Harcama ----------
 const monthKey = () => today().slice(0, 7);
 export async function monthUsage() {
   const r = await db.get('usage', monthKey());
-  return { cost: r?.cost || 0, calls: r?.calls || 0 };
+  return { cost: r?.cost || 0, calls: r?.calls || 0, saved: r?.saved || 0 };
 }
 async function recordUsage(model, usage) {
   if (!usage) return;
   const id = monthKey();
-  const r = (await db.get('usage', id)) || { id, calls: 0, input_tokens: 0, output_tokens: 0, cost: 0 };
-  const inTok = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+  const r = (await db.get('usage', id)) || { id, calls: 0, input_tokens: 0, output_tokens: 0, cost: 0, saved: 0 };
+  const inTok = usage.input_tokens || 0;
+  const wTok = usage.cache_creation_input_tokens || 0;
+  const rTok = usage.cache_read_input_tokens || 0;
   const outTok = usage.output_tokens || 0;
   r.calls += 1;
-  r.input_tokens += inTok;
+  r.input_tokens += inTok + wTok + rTok;
   r.output_tokens += outTok;
-  r.cost += (inTok * model.inPrice + outTok * model.outPrice) / 1e6;
+  r.cost += ((inTok + wTok * CACHE_WRITE + rTok * CACHE_READ) * model.inPrice + outTok * model.outPrice) / 1e6;
+  r.saved = (r.saved || 0) + (rTok * (1 - CACHE_READ) * model.inPrice) / 1e6;
   await db.put('usage', r);
 }
 
 // ---------- Model seçimi ----------
-const LOG_RE = /(yedim|içtim|ictim|yaptım|yaptim|aldım|aldim|bastım|kaldırdım|tarttım|tartıldım|sabah\s+hap|akşam\s+hap|\bset\b|\btekrar\b|\d+\s*[x×]\s*\d+|\d+\s*(kg|gr|g|gram)\b)/i;
+const LOG_RE = /(yedim|içtim|ictim|yaptım|yaptim|aldım|aldim|bastım|kaldırdım|tarttım|tartıldım|koştum|yürüdüm|sabah\s+hap|akşam\s+hap|\bset\b|\btekrar\b|\d+\s*[x×]\s*\d+|\d+\s*(kg|gr|g|gram|ml|lt|litre|dk|dakika|km)\b)/i;
 export function chooseModel(text, hasImage) {
   if (hasImage) return MODELS.smart;
   const t = (text || '').trim();
@@ -41,14 +46,20 @@ export function chooseModel(text, hasImage) {
 }
 
 // ---------- Sistem talimatı ----------
-function systemPrompt(ctx) {
+// Sabit kısım (önbelleğe alınır): talimatlar + besin listesi. Her istekte birebir aynı olmalı.
+let STATIC_PROMPT = null;
+function staticPrompt() {
+  if (STATIC_PROMPT) return STATIC_PROMPT;
   const foodList = FOODS.map((f) => `${f.id}: ${f.name}${f.portions?.length ? ' [' + f.portions.map((p) => `1 ${p[0]}=${p[1]}g`).join(', ') + ']' : ''}`).join('\n');
-  return `Sen SporCoach uygulamasının içindeki kişisel spor koçu ve danışmanısın. Kullanıcıyla Türkçe, samimi ama net konuş. Cevapların kısa ve öz olsun; gereksiz uyarı, tekrar ve uzun girişlerden kaçın. Liste ve kalın yazıyı sadece gerçekten okumayı kolaylaştırdığında kullan.
+  STATIC_PROMPT = `Sen SporCoach uygulamasının içindeki kişisel spor koçu ve danışmanısın. Kullanıcıyla Türkçe, samimi ama net konuş. Cevapların kısa ve öz olsun; gereksiz uyarı, tekrar ve uzun girişlerden kaçın. Liste ve kalın yazıyı sadece gerçekten okumayı kolaylaştırdığında kullan. Cevapların bazen sesli okunur; bu yüzden tablo ve emoji kullanma.
 
 GÖREVLERİN
-- Kullanıcı yediklerini, yaptığı setleri, aldığı hap/enjeksiyonu, kilosunu ya da tahlil sonuçlarını yazdığında veya fotoğrafını gönderdiğinde uygun aracı çağırarak kaydı hazırla. Araç ekranda bir onay kartı gösterir; kullanıcı onaylayınca kaydedilir. Aracı çağırdıktan sonra 1–2 cümleyle kısa bir not yaz; karttaki değerleri tekrar listeleme. Bir mesajda birden fazla kayıt türü varsa her biri için ayrı araç çağır.
-- Yemek kaydı: Besin listesinde karşılığı olan her şey için food_id ver ve miktarı grama çevir (örn. 3 yumurta → 150 g, 2 dilim tam buğday ekmeği → 56 g). Listede olmayanlar için food_id verme; est_per_100g ile 100 g başına gerçekçi tahmini değer ver. Öğün belirtilmemişse saate ve bağlama göre makul olanı seç.
-- Antrenman, beslenme ve diyet konusunda kullanıcının hedefine, dönemine (bulk/cut/koruma), sakatlıklarına ve isteklerine göre somut öneriler ver. Güncel bilimsel yaklaşımları ve sahada uzun süredir denenmiş klasik yöntemleri birlikte değerlendir; çelişiyorlarsa bunu açıkça söyle. Kullanıcı bir öneriyi kendi tercihine göre değiştirmek isterse ona uyarla.
+- Kullanıcı yediklerini, içtiği suyu, yaptığı setleri veya kardiyoyu, aldığı hap/enjeksiyonu, kilosunu, vücut ölçülerini ya da tahlil sonuçlarını yazdığında veya fotoğrafını gönderdiğinde uygun aracı çağırarak kaydı hazırla. Araç ekranda bir onay kartı gösterir; kullanıcı onaylayınca kaydedilir. Aracı çağırdıktan sonra 1–2 cümleyle kısa bir not yaz; karttaki değerleri tekrar listeleme. Bir mesajda birden fazla kayıt türü varsa her biri için ayrı araç çağır.
+- Yemek kaydı: Besin listesinde veya kullanıcının kendi besinlerinde karşılığı olan her şey için food_id ver ve miktarı grama çevir (örn. 3 yumurta → 150 g, 2 dilim tam buğday ekmeği → 56 g). Listede olmayanlar için food_id verme; est_per_100g ile 100 g başına gerçekçi tahmini değer ver. Öğün belirtilmemişse saate ve bağlama göre makul olanı seç.
+- Kardiyo (koşu, yürüyüş, bisiklet vb.) için log_workout_sets aracında sets yerine cardio alanını kullan.
+- Kalıcı notlar: Kullanıcı kalıcı bir tercih ya da bilgi paylaştığında (örn. sevmediği/yemediği yiyecekler, antrenman saati, salondaki ekipman kısıtı, uzun vadeli hedefi) remember_note ile kısa bir not olarak kaydet. Geçici şeyleri (bugün yorgunum gibi) not etme. Kullanıcı bir notun yanlış olduğunu ya da artık geçerli olmadığını söylerse forget_note ile sil. Notlar "danisman_notlari" alanında görünür; cevaplarında bunlara uy.
+- Haftalık rapor istendiğinde "bu_hafta_ozet" ve "gecen_hafta_ozet" verilerini kullan: beslenme (kayıtlı gün, ortalama kalori ve protein, hedefe uyum), antrenman (seans, set, hacim, kas grubu başına set; 10–20 set aralığı çoğu kişi için etkilidir), kilo değişimi ve dönem hedefiyle uyumu, kür takibine uyum, su. Önce iyi gidenleri, sonra en fazla üç somut iyileştirme önerisini yaz. Kısa tut.
+- Antrenman, beslenme ve diyet konusunda kullanıcının hedefine, dönemine (bulk/cut/koruma), sakatlıklarına, notlarına ve isteklerine göre somut öneriler ver. Güncel bilimsel yaklaşımları ve sahada uzun süredir denenmiş klasik yöntemleri birlikte değerlendir; çelişiyorlarsa bunu açıkça söyle. Kullanıcı bir öneriyi kendi tercihine göre değiştirmek isterse ona uyarla.
 - Kan tahlillerini, kullanıcının kullandığı maddeleri, kür haftasını ve antrenmanını bilerek yorumla. Referans dışı her değeri kötü sayma: kürün ya da antrenmanın beklenen etkisi olanları (örn. dışarıdan hormon alımında baskılanmış LH/FSH, kas kütlesine bağlı hafif yüksek kreatinin, antrenman sonrası yüksek CK) ayrı belirt. Gerçekten takip veya müdahale gerektirenleri (örn. yükselen hematokrit, bozulan lipid profili, belirgin karaciğer enzimi yükselmesi, yüksek prolaktin veya estradiol, böbrek fonksiyonunda düşüş) açıkça söyle; neden önemli olduğunu ve önceki testlere göre gidişatı anlat.
 
 SINIRLARIN (her zaman geçerli)
@@ -56,13 +67,16 @@ SINIRLARIN (her zaman geçerli)
 - Acil durum belirtilerinde (göğüs ağrısı, nefes darlığı, tek bacakta şişlik ve ağrı, ani şiddetli baş ağrısı, bayılma, enjeksiyon bölgesinde yayılan kızarıklık/sıcaklık ile ateş) beklemeden 112'yi aramasını ya da acile gitmesini söyle.
 - Enjeksiyon sonrası şişlik veya ağrı sorularında normal enjeksiyon ağrısını enfeksiyon ve apse belirtilerinden ayırt etmesine yardım et; enfeksiyon şüphesinde doktora yönlendir.
 - Kesin teşhis koymazsın; gerektiğinde doktora yönlendirirsin.
-- Aşağıdaki verilerde olmayan bir şeyi biliyormuş gibi yapma; bir bilgi eksikse kısa bir soruyla iste.
-
-KULLANICININ GÜNCEL VERİLERİ (uygulamadan otomatik eklenir, kullanıcı her seferinde anlatmak zorunda kalmasın diye kullan):
-${JSON.stringify(ctx)}
+- Kullanıcının verilerinde olmayan bir şeyi biliyormuş gibi yapma; bir bilgi eksikse kısa bir soruyla iste.
 
 BESİN LİSTESİ (food_id: ad [porsiyonlar]):
 ${foodList}`;
+  return STATIC_PROMPT;
+}
+
+function dynamicPrompt(ctx, custom) {
+  const mine = custom.length ? `\n\nKULLANICININ KENDİ BESİNLERİ (food_id: ad — 100 g kcal):\n${custom.map((c) => `${c.id}: ${c.name} — ${c.k} kcal`).join('\n')}` : '';
+  return `KULLANICININ GÜNCEL VERİLERİ (uygulamadan otomatik eklenir, kullanıcı her seferinde anlatmak zorunda kalmasın diye kullan):\n${JSON.stringify(ctx)}${mine}`;
 }
 
 // ---------- Araçlar ----------
@@ -70,7 +84,7 @@ const dateProp = { type: 'string', description: 'YYYY-MM-DD. Belirtilmezse bugü
 export const TOOLS = [
   {
     name: 'log_food',
-    description: 'Kullanıcının yediği/içtiği besinler için Beslenme günlüğüne kayıt kartı hazırlar.',
+    description: 'Kullanıcının yediği/içtiği besinler için Beslenme günlüğüne kayıt kartı hazırlar. Sade su için log_water kullan.',
     input_schema: {
       type: 'object',
       properties: {
@@ -81,7 +95,7 @@ export const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              food_id: { type: 'string', description: 'Besin listesindeki id; listede yoksa verme.' },
+              food_id: { type: 'string', description: 'Besin listesindeki veya kullanıcının kendi besinlerindeki id; yoksa verme.' },
               name: { type: 'string', description: 'Kullanıcının söylediği besin adı (Türkçe)' },
               grams: { type: 'number', description: 'Toplam miktar, gram' },
               est_per_100g: {
@@ -99,19 +113,30 @@ export const TOOLS = [
     },
   },
   {
+    name: 'log_water',
+    description: 'İçilen su miktarı için kayıt kartı hazırlar.',
+    input_schema: { type: 'object', properties: { date: dateProp, ml: { type: 'number', description: 'Mililitre (1 bardak ≈ 200 ml, 1 şişe ≈ 500 ml)' } }, required: ['ml'] },
+  },
+  {
     name: 'log_workout_sets',
-    description: 'Yapılan antrenman setleri için Antrenman kaydı kartı hazırlar. Her egzersiz için ayrı çağır.',
+    description: 'Yapılan antrenman için kayıt kartı hazırlar. Her egzersiz için ayrı çağır. Ağırlık egzersizlerinde sets, kardiyoda cardio kullan.',
     input_schema: {
       type: 'object',
       properties: {
         date: dateProp,
-        exercise: { type: 'string', description: 'Egzersiz adı; kullanıcının programındaki adla eşleşiyorsa o adı kullan.' },
+        exercise: { type: 'string', description: 'Egzersiz adı; kullanıcının programındaki adla eşleşiyorsa o adı kullan (örn. "Koşu bandı").' },
         sets: {
           type: 'array',
-          items: { type: 'object', properties: { weight_kg: { type: 'number' }, reps: { type: 'number' } }, required: ['weight_kg', 'reps'] },
+          items: { type: 'object', properties: { weight_kg: { type: 'number' }, reps: { type: 'number' }, rpe: { type: 'number', description: 'Kullanıcı söylediyse 6-10' } }, required: ['weight_kg', 'reps'] },
+        },
+        cardio: {
+          type: 'object',
+          description: 'Kardiyo için',
+          properties: { duration_min: { type: 'number' }, distance_km: { type: 'number' } },
+          required: ['duration_min'],
         },
       },
-      required: ['exercise', 'sets'],
+      required: ['exercise'],
     },
   },
   {
@@ -158,8 +183,16 @@ export const TOOLS = [
     input_schema: { type: 'object', properties: { date: dateProp, weight_kg: { type: 'number' } }, required: ['weight_kg'] },
   },
   {
+    name: 'log_measurements',
+    description: 'Vücut ölçülerini (cm) ve yağ oranını kaydetmek için kart hazırlar. Sadece söylenen alanları ver.',
+    input_schema: {
+      type: 'object',
+      properties: Object.assign({ date: dateProp }, ...MEASURES.map(([k, l, u]) => ({ [k]: { type: 'number', description: `${l} (${u})` } }))),
+    },
+  },
+  {
     name: 'update_profile',
-    description: 'Kullanıcı dönemini, hedefini, sakatlığını veya kalıcı bir bilgisini değiştirdiğini söylediğinde profili güncellemek için kart hazırlar.',
+    description: 'Kullanıcı dönemini, hedefini, sakatlığını değiştirdiğini söylediğinde profili güncellemek için kart hazırlar.',
     input_schema: {
       type: 'object',
       properties: {
@@ -170,9 +203,19 @@ export const TOOLS = [
       },
     },
   },
+  {
+    name: 'remember_note',
+    description: 'Kullanıcı hakkında kalıcı ve işe yarar bir bilgiyi kısa bir not olarak kaydeder (onay gerekmez, kullanıcı geri alabilir).',
+    input_schema: { type: 'object', properties: { text: { type: 'string', description: 'Kısa, tek cümlelik not. Örn: "Balık sevmiyor."' } }, required: ['text'] },
+  },
+  {
+    name: 'forget_note',
+    description: 'Artık geçerli olmayan bir notu siler.',
+    input_schema: { type: 'object', properties: { id: { type: 'string', description: 'danisman_notlari içindeki not id' } }, required: ['id'] },
+  },
 ];
 
-// Araç girdisini onay kartına çevirir (henüz kaydetmez)
+// Araç girdisini onay kartına çevirir (henüz kaydetmez). Notlar doğrudan kaydedilir.
 async function buildCard(name, input) {
   const date = input.date && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : today();
   if (name === 'log_food') {
@@ -189,8 +232,13 @@ async function buildCard(name, input) {
     });
     return { type: 'food', date, meal: input.meal || 'ara', items };
   }
+  if (name === 'log_water') return { type: 'water', date, ml: Math.max(0, Math.round(Number(input.ml) || 0)) };
   if (name === 'log_workout_sets') {
-    return { type: 'sets', date, exercise: String(input.exercise || '').trim(), sets: (input.sets || []).map((s) => ({ weight_kg: Number(s.weight_kg) || 0, reps: Math.round(Number(s.reps) || 0) })) };
+    const exercise = String(input.exercise || '').trim();
+    if (input.cardio && input.cardio.duration_min) {
+      return { type: 'cardio', date, exercise, duration_min: round1(Number(input.cardio.duration_min)), distance_km: input.cardio.distance_km ? round1(Number(input.cardio.distance_km)) : null };
+    }
+    return { type: 'sets', date, exercise, sets: (input.sets || []).map((s) => ({ weight_kg: Number(s.weight_kg) || 0, reps: Math.round(Number(s.reps) || 0), rpe: s.rpe ? Math.round(Number(s.rpe)) : null })) };
   }
   if (name === 'mark_doses') {
     const due = await dueOn(date);
@@ -223,24 +271,45 @@ async function buildCard(name, input) {
     return { type: 'labs', date, lab_name: input.lab_name || '', values };
   }
   if (name === 'log_body_weight') return { type: 'weight', date, weight_kg: Number(input.weight_kg) };
+  if (name === 'log_measurements') {
+    const values = {};
+    for (const [k] of MEASURES) if (input[k] != null && !isNaN(Number(input[k]))) values[k] = round1(Number(input[k]));
+    return { type: 'measures', date, values };
+  }
   if (name === 'update_profile') {
     const changes = {};
     for (const k of ['phase', 'goal', 'injuries', 'notes']) if (input[k] != null && input[k] !== '') changes[k] = input[k];
     return { type: 'profile', changes };
   }
+  if (name === 'remember_note') {
+    const text = String(input.text || '').trim().slice(0, 300);
+    if (!text) return null;
+    const note = await db.put('coach_notes', { text });
+    return { type: 'note', action: 'add', note_id: note.id, text, autoSaved: true };
+  }
+  if (name === 'forget_note') {
+    const n = await db.get('coach_notes', input.id);
+    if (!n) return null;
+    await db.remove('coach_notes', n.id);
+    return { type: 'note', action: 'remove', note_id: n.id, text: n.text, autoSaved: true };
+  }
   return null;
 }
 
 function cardSummary(card) {
-  if (!card) return 'Bilinmeyen araç.';
+  if (!card) return 'Araç çalıştırılamadı ya da ilgili kayıt bulunamadı.';
   if (card.type === 'food')
     return `Onay kartı gösterildi (${card.meal}, ${card.date}): ` + card.items.map((i) => `${i.name} ${i.grams} g${i.estimated ? ' (tahmini değer)' : ''}`).join(', ');
+  if (card.type === 'water') return `Onay kartı gösterildi: ${card.ml} ml su`;
   if (card.type === 'sets') return `Onay kartı gösterildi: ${card.exercise} — ${card.sets.map((s) => `${s.weight_kg}×${s.reps}`).join(', ')}`;
+  if (card.type === 'cardio') return `Onay kartı gösterildi: ${card.exercise} — ${card.duration_min} dk${card.distance_km ? ', ' + card.distance_km + ' km' : ''}`;
   if (card.type === 'doses')
     return card.items.length ? `Onay kartı gösterildi: ${card.items.map((i) => `${i.name} (${i.slot})`).join(', ')}` : 'Bu tarih için işaretlenecek, henüz alınmamış bir doz bulunamadı (kür listesi boş olabilir ya da hepsi zaten işaretli).';
   if (card.type === 'labs') return `Onay kartı gösterildi: ${card.values.length} değer (${card.date})`;
   if (card.type === 'weight') return `Onay kartı gösterildi: ${card.weight_kg} kg`;
+  if (card.type === 'measures') return Object.keys(card.values).length ? `Onay kartı gösterildi: ${Object.keys(card.values).join(', ')}` : 'Ölçü değeri yoktu.';
   if (card.type === 'profile') return `Onay kartı gösterildi: ${Object.keys(card.changes).join(', ')}`;
+  if (card.type === 'note') return card.action === 'add' ? `Not kaydedildi (id ${card.note_id}).` : 'Not silindi.';
   return 'Kart gösterildi.';
 }
 
@@ -258,11 +327,19 @@ export async function commitCard(card) {
     }
     return `${card.items.length} besin ${card.meal === 'ara' ? 'ara öğüne' : 'öğüne'} eklendi`;
   }
-  if (card.type === 'sets') {
-    const ex = await findOrCreateExercise(card.exercise);
+  if (card.type === 'water') {
+    await db.put('water_logs', { date: card.date, ml: card.ml });
+    return `${card.ml} ml su eklendi`;
+  }
+  if (card.type === 'sets' || card.type === 'cardio') {
+    const ex = await findOrCreateExercise(card.exercise, { cardio: card.type === 'cardio' });
     const existing = await db.list('workout_sets', (s) => s.exercise_id === ex.id && s.date === card.date);
     let n = existing.reduce((m, s) => Math.max(m, s.set_no || 0), 0);
-    for (const s of card.sets) await db.put('workout_sets', { date: card.date, exercise_id: ex.id, set_no: ++n, weight_kg: s.weight_kg, reps: s.reps, done: true });
+    if (card.type === 'cardio') {
+      await db.put('workout_sets', { date: card.date, exercise_id: ex.id, set_no: ++n, duration_min: card.duration_min, distance_km: card.distance_km, weight_kg: 0, reps: 0, done: true });
+      return 'Kardiyo kaydedildi';
+    }
+    for (const s of card.sets) await db.put('workout_sets', { date: card.date, exercise_id: ex.id, set_no: ++n, weight_kg: s.weight_kg, reps: s.reps, rpe: s.rpe || null, done: true });
     return `${card.sets.length} set kaydedildi`;
   }
   if (card.type === 'doses') {
@@ -291,6 +368,11 @@ export async function commitCard(card) {
     }
     return 'Kilo kaydedildi';
   }
+  if (card.type === 'measures') {
+    const existing = (await db.list('body_measurements', (m) => m.date === card.date))[0];
+    await db.put('body_measurements', { ...(existing || {}), date: card.date, ...card.values });
+    return 'Ölçüler kaydedildi';
+  }
   if (card.type === 'profile') {
     const p = await db.getProfile();
     Object.assign(p, card.changes);
@@ -300,10 +382,26 @@ export async function commitCard(card) {
   return 'Kaydedildi';
 }
 
-// ---------- API çağrısı ----------
+// Not kartını geri al
+export async function undoNote(card) {
+  if (card.action === 'add') await db.remove('coach_notes', card.note_id);
+  else await db.put('coach_notes', { id: card.note_id, text: card.text });
+}
+
+// ---------- API çağrısı (canlı akış) ----------
 export class AIError extends Error {}
 
-async function callAPI(apiKey, body) {
+function httpError(status, msg) {
+  if (status === 401) return new AIError('API anahtarı geçersiz. Profil ve ayarlar sayfasından kontrol et.');
+  if (status === 403) return new AIError('Bu API anahtarının bu işleme izni yok.');
+  if (status === 429) return new AIError('Çok sık istek gönderildi ya da harcama limitine ulaşıldı. Biraz bekleyip yeniden dene.');
+  if (status === 529 || status >= 500) return new AIError('Claude şu anda yoğun. Biraz sonra yeniden dene.');
+  if (/credit|balance/i.test(msg || '')) return new AIError("API hesabında kredi kalmamış. Claude Console'dan kredi yükleyebilirsin.");
+  return new AIError('İstek başarısız oldu' + (msg ? `: ${msg}` : '.'));
+}
+
+// SSE akışını okuyup mesajı yeniden kurar. onText(delta) her metin parçasında çağrılır.
+async function callAPIStream(apiKey, body, onText) {
   let res;
   try {
     res = await fetch(API_URL, {
@@ -314,25 +412,89 @@ async function callAPI(apiKey, body) {
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, stream: true }),
     });
   } catch {
     throw new AIError('Bağlantı kurulamadı. İnternet bağlantını kontrol et.');
   }
-  let data = null;
-  try {
-    data = await res.json();
-  } catch {}
   if (!res.ok) {
-    const msg = data?.error?.message || '';
-    if (res.status === 401) throw new AIError('API anahtarı geçersiz. Profil ve ayarlar sayfasından kontrol et.');
-    if (res.status === 403) throw new AIError('Bu API anahtarının bu işleme izni yok.');
-    if (res.status === 429) throw new AIError('Çok sık istek gönderildi ya da harcama limitine ulaşıldı. Biraz bekleyip yeniden dene.');
-    if (res.status === 529 || res.status >= 500) throw new AIError('Claude şu anda yoğun. Biraz sonra yeniden dene.');
-    if (/credit|balance/i.test(msg)) throw new AIError('API hesabında kredi kalmamış. Claude Console\'dan kredi yükleyebilirsin.');
-    throw new AIError('İstek başarısız oldu' + (msg ? `: ${msg}` : '.'));
+    let msg = '';
+    try {
+      msg = (await res.json())?.error?.message || '';
+    } catch {}
+    throw httpError(res.status, msg);
   }
-  return data;
+  const ctype = res.headers.get('content-type') || '';
+  if (!ctype.includes('text/event-stream') || !res.body) {
+    // akış desteklenmiyorsa normal JSON
+    const data = await res.json();
+    for (const b of data.content || []) if (b.type === 'text' && onText) onText(b.text);
+    return data;
+  }
+  const msg = { content: [], stop_reason: null, usage: {} };
+  const partialJson = {};
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  const handle = (ev) => {
+    switch (ev.type) {
+      case 'message_start':
+        Object.assign(msg.usage, ev.message?.usage || {});
+        break;
+      case 'content_block_start':
+        msg.content[ev.index] = { ...ev.content_block };
+        if (ev.content_block.type === 'tool_use') partialJson[ev.index] = '';
+        if (ev.content_block.type === 'text') msg.content[ev.index].text = ev.content_block.text || '';
+        break;
+      case 'content_block_delta': {
+        const b = msg.content[ev.index];
+        if (!b) break;
+        if (ev.delta.type === 'text_delta') {
+          b.text += ev.delta.text;
+          if (onText) onText(ev.delta.text);
+        } else if (ev.delta.type === 'input_json_delta') partialJson[ev.index] += ev.delta.partial_json;
+        break;
+      }
+      case 'content_block_stop': {
+        const b = msg.content[ev.index];
+        if (b && b.type === 'tool_use') {
+          try {
+            b.input = partialJson[ev.index] ? JSON.parse(partialJson[ev.index]) : {};
+          } catch {
+            b.input = {};
+          }
+        }
+        break;
+      }
+      case 'message_delta':
+        if (ev.delta?.stop_reason) msg.stop_reason = ev.delta.stop_reason;
+        if (ev.usage) Object.assign(msg.usage, ev.usage);
+        break;
+      case 'error':
+        throw httpError(ev.error?.type === 'overloaded_error' ? 529 : 500, ev.error?.message);
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const line = chunk.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      handle(ev);
+    }
+  }
+  msg.content = msg.content.filter(Boolean);
+  return msg;
 }
 
 // Konuşma geçmişini API formatına çevir
@@ -352,16 +514,19 @@ async function historyMessages() {
 }
 
 // Bir kullanıcı mesajını işle. image: { media_type, data(base64) }
-// onStatus(model) — UI'da hangi modelin çalıştığını göstermek için
-export async function runTurn({ text, image, onModel }) {
+// onModel(model): hangi model çalışıyor; onText(fullText): cevap yazıldıkça
+export async function runTurn({ text, image, onModel, onText }) {
   const apiKey = await db.getSetting('api_key');
   if (!apiKey) throw new AIError('Danışmanı kullanmak için önce Profil ve ayarlar sayfasından API anahtarını ekle.');
   const model = chooseModel(text, !!image);
   onModel && onModel(model);
   const ctx = await buildContext();
-  const system = systemPrompt(ctx);
+  const custom = await db.list('custom_foods');
+  const system = [
+    { type: 'text', text: staticPrompt(), cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicPrompt(ctx, custom) },
+  ];
   const history = await historyMessages(); // son kullanıcı mesajı zaten kaydedildiği için geçmişte var
-  // son kullanıcı mesajını fotoğrafla birlikte yeniden kur
   if (history.length && history[history.length - 1].role === 'user') history.pop();
   const userContent = [];
   if (image) userContent.push({ type: 'image', source: { type: 'base64', media_type: image.media_type, data: image.data } });
@@ -371,12 +536,17 @@ export async function runTurn({ text, image, onModel }) {
 
   const cards = [];
   let finalText = '';
+  let live = '';
   for (let i = 0; i < 4; i++) {
-    const data = await callAPI(apiKey, { model: model.id, max_tokens: model.maxTokens, system, messages, tools: TOOLS });
+    live = '';
+    const data = await callAPIStream(apiKey, { model: model.id, max_tokens: model.maxTokens, system, messages, tools: TOOLS }, (delta) => {
+      live += delta;
+      onText && onText(live);
+    });
     await recordUsage(model, data.usage);
     const blocks = data.content || [];
     const texts = blocks.filter((b) => b.type === 'text').map((b) => b.text);
-    if (texts.length) finalText = (finalText ? finalText + '\n\n' : '') + texts.join('\n\n');
+    if (texts.length) finalText = texts.join('\n\n');
     const uses = blocks.filter((b) => b.type === 'tool_use');
     if (data.stop_reason !== 'tool_use' || !uses.length) break;
     messages.push({ role: 'assistant', content: blocks });
@@ -388,11 +558,13 @@ export async function runTurn({ text, image, onModel }) {
       } catch (e) {
         console.error(e);
       }
-      if (card && !(card.type === 'doses' && !card.items.length) && !(card.type === 'profile' && !Object.keys(card.changes).length)) cards.push(card);
+      const empty = card && ((card.type === 'doses' && !card.items.length) || (card.type === 'profile' && !Object.keys(card.changes).length) || (card.type === 'measures' && !Object.keys(card.values).length) || (card.type === 'water' && !card.ml));
+      if (card && !empty) cards.push(card);
       results.push({ type: 'tool_result', tool_use_id: u.id, content: cardSummary(card) });
     }
     messages.push({ role: 'user', content: results });
     finalText = ''; // aracı çağırdıktan sonraki son metni gösterelim
+    onText && onText('');
   }
   return { text: finalText.trim(), cards, model };
 }

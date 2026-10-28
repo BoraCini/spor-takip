@@ -2,8 +2,9 @@ import * as db from './db.js';
 import { showLock, hasPin, setupPinFlow } from './lock.js';
 import { confirmSheet, esc, toast } from './util.js';
 import { initRest } from './rest.js';
+import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -78,6 +79,7 @@ async function route(keepScroll = false) {
   }
   if (seq !== renderSeq) return;
   window.scrollTo(0, scroll);
+  syncSoon();
 }
 
 // ---------- Kilit ----------

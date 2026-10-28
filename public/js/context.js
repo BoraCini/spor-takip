@@ -1,7 +1,8 @@
 // Sayfaların ve Danışman'ın ortak kullandığı veri yardımcıları
 import * as db from './db.js';
-import { today, weekday, addDays, daysBetween, WD_LONG, round1 } from './util.js';
+import { today, weekday, addDays, daysBetween, WD_LONG, round1, weekStart as weekStartOf } from './util.js';
 import { classify } from './data/labs.js';
+import { EXERCISE_PRESETS } from './data/exercises.js';
 
 export const MEALS = [
   ['kahvalti', 'Kahvaltı'],
@@ -56,13 +57,145 @@ export async function weekProgram() {
   return out;
 }
 
-export async function findOrCreateExercise(name) {
+export const MUSCLES = ['Göğüs', 'Sırt', 'Omuz', 'Arka omuz', 'Trapez', 'Biceps', 'Triceps', 'Ön kol', 'Bacak', 'Ön bacak', 'Arka bacak', 'Kalça', 'Baldır', 'Karın', 'Kardiyo', 'Diğer'];
+// Haftalık hacim için kas gruplarını ana gruplara topla
+export const MUSCLE_GROUP = {
+  Göğüs: 'Göğüs', Sırt: 'Sırt', Trapez: 'Sırt', Omuz: 'Omuz', 'Arka omuz': 'Omuz', Biceps: 'Kol', Triceps: 'Kol', 'Ön kol': 'Kol',
+  Bacak: 'Bacak', 'Ön bacak': 'Bacak', 'Arka bacak': 'Bacak', Kalça: 'Bacak', Baldır: 'Bacak', Karın: 'Karın', Kardiyo: 'Kardiyo', Diğer: 'Diğer',
+};
+
+function presetFor(name) {
+  const low = name.toLocaleLowerCase('tr-TR');
+  return EXERCISE_PRESETS.find((p) => p[0].toLocaleLowerCase('tr-TR') === low) || null;
+}
+
+export function isCardio(ex) {
+  return !!ex && (ex.kind === 'kardiyo' || ex.muscle === 'Kardiyo');
+}
+
+export async function findOrCreateExercise(name, { cardio } = {}) {
   const n = name.trim();
   const all = await db.list('exercises');
   const low = n.toLocaleLowerCase('tr-TR');
   const hit = all.find((e) => e.name.toLocaleLowerCase('tr-TR') === low);
-  if (hit) return hit;
-  return db.put('exercises', { name: n, muscle: '' });
+  if (hit) {
+    if (!hit.muscle) {
+      const pr = presetFor(n);
+      if (pr) return db.put('exercises', { ...hit, muscle: pr[1], kind: pr[1] === 'Kardiyo' ? 'kardiyo' : 'agirlik' });
+    }
+    return hit;
+  }
+  const pr = presetFor(n);
+  const muscle = pr ? pr[1] : cardio ? 'Kardiyo' : '';
+  return db.put('exercises', { name: n, muscle, kind: muscle === 'Kardiyo' || cardio ? 'kardiyo' : 'agirlik' });
+}
+
+// Kademeli yüklenme önerisi (çift ilerleme): hedef aralığın üst sınırına tüm setlerde ulaşıldıysa ağırlığı artır
+export function parseRepRange(txt) {
+  const m = String(txt || '').match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (m) return [Number(m[1]), Number(m[2])];
+  const one = String(txt || '').match(/^\s*(\d+)\s*$/);
+  if (one) return [Number(one[1]), Number(one[1])];
+  return null;
+}
+
+export function suggestNext(ex, pe, prev) {
+  if (!prev || !prev.sets.length || isCardio(ex)) return null;
+  const range = parseRepRange(pe?.target_reps);
+  const work = prev.sets.filter((s) => s.weight_kg > 0 && s.reps > 0);
+  if (!work.length) return null;
+  const topW = Math.max(...work.map((s) => s.weight_kg));
+  const top = work.filter((s) => s.weight_kg === topW);
+  const minReps = Math.min(...top.map((s) => s.reps));
+  const lower = /curl|raise|fly|extension|pushdown|kickback|lateral|calf|shrug/i.test(ex.name);
+  const inc = topW < 20 || lower ? (topW < 10 ? 1 : 2) : 2.5;
+  if (!range) return { weight_kg: topW, reps: Math.max(...top.map((s) => s.reps)), reason: 'Geçen seferki en iyi setini tekrarla ya da bir tekrar artırmayı dene.' };
+  const [lo, hi] = range;
+  if (minReps >= hi) return { weight_kg: Math.round((topW + inc) * 4) / 4, reps: lo, reason: `Geçen sefer tüm setlerde ${hi} tekrara ulaştın; ağırlığı artırma zamanı.` };
+  if (minReps < lo) return { weight_kg: topW, reps: lo, reason: `Geçen sefer ${lo} tekrarın altına düştün; aynı ağırlıkta ${lo} tekrarı hedefle.` };
+  return { weight_kg: topW, reps: Math.min(hi, minReps + 1), reason: `Aynı ağırlıkta tekrar sayısını artır; ${hi} tekrara ulaşınca ağırlık artacak.` };
+}
+
+// ---------- Su ----------
+export async function waterDay(date = today()) {
+  const logs = await db.list('water_logs', (w) => w.date === date);
+  return { logs, total: logs.reduce((s, w) => s + (Number(w.ml) || 0), 0) };
+}
+export async function waterTarget(p) {
+  const custom = await db.getSetting('water_target_ml');
+  if (custom) return Number(custom);
+  const w = Number(p?.weight_kg) || 75;
+  return Math.round((w * 35) / 250) * 250;
+}
+
+// ---------- Vücut ölçüleri ----------
+export const MEASURES = [
+  ['waist_cm', 'Bel', 'cm'],
+  ['chest_cm', 'Göğüs', 'cm'],
+  ['arm_cm', 'Kol', 'cm'],
+  ['shoulder_cm', 'Omuz', 'cm'],
+  ['thigh_cm', 'Bacak', 'cm'],
+  ['hip_cm', 'Kalça', 'cm'],
+  ['neck_cm', 'Boyun', 'cm'],
+  ['bodyfat_pct', 'Yağ oranı', '%'],
+];
+
+// ---------- Haftalık özet ----------
+export async function weeklySummary(ws) {
+  const we = addDays(ws, 6);
+  const inWeek = (d) => d >= ws && d <= we;
+  const p = await db.getProfile();
+  const tg = targetsOf(p);
+  const food = await db.list('food_logs', (f) => inWeek(f.date));
+  const days = {};
+  for (const f of food) {
+    const d = (days[f.date] = days[f.date] || { kcal: 0, protein_g: 0 });
+    d.kcal += Number(f.kcal) || 0;
+    d.protein_g += Number(f.protein_g) || 0;
+  }
+  const dlist = Object.values(days);
+  const avg = (k) => (dlist.length ? Math.round(dlist.reduce((s, d) => s + d[k], 0) / dlist.length) : 0);
+  const sets = await db.list('workout_sets', (s) => s.done && inWeek(s.date));
+  const exs = await db.list('exercises');
+  const byMuscle = {};
+  let volume = 0;
+  let cardioMin = 0;
+  for (const s of sets) {
+    const ex = exs.find((e) => e.id === s.exercise_id);
+    if (isCardio(ex)) {
+      cardioMin += Number(s.duration_min) || 0;
+      continue;
+    }
+    const g = MUSCLE_GROUP[ex?.muscle] || 'Diğer';
+    byMuscle[g] = (byMuscle[g] || 0) + 1;
+    volume += (s.weight_kg || 0) * (s.reps || 0);
+  }
+  const sessions = new Set(sets.map((s) => s.date)).size;
+  const weights = (await db.list('body_logs', (b) => b.date <= we)).sort((a, b) => a.date.localeCompare(b.date));
+  const wIn = weights.filter((b) => inWeek(b.date));
+  const before = weights.filter((b) => b.date < ws).pop();
+  const wStart = before || wIn[0] || null;
+  const wEnd = wIn[wIn.length - 1] || null;
+  let doseDone = 0;
+  let doseTotal = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(ws, i);
+    if (d > today()) break;
+    const due = await dueOn(d);
+    doseDone += due.done;
+    doseTotal += due.total;
+  }
+  const water = await db.list('water_logs', (w) => inWeek(w.date));
+  const wDays = new Set(water.map((w) => w.date)).size;
+  return {
+    start: ws,
+    end: we,
+    nutrition: { logged_days: dlist.length, avg_kcal: avg('kcal'), avg_protein_g: avg('protein_g'), target_kcal: tg.kcal, target_protein_g: tg.protein_g },
+    training: { sessions, sets: sets.length, volume_kg: Math.round(volume), sets_by_muscle: byMuscle, cardio_min: Math.round(cardioMin) },
+    weight: { start: wStart ? wStart.weight_kg : null, end: wEnd ? wEnd.weight_kg : null, delta: wStart && wEnd ? round1(wEnd.weight_kg - wStart.weight_kg) : null },
+    doses: { done: doseDone, total: doseTotal },
+    water: { avg_ml: wDays ? Math.round(water.reduce((s, w) => s + (Number(w.ml) || 0), 0) / wDays) : 0 },
+  };
 }
 
 // Son oturum (verilen tarihten önce) — egzersiz için setler
@@ -156,7 +289,8 @@ export async function buildContext() {
     byDate[k] = byDate[k] || {};
     const n = exName(s.exercise_id);
     byDate[k][n] = byDate[k][n] || [];
-    byDate[k][n].push(`${s.weight_kg}kg×${s.reps}`);
+    const ex = exs.find((e) => e.id === s.exercise_id);
+    byDate[k][n].push(isCardio(ex) ? `${s.duration_min || '?'} dk${s.distance_km ? ' ' + s.distance_km + ' km' : ''}` : `${s.weight_kg}kg×${s.reps}${s.rpe ? ' @RPE' + s.rpe : ''}`);
   }
   const cyc = await cycleInfo(t);
   const comps = await db.list('compounds');
@@ -166,6 +300,12 @@ export async function buildContext() {
   const onCycle = !!cyc.active || comps.some((c) => c.active !== false);
   const weights = (await db.list('body_logs')).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
   const plan = (await db.list('plan_items')).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+  const water = await waterDay(t);
+  const wTarget = await waterTarget(p);
+  const measures = (await db.list('body_measurements')).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+  const notes = await db.list('coach_notes');
+  const thisWeek = await weeklySummary(weekStartOf(t));
+  const lastWeek = await weeklySummary(addDays(weekStartOf(t), -7));
 
   return {
     bugun: `${t} (${WD_LONG[weekday(t)]})`,
@@ -225,5 +365,10 @@ export async function buildContext() {
       }),
     })),
     kilo_gecmisi: weights.map((w) => `${w.date}: ${w.weight_kg} kg`),
+    bugun_su: `${water.total} / ${wTarget} ml`,
+    vucut_olculeri: measures.map((m) => ({ tarih: m.date, ...Object.fromEntries(MEASURES.filter(([k]) => m[k] != null).map(([k, l, u]) => [l, `${m[k]} ${u}`])) })),
+    bu_hafta_ozet: thisWeek,
+    gecen_hafta_ozet: lastWeek,
+    danisman_notlari: notes.map((n) => ({ id: n.id, not: n.text })),
   };
 }

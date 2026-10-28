@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Cloudflare'deki Worker adıyla aynı olmalı
+  "name": "spor-takip",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  // Bildirim aboneliği ve hatırlatma saatleri için. ID verilmediği için ilk yayında otomatik oluşturulur.
+  "kv_namespaces": [{ "binding": "PUSH_KV" }],
+  // Her 5 dakikada bir zamanı gelen hatırlatmaları gönder
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "observability": { "enabled": true }
+}

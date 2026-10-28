@@ -1,5 +1,5 @@
 // Service worker — uygulama kabuğunu önbelleğe alır, çevrimdışı çalışır.
-const CACHE = 'sporcoach-v2';
+const CACHE = 'sporcoach-v3';
 const SHELL = [
   './',
   'index.html',
@@ -15,6 +15,9 @@ const SHELL = [
   'js/lock.js',
   'js/rest.js',
   'js/voice.js',
+  'js/push.js',
+  'js/barcode.js',
+  'vendor/zxing.min.js',
   'js/ai.js',
   'js/context.js',
   'js/data/foods.js',
@@ -26,6 +29,7 @@ const SHELL = [
   'js/views/kur.js',
   'js/views/kan.js',
   'js/views/profil.js',
+  'js/views/ilerleme.js',
 ];
 
 self.addEventListener('install', (e) => {
@@ -49,7 +53,8 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return; // API çağrıları vb. önbelleğe alınmaz
+  if (url.origin !== location.origin) return; // dış istekler önbelleğe alınmaz
+  if (url.pathname.startsWith('/api/')) return; // sunucu çağrıları
   e.respondWith(
     caches.match(req, { ignoreSearch: true }).then((hit) => {
       const net = fetch(req)
@@ -62,6 +67,41 @@ self.addEventListener('fetch', (e) => {
         })
         .catch(() => hit || (req.mode === 'navigate' ? caches.match('index.html') : undefined));
       return hit || net;
+    })
+  );
+});
+
+// ---------- Bildirimler ----------
+self.addEventListener('push', (e) => {
+  let data = {};
+  try {
+    data = e.data ? e.data.json() : {};
+  } catch {
+    data = { title: 'SporCoach', body: e.data ? e.data.text() : '' };
+  }
+  e.waitUntil(
+    self.registration.showNotification(data.title || 'SporCoach', {
+      body: data.body || '',
+      icon: 'icons/icon-192.png',
+      badge: 'icons/icon-192.png',
+      tag: data.tag || undefined,
+      data: { url: data.url || '/' },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const target = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href;
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if ('focus' in c) {
+          c.navigate && c.navigate(target).catch(() => {});
+          return c.focus();
+        }
+      }
+      return self.clients.openWindow(target);
     })
   );
 });

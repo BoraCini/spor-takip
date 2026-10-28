@@ -3,6 +3,8 @@ import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadO
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock } from '../lock.js';
 import { monthUsage } from '../ai.js';
+import { waterTarget } from '../context.js';
+import * as push from '../push.js';
 
 const ACT = [
   ['1.2', 'Hareketsiz (masa başı, antrenman yok)'],
@@ -34,6 +36,16 @@ export async function render(root, params) {
   const pin = await hasPin();
   const apiKey = await db.getSetting('api_key', '');
   const usage = await monthUsage();
+  const wTarget = await waterTarget(p);
+  const wCustom = await db.getSetting('water_target_ml');
+  const notes = await db.list('coach_notes');
+  const pushOn = !!(await db.getSetting('push_enabled'));
+  const prefs = await push.getPrefs();
+  const pushSupported = push.isSupported();
+  const standalone = push.isStandalone();
+  const backupPhotos = await db.getSetting('backup_photos', true);
+  const photoCount = (await db.list('progress_photos')).length;
+  const lastBackup = await db.getSetting('last_backup');
   const weights = (await db.list('body_logs')).sort((a, b) => a.date.localeCompare(b.date));
   const first = params.first === '1';
   const sug = suggestTargets(p);
@@ -93,6 +105,8 @@ export async function render(root, params) {
         <div class="field" style="margin-bottom:0"><label for="t-c">Karbonhidrat (g)</label><input id="t-c" class="input" data-p="target_carb_g" inputmode="numeric" value="${esc(p.target_carb_g || '')}"></div>
         <div class="field" style="margin-bottom:0"><label for="t-f">Yağ (g)</label><input id="t-f" class="input" data-p="target_fat_g" inputmode="numeric" value="${esc(p.target_fat_g || '')}"></div>
       </div>
+      <div class="field" style="margin:14px 0 0"><label for="t-w">Su (ml)</label>
+        <input id="t-w" class="input" inputmode="numeric" data-water value="${esc(wCustom || '')}" placeholder="Otomatik: ${fmt(wTarget)} ml (kilo × 35 ml)"></div>
       ${
         sug
           ? `<div class="inset" style="margin-top:14px">
@@ -128,7 +142,49 @@ export async function render(root, params) {
       </div>
       <div class="kv" style="margin-top:12px"><span class="k">Bu ayki harcama (tahmini)</span><span class="v">$${usage.cost.toFixed(2)}</span></div>
       <div class="kv"><span class="k">Bu ay mesaj</span><span class="v">${fmt(usage.calls)}</span></div>
+      ${usage.saved > 0.005 ? `<div class="kv"><span class="k">Önbellekle tasarruf</span><span class="v">$${usage.saved.toFixed(2)}</span></div>` : ''}
       <p class="small muted" style="margin:6px 0 0;line-height:18px">Console'da aylık harcama limiti koymanı öneririm; limit aşılırsa Danışman durur, uygulamanın geri kalanı çalışmaya devam eder.</p>
+    </section>
+
+    <div class="sec"><h2>Danışman'ın notları</h2><span class="meta">${notes.length} not</span></div>
+    <section class="card">
+      <p class="small muted" style="margin:0 0 6px;line-height:18px">Danışman konuşmalarda öğrendiği kalıcı tercihlerini buraya not eder ve her cevapta bunlara uyar. İstediğini silebilir ya da kendin ekleyebilirsin.</p>
+      ${notes.map((n) => `<div class="note-item"><span>${esc(n.text)}</span><button type="button" class="icon-btn ed-ic" style="color:var(--warn)" aria-label="Notu sil: ${esc(n.text)}" data-act="del-note" data-id="${n.id}">${icon.trash}</button></div>`).join('')}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <label class="sr-only" for="note-new">Yeni not</label>
+        <input id="note-new" class="input" placeholder="Örn. Sabah 7'de antrenman yapıyorum" style="flex:1">
+        <button type="button" class="btn primary" data-act="add-note">Ekle</button>
+      </div>
+    </section>
+
+    <div class="sec"><h2>Bildirimler</h2></div>
+    <section class="card">
+      ${
+        !pushSupported
+          ? `<p style="margin:0;font-size:15px;line-height:21px">Bu cihaz ya da tarayıcı bildirimleri desteklemiyor. iPhone'da iOS 16.4 veya üstü ve uygulamanın ana ekrandan açılması gerekir.</p>`
+          : !standalone && !pushOn
+          ? `<p style="margin:0;font-size:15px;line-height:21px">Bildirimler için uygulamayı Safari'den değil, <b>ana ekrandaki SporCoach simgesinden</b> açman gerekiyor.</p>`
+          : `<div class="kv" style="border-top:0"><label class="k" for="push-on">Hatırlatmalar</label><span class="switch"><input id="push-on" type="checkbox" ${pushOn ? 'checked' : ''}><span></span></span></div>
+             ${
+               pushOn
+                 ? `<div class="kv"><label class="k" for="pp-doses">Hap ve enjeksiyon</label><span class="switch"><input id="pp-doses" type="checkbox" data-pref="doses" ${prefs.doses ? 'checked' : ''}><span></span></span></div>
+                    ${
+                      prefs.doses
+                        ? `<div class="grid2" style="padding:8px 0;row-gap:8px">
+                            ${[['sabah', 'Sabah'], ['ogle', 'Öğle'], ['aksam', 'Akşam']].map(([k, l]) => `<div class="field" style="margin:0"><label for="pt-${k}">${l}</label><input id="pt-${k}" class="input" type="time" data-ptime="${k}" value="${prefs.times[k]}"></div>`).join('')}
+                            <div class="field" style="margin:0"><label for="pt-inj">Enjeksiyon</label><input id="pt-inj" class="input" type="time" data-pinj value="${prefs.injection_time}"></div>
+                          </div>
+                          <div class="kv"><label class="k" for="pp-names">Bildirimde madde adlarını göster</label><span class="switch"><input id="pp-names" type="checkbox" data-pref="show_names" ${prefs.show_names ? 'checked' : ''}><span></span></span></div>`
+                        : ''
+                    }
+                    <div class="kv"><label class="k" for="pp-workout">Antrenman günleri</label><span class="switch"><input id="pp-workout" type="checkbox" data-pref="workout" ${prefs.workout ? 'checked' : ''}><span></span></span></div>
+                    ${prefs.workout ? `<div class="field" style="margin:8px 0"><label for="pt-w">Antrenman hatırlatma saati</label><input id="pt-w" class="input" type="time" data-pwork value="${prefs.workout_time}"></div>` : ''}
+                    <div class="kv"><label class="k" for="pp-backup">Haftalık yedek hatırlatması (Pazar 20:00)</label><span class="switch"><input id="pp-backup" type="checkbox" data-pref="backup" ${prefs.backup ? 'checked' : ''}><span></span></span></div>
+                    <button type="button" class="btn block" data-act="push-test" style="margin-top:10px">Deneme bildirimi gönder</button>`
+                 : ''
+             }
+             <p class="small muted" style="margin:10px 0 0;line-height:18px">Hatırlatma saatleri ve başlıklar bildirim sunucusunda tutulur; madde adları varsayılan olarak gönderilmez. O zaman dilimindeki dozlarını önceden işaretlediysen hatırlatma gelmez.</p>`
+      }
     </section>
 
     <div class="sec"><h2>Ayarlar</h2></div>
@@ -156,6 +212,8 @@ export async function render(root, params) {
     <div class="sec"><h2>Yedekleme</h2></div>
     <section class="card">
       <p class="small muted" style="margin:0 0 6px;line-height:18px">Veriler yalnızca bu telefonda durur. Uygulamayı silersen ya da telefon değiştirirsen kaybolmaması için ara ara yedek al ve Dosyalar'a kaydet.</p>
+      ${lastBackup ? `<p class="small muted" style="margin:0 0 6px">Son yedek: ${esc(trDate(lastBackup))}</p>` : ''}
+      ${photoCount ? `<div class="kv" style="border-top:0"><label class="k" for="bk-photos">Fotoğrafları yedeğe dahil et (${photoCount})</label><span class="switch"><input id="bk-photos" type="checkbox" ${backupPhotos ? 'checked' : ''}><span></span></span></div>` : ''}
       <button type="button" class="list-btn" data-act="export"><span class="k">Yedek al</span>${icon.chev}</button>
       <label class="list-btn" style="cursor:pointer"><span class="k">Yedekten geri yükle</span>${icon.chev}<input type="file" accept="application/json,.json" data-act="import" class="sr-only"></label>
       <button type="button" class="list-btn" data-act="clear-chat"><span class="k">Sohbet geçmişini temizle</span>${icon.chev}</button>
@@ -198,6 +256,28 @@ export async function render(root, params) {
       return refresh();
     }
     const act = t.dataset.act;
+    if (act === 'add-note') {
+      const v = root.querySelector('#note-new').value.trim();
+      if (!v) return toast('Notu yaz');
+      await db.put('coach_notes', { text: v.slice(0, 300) });
+      return refresh();
+    }
+    if (act === 'del-note') {
+      await db.remove('coach_notes', t.dataset.id);
+      return refresh();
+    }
+    if (act === 'push-test') {
+      try {
+        t.disabled = true;
+        await push.test();
+        toast('Bildirim gönderildi; birkaç saniye içinde gelmeli');
+      } catch (err) {
+        toast(err.message, 4000);
+      } finally {
+        t.disabled = false;
+      }
+      return;
+    }
     if (act === 'apply-sug' && sug) {
       const cur = await db.getProfile();
       Object.assign(cur, { target_kcal: sug.kcal, target_protein_g: sug.protein, target_carb_g: sug.carb, target_fat_g: sug.fat });
@@ -237,7 +317,7 @@ export async function render(root, params) {
       toast('PIN kilidi kapatıldı');
       refresh();
     } else if (act === 'export') {
-      const data = await db.exportAll();
+      const data = await db.exportAll({ photos: !!(await db.getSetting('backup_photos', true)) });
       await downloadOrShare(`sporcoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
       await db.setSetting('last_backup', today());
     } else if (act === 'clear-chat') {
@@ -253,6 +333,52 @@ export async function render(root, params) {
       }
     }
   };
+
+  const wIn = root.querySelector('[data-water]');
+  wIn.addEventListener('change', async () => {
+    const v = parseNum(wIn.value);
+    if (isNaN(v) || v <= 0) await db.remove('settings', 'water_target_ml');
+    else await db.setSetting('water_target_ml', Math.round(v));
+    toast('Kaydedildi');
+  });
+  const bk = root.querySelector('#bk-photos');
+  if (bk) bk.addEventListener('change', () => db.setSetting('backup_photos', bk.checked));
+  const pOn = root.querySelector('#push-on');
+  if (pOn)
+    pOn.addEventListener('change', async () => {
+      try {
+        if (pOn.checked) {
+          await push.enable();
+          toast('Hatırlatmalar açıldı');
+        } else {
+          await push.disable();
+          toast('Hatırlatmalar kapatıldı');
+        }
+      } catch (err) {
+        pOn.checked = !pOn.checked;
+        toast(err.message, 4500);
+      }
+      refresh();
+    });
+  root.querySelectorAll('[data-pref]').forEach((inp) =>
+    inp.addEventListener('change', async () => {
+      const pr = await push.getPrefs();
+      pr[inp.dataset.pref] = inp.checked;
+      await push.savePrefs(pr);
+      refresh();
+    })
+  );
+  root.querySelectorAll('[data-ptime],[data-pinj],[data-pwork]').forEach((inp) =>
+    inp.addEventListener('change', async () => {
+      if (!/^\d{2}:\d{2}$/.test(inp.value)) return;
+      const pr = await push.getPrefs();
+      if (inp.dataset.ptime) pr.times[inp.dataset.ptime] = inp.value;
+      else if (inp.hasAttribute('data-pinj')) pr.injection_time = inp.value;
+      else pr.workout_time = inp.value;
+      await push.savePrefs(pr);
+      toast('Kaydedildi');
+    })
+  );
 
   root.querySelector('#rest-sec').addEventListener('change', async (e) => {
     await db.setSetting('rest_seconds', Number(e.target.value));

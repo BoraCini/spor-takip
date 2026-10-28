@@ -2,8 +2,8 @@
 // v2'de (Supabase) yalnızca bu dosya değişecek: her "store" bir tabloya karşılık gelir.
 
 const DB_NAME = 'sporcoach';
-const DB_VERSION = 1;
-export const SCHEMA_VERSION = 1;
+const DB_VERSION = 2;
+export const SCHEMA_VERSION = 2;
 const USER_ID = 'local';
 
 export const STORES = [
@@ -25,10 +25,14 @@ export const STORES = [
   'lab_values',
   'chat_messages',
   'usage',
+  'water_logs',
+  'body_measurements',
+  'progress_photos',
+  'coach_notes',
 ];
 
 // Dışa aktarmaya girmeyecek gizli ayarlar
-const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt'];
+const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash'];
 
 let dbp = null;
 let memory = null; // IndexedDB yoksa geçici bellek
@@ -147,8 +151,12 @@ export async function get(store, id) {
   return r && !r.deleted_at ? r : null;
 }
 
+let lastStamp = 0;
 export async function put(store, obj) {
-  const now = new Date().toISOString();
+  // aynı milisaniyede yazılan kayıtların sırası korunsun diye zaman damgası hep artar
+  const ms = Math.max(Date.now(), lastStamp + 1);
+  lastStamp = ms;
+  const now = new Date(ms).toISOString();
   const rec = { ...obj };
   if (!rec.id) rec.id = newId();
   if (!rec.user_id) rec.user_id = USER_ID;
@@ -194,9 +202,10 @@ export async function saveProfile(p) {
 }
 
 // ---------- Yedekleme ----------
-export async function exportAll() {
+export async function exportAll({ photos = true } = {}) {
   const data = {};
   for (const s of STORES) {
+    if (s === 'progress_photos' && !photos) continue;
     let rows = await rawAll(s);
     if (s === 'settings') rows = rows.filter((r) => !SECRET_SETTINGS.includes(r.id));
     data[s] = rows;

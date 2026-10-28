@@ -1,7 +1,8 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1 } from '../util.js';
 import { refresh, go } from '../app.js';
-import { dayNutrition, targetsOf, MEALS, mealLabel } from '../context.js';
+import { dayNutrition, targetsOf, MEALS, mealLabel, waterDay, waterTarget } from '../context.js';
+import { scanBarcode, foodFromBarcode } from '../barcode.js';
 import { searchFoods, nutrientsFor, findFood } from '../data/foods.js';
 
 let state = { tab: 'log', date: today() };
@@ -24,6 +25,9 @@ export async function render(root, params) {
   const { entries, totals } = await dayNutrition(state.date);
   const plan = (await db.list('plan_items')).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
   const isLog = state.tab === 'log';
+  const water = await waterDay(state.date);
+  const wTarget = await waterTarget(p);
+  const yEntries = isLog ? (await dayNutrition(addDays(state.date, -1))).entries : [];
   const phaseLbl = { bulk: 'Bulk', cut: 'Cut', koruma: 'Koruma' }[p.phase || 'koruma'];
 
   let body = '';
@@ -60,6 +64,18 @@ export async function render(root, params) {
             )
             .join('')}
         </div>
+      </section>
+      <section class="card" aria-label="Su" style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <span style="display:flex;align-items:center;gap:6px;font-size:16px;font-weight:600"><span style="color:var(--accent)">${icon.drop}</span>Su</span>
+          <span class="num" style="font-size:15px;font-weight:600">${fmt(water.total / 1000, 2)} / ${fmt(wTarget / 1000, 2)} L</span>
+        </div>
+        <span class="bar thick"><span style="width:${pct(water.total, wTarget)}%"></span></span>
+        <div class="btn-row">
+          <button type="button" class="btn" data-act="water" data-ml="250">+250 ml</button>
+          <button type="button" class="btn" data-act="water" data-ml="500">+500 ml</button>
+          <button type="button" class="btn" data-act="water-undo" aria-label="Son su kaydını geri al" ${water.logs.length ? '' : 'disabled'} style="flex:0 0 56px">−</button>
+        </div>
       </section>`;
 
     for (const [mk, ml] of MEALS) {
@@ -79,7 +95,13 @@ export async function render(root, params) {
                       <span class="row-end">${fmt(e.kcal)}</span></button>`
                   )
                   .join('')
-              : `<div class="empty">Henüz bir şey yok</div>`
+              : (() => {
+                  const y = yEntries.filter((e) => e.meal === mk && !e.plan_item_id);
+                  return y.length
+                    ? `<div class="empty" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 0">Henüz bir şey yok
+                        <button type="button" class="pill" data-act="copy-meal" data-meal="${mk}" style="display:flex;align-items:center;gap:6px">${icon.copy}<span>Dünkü ${({ kahvalti: 'kahvaltıyı', ogle: 'öğle yemeğini', aksam: 'akşam yemeğini', ara: 'ara öğünü' })[mk]} ekle (${y.length})</span></button></div>`
+                    : `<div class="empty">Henüz bir şey yok</div>`;
+                })()
           }
         </section>`;
     }
@@ -148,7 +170,10 @@ export async function render(root, params) {
         </span>
         <h1 class="title">Beslenme</h1>
       </div>
-      <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Besin ekle" data-act="add">${icon.plus}</button></div>
+      <div class="hdr-actions">
+        <button type="button" class="icon-btn" aria-label="Barkod okut" data-act="scan">${icon.barcode}</button>
+        <button type="button" class="icon-btn" aria-label="Besin ekle" data-act="add">${icon.plus}</button>
+      </div>
     </header>
     <div class="seg" role="tablist" aria-label="Beslenme görünümü">
       <button type="button" role="tab" aria-selected="${isLog}" data-tab="log">Günlük</button>
@@ -171,6 +196,24 @@ export async function render(root, params) {
       if (state.date < today()) state.date = addDays(state.date, 1);
       refresh();
     } else if (act === 'add') openAddFood(t.dataset.meal || (state.date === today() ? guessMeal() : 'ara'));
+    else if (act === 'scan') scanAndAdd(state.date === today() ? guessMeal() : 'ara');
+    else if (act === 'water') {
+      await db.put('water_logs', { date: state.date, ml: Number(t.dataset.ml) });
+      refresh();
+    } else if (act === 'water-undo') {
+      const last = water.logs[water.logs.length - 1];
+      if (last) await db.remove('water_logs', last.id);
+      refresh();
+    } else if (act === 'copy-meal') {
+      const mk = t.dataset.meal;
+      const y = yEntries.filter((x) => x.meal === mk && !x.plan_item_id);
+      for (const x of y) {
+        const { id, created_at, updated_at, user_id, ...rest } = x;
+        await db.put('food_logs', { ...rest, date: state.date, source: 'kopya' });
+      }
+      toast(`${y.length} besin eklendi`);
+      refresh();
+    }
     else if (act === 'edit-entry') openEditEntry(entries.find((x) => x.id === t.dataset.id));
     else if (act === 'plan-add') openPlanItem(null);
     else if (act === 'plan-edit') openPlanItem(plan.find((x) => x.id === t.dataset.id));
@@ -209,25 +252,56 @@ function mealForTime(t) {
 }
 
 // ---------- Besin ekleme ----------
+async function scanAndAdd(meal) {
+  const code = await scanBarcode();
+  if (!code) return;
+  const food = await foodFromBarcode(code);
+  if (food) openAmount({ ...food, custom: true }, meal);
+}
+
 async function openAddFood(meal) {
   const custom = await db.list('custom_foods');
-  const recentLogs = (await db.list('food_logs', (x) => x.food_id)).slice(-60).reverse();
-  const recentIds = [...new Set(recentLogs.map((x) => x.food_id))].slice(0, 8);
+  const recentLogs = (await db.list('food_logs', (x) => x.food_id && x.grams)).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  const recent = [];
+  const seen = new Set();
+  for (const l of recentLogs) {
+    if (seen.has(l.food_id)) continue;
+    const f = findFood(l.food_id, custom);
+    if (!f) continue;
+    seen.add(l.food_id);
+    recent.push({ food: f, grams: l.grams });
+    if (recent.length >= 8) break;
+  }
   const s = openSheet({
     title: 'Besin ekle',
     body: `
+      <div class="btn-row" style="margin-bottom:10px">
+        <button type="button" class="btn primary" data-act="scan" style="display:flex;align-items:center;gap:6px">${icon.barcode}<span>Barkod okut</span></button>
+        <button type="button" class="btn" data-act="custom">Kendi besinim</button>
+      </div>
       <label class="sr-only" for="fsearch">Besin ara</label>
       <input id="fsearch" class="input" type="search" placeholder="Ara: yumurta, tavuk, pilav…" autocomplete="off" style="margin-bottom:10px">
-      <div class="card flush search-res" id="fres"></div>
-      <button type="button" class="btn ghost block" data-act="custom" style="margin-top:6px">+ Listede yok, kendi besinimi ekle</button>`,
+      <div id="frecent"></div>
+      <div class="card flush search-res" id="fres"></div>`,
   });
   const res = s.el.querySelector('#fres');
+  const rec = s.el.querySelector('#frecent');
   const draw = (q) => {
     let list = searchFoods(q, custom);
-    if (!q) {
-      const recent = recentIds.map((id) => list.find((f) => f.id === id)).filter(Boolean);
-      list = [...recent, ...list.filter((f) => !recentIds.includes(f.id))];
-    }
+    rec.innerHTML =
+      !q && recent.length
+        ? `<div class="sec" style="padding:0 14px 6px"><h2>Son eklediklerin</h2><span class="meta">+ ile aynı miktarı ekle</span></div>
+           <div class="card flush" style="margin-bottom:14px">${recent
+             .map(
+               (r, i) => `<div class="row">
+                 <button type="button" class="row-main" style="text-align:left" data-id="${esc(r.food.id)}"><span class="row-title normal">${esc(r.food.name)}</span>
+                 <span class="row-sub">${fmt(r.grams)} g · ${fmt(nutrientsFor(r.food, r.grams).kcal)} kcal</span></button>
+                 <button type="button" class="pill" data-quick="${i}" aria-label="${esc(r.food.name)} ${fmt(r.grams)} g ekle">+</button>
+               </div>`
+             )
+             .join('')}</div>
+           <div class="sec" style="padding:0 14px 6px"><h2>Tüm besinler</h2></div>`
+        : '';
     res.innerHTML = list.length
       ? list
           .map(
@@ -241,9 +315,22 @@ async function openAddFood(meal) {
   draw('');
   const inp = s.el.querySelector('#fsearch');
   inp.addEventListener('input', () => draw(inp.value));
-  s.el.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-id],[data-act]');
+  s.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-id],[data-act],[data-quick]');
     if (!b) return;
+    if (b.dataset.quick) {
+      const r = recent[Number(b.dataset.quick)];
+      await db.put('food_logs', { date: state.date, meal, food_id: r.food.id, name: r.food.name, grams: r.grams, estimated: false, source: 'hizli', ...nutrientsFor(r.food, r.grams) });
+      toast(`${r.food.name} eklendi`);
+      s.close();
+      refresh();
+      return;
+    }
+    if (b.dataset.act === 'scan') {
+      s.close();
+      scanAndAdd(meal);
+      return;
+    }
     if (b.dataset.act === 'custom') {
       s.close();
       openCustomFood(meal);

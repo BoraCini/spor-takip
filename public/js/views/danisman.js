@@ -1,9 +1,10 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr } from '../util.js';
 import { go, refresh } from '../app.js';
-import { dayNutrition, targetsOf, programDay, dueOn, mealLabel, slotLabel, suggestSite, SITES } from '../context.js';
+import { dayNutrition, targetsOf, programDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
+import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
 import { weekday } from '../util.js';
-import { runTurn, commitCard, cardNutrition, AIError } from '../ai.js';
+import { runTurn, commitCard, cardNutrition, AIError, undoNote } from '../ai.js';
 import { listen, sttSupported, ttsSupported, speak, stopSpeaking, unlockSpeech } from '../voice.js';
 
 let voiceReply = false;
@@ -71,6 +72,7 @@ export async function render(root, params) {
           </a>
         </nav>
       </div>
+      <div id="banners"></div>
       <div class="chat-list" id="chat" aria-live="polite"></div>
       <div class="attach-preview" id="attach" hidden></div>
       <form class="composer" id="composer">
@@ -86,6 +88,7 @@ export async function render(root, params) {
     </div>`;
 
   await drawMessages({ hasKey, name: p.name, params });
+  await drawBanners();
 
   const form = root.querySelector('#composer');
   const ta = root.querySelector('#msg');
@@ -191,6 +194,68 @@ export async function render(root, params) {
   }
 }
 
+async function drawBanners() {
+  const box = rootEl && rootEl.querySelector('#banners');
+  if (!box) return;
+  const t = today();
+  let html = '';
+  const last = await db.getSetting('last_backup');
+  const snooze = await db.getSetting('backup_snooze');
+  const hasData = (await db.list('food_logs')).length + (await db.list('workout_sets')).length + (await db.list('compounds')).length > 3;
+  const age = last ? daysBetween(last, t) : null;
+  if (hasData && (age == null || age >= 7) && (!snooze || snooze < t)) {
+    html = `<div class="banner" role="status"><span>${age == null ? 'Henüz hiç yedek almadın.' : `Son yedeğin ${age} gün önce.`} Veriler sadece bu telefonda; yedek almak iyi olur.</span>
+      <button type="button" class="pill" data-banner="backup">Yedek al</button><button type="button" class="x" data-banner="snooze-backup" aria-label="Kapat">×</button></div>`;
+  } else {
+    const wd = weekday(t);
+    const ws = weekStart(t);
+    const key = wd === 6 ? ws : addDays(ws, -7);
+    const dismissed = await db.getSetting('report_seen');
+    if ((wd === 6 || wd === 0) && dismissed !== key && (await db.getSetting('api_key'))) {
+      html = `<div class="banner" role="status"><span>${wd === 6 ? 'Bu haftanın' : 'Geçen haftanın'} raporu hazır.</span>
+        <button type="button" class="pill" data-banner="report" data-key="${key}" data-which="${wd === 6 ? 'bu' : 'gecen'}">Göster</button><button type="button" class="x" data-banner="dismiss-report" data-key="${key}" aria-label="Kapat">×</button></div>`;
+    }
+  }
+  box.innerHTML = html;
+  box.onclick = async (e) => {
+    const b = e.target.closest('[data-banner]');
+    if (!b) return;
+    const a = b.dataset.banner;
+    if (a === 'backup') {
+      const data = await db.exportAll();
+      await downloadOrShare(`sporcoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
+      await db.setSetting('last_backup', today());
+    } else if (a === 'snooze-backup') await db.setSetting('backup_snooze', addDays(today(), 3));
+    else if (a === 'report' || a === 'dismiss-report') {
+      await db.setSetting('report_seen', b.dataset.key);
+      if (a === 'report') send(b.dataset.which === 'bu' ? 'Bu haftanın raporunu hazırlar mısın?' : 'Geçen haftanın raporunu hazırlar mısın?');
+    }
+    drawBanners();
+  };
+}
+
+// Canlı yazılan cevap
+function showLive(full) {
+  const list = rootEl && rootEl.querySelector('#chat');
+  if (!list) return;
+  let live = list.querySelector('#live');
+  const typing = list.querySelector('.typing');
+  if (!full) {
+    if (live) {
+      live.remove();
+      if (!list.querySelector('.typing')) list.insertAdjacentHTML('beforeend', '<div class="typing" aria-label="Danışman yazıyor"><i></i><i></i><i></i></div>');
+    }
+    return;
+  }
+  if (!live) {
+    if (typing) typing.remove();
+    list.insertAdjacentHTML('beforeend', '<div class="bubble ai stream-cursor" id="live" aria-busy="true"></div>');
+    live = list.querySelector('#live');
+  }
+  live.innerHTML = miniMarkdown(full);
+  scrollBottom();
+}
+
 function scrollBottom() {
   const list = rootEl && rootEl.querySelector('#chat');
   if (list) list.scrollTop = list.scrollHeight;
@@ -208,7 +273,7 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
       <p>Merhaba${name ? ' ' + esc(name) : ''}! Bana yediklerini, yaptığın setleri, aldığın hapları ya da kilonu yazabilirsin; kaydı ben hazırlarım, sen onaylarsın.</p>
       <p>Beslenme, antrenman, kür ve tahlil sonuçların hakkında da soru sorabilirsin. Tahlil raporunun fotoğrafını gönderirsen değerleri okuyup kaydederim.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;align-self:flex-start;max-width:90%">
-        ${['3 yumurta ve 2 dilim tam buğday ekmeği yedim', 'Bugün proteinim yeterli mi?', 'Bench press 80 kg 8, 8, 7 yaptım']
+        ${['3 yumurta ve 2 dilim tam buğday ekmeği yedim', 'Bugün proteinim yeterli mi?', 'Bench press 80 kg 8, 8, 7 yaptım', 'Bu haftanın raporunu hazırla']
           .map((s) => `<button type="button" class="tog suggest" data-suggest="${esc(s)}">${esc(s)}</button>`)
           .join('')}
       </div>`;
@@ -340,6 +405,26 @@ function cardHTML(m) {
       ${pending ? `<p class="small muted" style="margin:8px 0 0">Değerleri rapordakiyle karşılaştır; yanlış okunan varsa çıkar, sonra Kan testleri sayfasından düzeltebilirsin.</p>` : ''}
       ${buttons}${status}</section>`;
   }
+  if (c.type === 'water') {
+    return `<section class="act-card" aria-label="Su kaydı onayı"><div class="ac-head"><span class="ac-title">Su${dateNote}</span></div>
+      <div class="ac-item"><span class="row-main"><span style="font-size:17px;font-weight:600" class="num">${fmt(c.ml)} ml</span></span></div>${buttons}${status}</section>`;
+  }
+  if (c.type === 'cardio') {
+    return `<section class="act-card" aria-label="Kardiyo kaydı onayı"><div class="ac-head"><span class="ac-title">Kardiyo${dateNote}</span></div>
+      <div class="ac-item"><span class="row-main"><span style="font-size:15px;font-weight:600">${esc(c.exercise)}</span>
+      <span class="small muted num">${fmt(c.duration_min, 1)} dk${c.distance_km ? ` · ${fmt(c.distance_km, 1)} km` : ''}</span></span></div>${buttons}${status}</section>`;
+  }
+  if (c.type === 'measures') {
+    return `<section class="act-card" aria-label="Ölçü kaydı onayı"><div class="ac-head"><span class="ac-title">Vücut ölçüleri${dateNote}</span></div>
+      ${MEASURES.filter(([k]) => c.values[k] != null).map(([k, l, u]) => `<div class="ac-item"><span class="row-main"><span style="font-size:15px">${l}</span></span><span class="num" style="font-size:15px;font-weight:600">${fmt(c.values[k], 1)} ${u}</span></div>`).join('')}
+      ${buttons}${status}</section>`;
+  }
+  if (c.type === 'note') {
+    const undone = m.status === 'undone';
+    return `<section class="act-card" aria-label="Danışman notu"><div class="ac-head"><span class="ac-title">${c.action === 'add' ? 'Not aldım' : 'Notu sildim'}</span>
+      ${undone ? '<span class="ac-src">geri alındı</span>' : `<button type="button" class="ac-src" style="color:var(--accent);font-weight:600;min-height:32px" data-card="undo-note" data-id="${m.id}">Geri al</button>`}</div>
+      <p style="margin:0;font-size:15px;line-height:21px;${undone ? 'text-decoration:line-through;color:var(--sub)' : ''}">${esc(c.text)}</p></section>`;
+  }
   if (c.type === 'weight') {
     return `<section class="act-card" aria-label="Kilo kaydı onayı"><div class="ac-head"><span class="ac-title">Kilo${dateNote}</span></div>
       <div class="ac-item"><span class="row-main"><span style="font-size:17px;font-weight:600" class="num">${fmt(c.weight_kg, 1)} kg</span></span></div>${buttons}${status}</section>`;
@@ -388,6 +473,13 @@ async function onListClick(e) {
     return drawMessages();
   }
   const m = await db.get('chat_messages', b.dataset.id);
+  if (m && b.dataset.card === 'undo-note') {
+    if (m.status === 'undone') return;
+    await undoNote(m.card);
+    m.status = 'undone';
+    await db.put('chat_messages', m);
+    return drawMessages();
+  }
   if (!m || m.status !== 'pending') return;
   clearTimeout(pendingSaves[m.id]);
   if (edits[m.id]) m.card = edits[m.id];
@@ -519,13 +611,13 @@ async function send(raw) {
   busy = true;
   await drawMessages();
   try {
-    const res = await runTurn({ text, image: image ? { media_type: image.media_type, data: image.data } : null });
+    const res = await runTurn({ text, image: image ? { media_type: image.media_type, data: image.data } : null, onText: showLive });
     for (const card of res.cards) {
       if (card.type === 'doses') {
         const sg = await suggestSite();
         for (const it of card.items) if (it.kind === 'inj' && !it.site) it.site = sg.site;
       }
-      await db.put('chat_messages', { role: 'card', card, status: 'pending' });
+      await db.put('chat_messages', { role: 'card', card, status: card.autoSaved ? 'saved' : 'pending' });
     }
     if (res.text) {
       await db.put('chat_messages', { role: 'assistant', text: res.text, model: res.model.label });
