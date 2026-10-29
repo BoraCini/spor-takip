@@ -46,7 +46,7 @@ const BASE_FOODS = [
   { id: 'f_bulgur_raw', name: 'Bulgur (çiğ)', alias: 'bulgur cig', k: 342, p: 12.3, c: 76, f: 1.3, fb: 18.3, na: 17, ka: 410, portions: [] },
   { id: 'f_pasta_cooked', name: 'Makarna (haşlanmış)', alias: 'makarna spagetti', k: 158, p: 5.8, c: 31, f: 0.9, fb: 1.8, na: 1, ka: 44, portions: [['porsiyon', 200]] },
   { id: 'f_pasta_raw', name: 'Makarna (çiğ)', alias: 'makarna cig', k: 371, p: 13, c: 75, f: 1.5, fb: 3.2, na: 6, ka: 223, portions: [] },
-  { id: 'f_oats', name: 'Yulaf ezmesi', alias: 'yulaf', k: 379, p: 13.2, c: 67.7, f: 6.5, fb: 10.1, na: 6, ka: 362, portions: [['yemek kaşığı', 10]] },
+  { id: 'f_oats', name: 'Yulaf ezmesi', alias: 'yulaf', k: 379, p: 13.2, c: 67.7, f: 6.5, fb: 10.1, na: 6, ka: 362, portions: [['yemek kaşığı', 10], ['su bardağı', 90], ['kase', 80]] },
   { id: 'f_quinoa', name: 'Kinoa (pişmiş)', alias: 'kinoa', k: 120, p: 4.4, c: 21.3, f: 1.9, fb: 2.8, na: 7, ka: 172, portions: [] },
   { id: 'f_bread_ww', name: 'Tam buğday ekmeği', alias: 'ekmek tam bugday kepekli', k: 252, p: 12.4, c: 42.7, f: 3.5, fb: 6, na: 455, ka: 250, portions: [['dilim', 28]] },
   { id: 'f_bread_white', name: 'Beyaz ekmek', alias: 'ekmek beyaz francala', k: 266, p: 8.9, c: 49, f: 3.3, fb: 2.7, na: 490, ka: 120, portions: [['dilim', 30]] },

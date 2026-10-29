@@ -171,6 +171,7 @@ export async function render(root, params) {
         <h1 class="title">Beslenme</h1>
       </div>
       <div class="hdr-actions">
+        <button type="button" class="icon-btn" aria-label="Söyleyerek ya da yazarak ekle" data-act="say">${icon.mic}</button>
         <button type="button" class="icon-btn" aria-label="Barkod okut" data-act="scan">${icon.barcode}</button>
         <button type="button" class="icon-btn" aria-label="Besin ekle" data-act="add">${icon.plus}</button>
       </div>
@@ -197,6 +198,7 @@ export async function render(root, params) {
       refresh();
     } else if (act === 'add') openAddFood(t.dataset.meal || (state.date === today() ? guessMeal() : 'ara'));
     else if (act === 'scan') scanAndAdd(state.date === today() ? guessMeal() : 'ara');
+    else if (act === 'say') openSayAdd(state.date === today() ? guessMeal() : 'ara', { listen: true });
     else if (act === 'water') {
       await db.put('water_logs', { date: state.date, ml: Number(t.dataset.ml) });
       refresh();
@@ -327,8 +329,11 @@ async function openAddFood(meal, startTab = null) {
       <div class="toggle-row" style="margin-bottom:10px" role="group" aria-label="Öğün">${MEALS.map(
         ([k, l]) => `<button type="button" class="tog" aria-pressed="${k === selMeal}" data-meal="${k}">${l}</button>`
       ).join('')}</div>
-      <label class="sr-only" for="fsearch">Besin ara</label>
-      <input id="fsearch" class="input" type="search" placeholder="Ara: patates, basmati, mantı…" autocomplete="off" enterkeyhint="search" style="margin-bottom:10px">
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <label class="sr-only" for="fsearch">Besin ara</label>
+        <input id="fsearch" class="input" type="search" placeholder="Ara ya da cümle yaz: 3 yumurta, 200 g tavuk" autocomplete="off" enterkeyhint="search" style="flex:1">
+        <button type="button" class="icon-btn" data-act="say" aria-label="Söyleyerek ekle" style="flex:none;height:44px;width:44px">${icon.mic}</button>
+      </div>
       <div class="qa-grid" id="fqa">
         <button type="button" class="qa" data-act="scan">${icon.barcode}<span>Barkod</span></button>
         <label class="qa">${icon.camera}<span>Fotoğraf</span><input type="file" accept="image/*" capture="environment" class="sr-only" data-photo></label>
@@ -374,9 +379,15 @@ async function openAddFood(meal, startTab = null) {
     qaEl.hidden = !!q;
     if (q) {
       const res = searchFoods(q, custom, hist.count);
-      listEl.innerHTML = res.length
+      // Sayı içeren cümle yazıldıysa (örn. "3 yumurta 200 g tavuk") tek seferde eklemeyi öner
+      const sentence = /\d|\b(bir|iki|üç|dört|beş|yarım)\b/i.test(q) && q.split(/\s+/).length >= 2;
+      listEl.innerHTML = (sentence
+        ? `<button type="button" class="card" data-act="say-text" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-bottom:10px;padding:12px 14px">
+             <span style="color:var(--accent)">${icon.mic}</span><span style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:600;color:var(--accent)">Cümle olarak ekle</span>
+             <span class="small muted">"${esc(q)}" içindeki besinleri miktarlarıyla tek seferde ekle</span></span></button>`
+        : '') + (res.length
         ? `<div class="sec" style="padding:0 14px 6px"><h2>Sonuçlar</h2><span class="meta">${res.length >= 60 ? '60+' : res.length} besin</span></div>${list(res, '')}`
-        : `<div class="empty">Listede "${esc(q)}" bulunamadı.</div>`;
+        : `<div class="empty">Listede "${esc(q)}" bulunamadı.</div>`);
       moreEl.innerHTML = `<div class="sec" style="padding:14px 14px 6px"><h2>${res.length ? 'Aradığın bu değil mi?' : 'Başka yollar'}</h2></div>
          <div class="card flush">
            <button type="button" class="row" data-act="ai-est"><span class="row-main"><span class="row-title" style="color:var(--accent)">Yapay zekâyla hesapla: "${esc(q)}"</span>
@@ -492,7 +503,10 @@ async function openAddFood(meal, startTab = null) {
     }
     const act = b.dataset.act;
     const q = inp.value.trim();
-    if (act === 'scan') {
+    if (act === 'say' || act === 'say-text') {
+      s.close();
+      openSayAdd(selMeal, act === 'say' ? { listen: true } : { text: q });
+    } else if (act === 'scan') {
       s.close();
       scanAndAdd(selMeal);
     } else if (act === 'quick') {
@@ -518,6 +532,216 @@ async function openAddFood(meal, startTab = null) {
     s.close();
     await runEstimate(selMeal, { name: inp.value.trim(), image: await fileToImage(f), mode: 'photo' });
   });
+}
+
+// ---------- Söyle ya da yaz: cümleden öğüne ekle (yapay zekâsız) ----------
+async function openSayAdd(meal, { text = '', listen: startListen = false } = {}) {
+  const { parseMealText, gramsFor } = await import('../foodparse.js');
+  const { listen, sttSupported } = await import('../voice.js');
+  const custom = markCustom(await db.list('custom_foods'));
+  const hist = await foodHistory(custom);
+  const aliases = (await db.getSetting('say_aliases', {})) || {};
+  let selMeal = meal;
+  let dayOffset = 0;
+  let items = [];
+  let stop = null;
+  const s = openSheet({
+    title: 'Söyle ya da yaz',
+    onClose: () => stop && stop(),
+    body: `
+      <label class="sr-only" for="say-t">Ne yedin?</label>
+      <textarea id="say-t" class="input" style="min-height:76px" placeholder="Örn. kahvaltıda 3 yumurta, 50 g Lifalif yulaf ve 150 ml yarım yağlı süt">${esc(text)}</textarea>
+      <div class="btn-row" style="margin:8px 0 12px">
+        ${sttSupported() ? `<button type="button" class="btn" data-mic style="display:flex;align-items:center;gap:6px">${icon.mic}<span>Konuş</span></button>` : ''}
+        <button type="button" class="btn primary" data-parse>Çözümle</button>
+      </div>
+      <div id="say-meal"></div>
+      <div id="say-res"></div>
+      <p class="small muted" style="margin:12px 4px 0;line-height:18px">Yapay zekâ kullanılmaz, ücretsizdir. Miktarı söylemezsen 1 porsiyon alınır. Yanlış eşleşeni "Değiştir"le düzeltirsen bir dahaki sefere hatırlar.</p>`,
+  });
+  const ft = document.createElement('div');
+  ft.className = 'sheet-ft';
+  ft.hidden = true;
+  s.sheet.appendChild(ft);
+  const ta = s.el.querySelector('#say-t');
+  const resEl = s.el.querySelector('#say-res');
+  const mealEl = s.el.querySelector('#say-meal');
+  const micBtn = s.el.querySelector('[data-mic]');
+
+  const drawMeal = () => {
+    mealEl.innerHTML = items.length
+      ? `<div class="toggle-row" style="margin-bottom:10px">${MEALS.map(([k, l]) => `<button type="button" class="tog sm" aria-pressed="${k === selMeal}" data-meal="${k}">${l}</button>`).join('')}</div>
+         ${dayOffset ? `<p class="small" style="margin:0 4px 8px;color:var(--warn)">${relDay(addDays(state.date, dayOffset))} için eklenecek</p>` : ''}`
+      : '';
+  };
+  const draw = () => {
+    drawMeal();
+    resEl.innerHTML = items.length
+      ? `<div class="card flush">${items
+          .map((it, i) => {
+            if (!it.food)
+              return `<div class="row"><span class="row-main"><span class="row-title normal" style="color:var(--warn)">Bulunamadı: "${esc(it.text)}"</span>
+                <span class="row-sub">Listede yok; aramadan seçebilirsin</span></span><button type="button" class="pill" data-change="${i}">Ara</button></div>`;
+            const n = nutrientsFor(it.food, it.grams);
+            return `<div class="row frow">
+              <button type="button" class="row-main" data-amount="${i}" style="text-align:left">
+                <span class="row-title normal">${esc(cleanName(it.food.name))}${it.match === 'partial' ? ' <span class="tag" style="color:var(--warn)">kontrol et</span>' : ''}</span>
+                <span class="row-sub">${esc(servingText(it.unit, it.qty, it.grams))} · <b class="num">${fmt(n.kcal)} kcal</b>${it.approx ? ' · miktar tahmini' : ''}</span>
+                ${it.match !== 'full' ? `<span class="row-sub">Söylediğin: "${esc(it.text)}"</span>` : ''}
+              </button>
+              <button type="button" class="pill" data-change="${i}" style="flex:none">Değiştir</button>
+              <button type="button" class="check-btn" aria-pressed="${it.on !== false}" data-toggle="${i}" aria-label="${esc(cleanName(it.food.name))}: ${it.on !== false ? 'ekleme' : 'ekle'}"><span class="check">${icon.check}</span></button>
+            </div>`;
+          })
+          .join('')}</div>`
+      : ta.value.trim()
+      ? '<div class="empty">Cümlede besin bulamadım. Miktar ve besin adını yaz: "2 dilim ekmek, 1 yumurta" gibi.</div>'
+      : '';
+    const on = items.filter((x) => x.food && x.on !== false);
+    const kcal = on.reduce((a, x) => a + nutrientsFor(x.food, x.grams).kcal, 0);
+    ft.hidden = !on.length;
+    ft.innerHTML = `<button type="button" class="btn primary block" data-addall>${on.length} besini ekle · ${fmt(kcal)} kcal</button>`;
+  };
+  const run = () => {
+    const t = ta.value.trim();
+    if (!t) return;
+    const r = parseMealText(t, custom, hist.count, aliases);
+    items = r.items.map((x) => ({ ...x, on: true }));
+    if (r.meal) selMeal = r.meal;
+    dayOffset = r.dayOffset;
+    draw();
+  };
+  const startMic = () => {
+    if (stop) {
+      stop();
+      return;
+    }
+    if (micBtn) micBtn.classList.add('primary');
+    stop = listen({
+      onInterim: (t) => (ta.value = t),
+      onFinal: (t) => {
+        ta.value = t;
+        run();
+      },
+      onEnd: () => {
+        stop = null;
+        if (micBtn) micBtn.classList.remove('primary');
+      },
+      onError: (e) => {
+        stop = null;
+        if (micBtn) micBtn.classList.remove('primary');
+        if (e === 'not-allowed' || e === 'service-not-allowed') toast('Mikrofon izni yok. Klavyedeki mikrofonla da söyleyebilirsin.', 4500);
+        else if (e !== 'aborted' && e !== 'no-speech') toast('Ses tanınamadı, yeniden dene ya da yaz.', 3500);
+      },
+    });
+  };
+  // Bir kalemin besinini değiştir (yerel liste + Open Food Facts)
+  const changeFood = (i) => {
+    const it = items[i];
+    const pk = openSheet({
+      title: 'Besini seç',
+      body: `<input id="pk-q" class="input" type="search" value="${esc(it.text)}" autocomplete="off" style="margin-bottom:10px">
+        <div id="pk-res"></div>
+        <button type="button" class="btn block" data-off style="margin-top:10px">Paketli ürünlerde ara (Open Food Facts)</button>
+        <div id="pk-off"></div>`,
+    });
+    const q = pk.el.querySelector('#pk-q');
+    let offItems = [];
+    const drawPk = () => {
+      const r = searchFoods(q.value, custom, hist.count).slice(0, 15);
+      pk.el.querySelector('#pk-res').innerHTML = r.length
+        ? `<div class="card flush search-res">${r
+            .map((f) => `<button type="button" class="row" data-pick="${esc(f.id)}"><span class="row-main"><span class="row-title normal">${esc(cleanName(f.name))}${srcTag(f) ? ` <span class="tag">${srcTag(f)}</span>` : ''}</span>
+              <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`)
+            .join('')}</div>`
+        : '<div class="empty">Listede yok.</div>';
+    };
+    drawPk();
+    q.addEventListener('input', drawPk);
+    const choose = async (food) => {
+      it.food = food;
+      it.match = 'full';
+      Object.assign(it, gramsFor(food, it.said.qty, it.said.unit));
+      aliases[it.text] = food.id;
+      await db.setSetting('say_aliases', aliases);
+      pk.close();
+      draw();
+    };
+    pk.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.pick) choose(findFood(b.dataset.pick, custom));
+      else if (b.dataset.offi != null) {
+        const f = offItems[Number(b.dataset.offi)];
+        const mine = f.barcode ? custom.find((x) => x.barcode === f.barcode) : null;
+        const saved = mine || markCustom([await db.put('custom_foods', { ...f, alias: it.text })])[0];
+        if (!mine) custom.push(saved);
+        choose(saved);
+      } else if (b.hasAttribute('data-off')) {
+        const box = pk.el.querySelector('#pk-off');
+        box.innerHTML = '<div class="empty">Aranıyor…</div>';
+        try {
+          offItems = await searchProducts(q.value.trim());
+          box.innerHTML = offItems.length
+            ? `<div class="card flush" style="margin-top:10px">${offItems
+                .map((f, k) => `<button type="button" class="row" data-offi="${k}"><span class="row-main"><span class="row-title normal">${esc(f.name)}</span>
+                  <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`)
+                .join('')}</div>`
+            : '<div class="empty">Sonuç yok.</div>';
+        } catch (err) {
+          box.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+        }
+      }
+    });
+  };
+
+  s.sheet.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-parse')) run();
+    else if (b.hasAttribute('data-mic')) startMic();
+    else if (b.dataset.meal) {
+      selMeal = b.dataset.meal;
+      drawMeal();
+    } else if (b.dataset.toggle != null) {
+      const it = items[Number(b.dataset.toggle)];
+      it.on = it.on === false;
+      draw();
+    } else if (b.dataset.change != null) changeFood(Number(b.dataset.change));
+    else if (b.dataset.amount != null) {
+      const it = items[Number(b.dataset.amount)];
+      openAmount(it.food, selMeal, null, {
+        serving: { unit: it.unit, qty: it.qty, grams: it.grams },
+        selecting: true,
+        onSelect: (sv) => {
+          Object.assign(it, { unit: sv.unit, qty: sv.qty, grams: sv.grams, approx: false });
+          draw();
+        },
+      });
+    } else if (b.hasAttribute('data-addall')) {
+      const date = addDays(state.date, dayOffset);
+      const on = items.filter((x) => x.food && x.on !== false);
+      for (const it of on)
+        await db.put('food_logs', {
+          date,
+          meal: selMeal,
+          food_id: it.food.id,
+          name: cleanName(it.food.name),
+          grams: it.grams,
+          unit: it.unit,
+          qty: it.qty,
+          estimated: false,
+          source: 'cumle',
+          ...nutrientsFor(it.food, it.grams),
+        });
+      toast(`${on.length} besin eklendi`);
+      s.close();
+      refresh();
+    }
+  });
+  if (text) run();
+  if (startListen && sttSupported()) setTimeout(startMic, 300);
+  else setTimeout(() => ta.focus(), 300);
 }
 
 // Porsiyon seçimi ve besin detayı

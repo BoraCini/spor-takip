@@ -29,6 +29,9 @@ const R = [
   ['b_pinar_labne', 'Pınar Labne', 'pinar labne', 194, 4.5, 3.5, 18, 0, 0.7, [['yemek kaşığı', 20]]],
   ['b_sutas_kasar', 'Sütaş Kaşar Peyniri', 'sutas kasar peyniri', 325, 24, 1, 25, 0, 1.6, [['dilim', 20]]],
   ['b_torku_lor', 'Torku Yarım Yağlı Lor Peyniri', 'torku lor peyniri yarim yagli', 150, 10.6, 3.3, 10.5, 0, 1.8, [['yemek kaşığı', 30]]],
+  // Tahıl
+  ['b_eti_lifalif_yulaf', 'Eti Lifalif Yulaf Ezmesi', 'eti lifalif yulaf ezmesi', 360, 14, 53, 7.5, 13, 0.02, [['yemek kaşığı', 10], ['su bardağı', 90], ['kase', 80]]],
+  ['b_eti_lifalif_ince', 'Eti Lifalif İnce Öğütülmüş Yulaf Ezmesi', 'eti lifalif ince ogutulmus yulaf ezmesi', 360, 14, 53, 7.5, 13, 0.02, [['yemek kaşığı', 10], ['su bardağı', 90], ['kase', 80]]],
   // Ton balığı, et
   ['b_dardanel_light', 'Dardanel Light Ton Balığı (süzülmüş)', 'dardanel light ton baligi', 95, 23.5, 0, 0.4, 0, 1, [['kutu (süzülmüş)', 100]]],
   ['b_dardanel_zeytinyagli', 'Dardanel Zeytinyağlı Ton Balığı', 'dardanel zeytinyagli ton baligi', 212, 23.5, 0, 12.4, 0, 1.7, [['kutu (süzülmüş)', 120]]],
