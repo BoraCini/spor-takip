@@ -639,4 +639,82 @@ export async function estimateFood({ name = '', details = '', image = null, mode
   };
 }
 
+// Tahlil raporundan (PDF veya fotoğraf) değerleri oku. file: { data: base64, media_type }
+const LAB_TOOL = {
+  name: 'lab_report',
+  description: 'Tahlil raporundaki tüm sonuçları yapılandırılmış olarak döndürür.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      date: { type: 'string', description: 'Numune/rapor tarihi YYYY-AA-GG. Okunamıyorsa boş bırak.' },
+      lab_name: { type: 'string', description: 'Laboratuvar veya hastane adı' },
+      values: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Test adı, rapordaki gibi (Türkçe)' },
+            value: { type: 'number', description: 'Sayısal sonuç' },
+            unit: { type: 'string' },
+            ref_low: { type: 'number', description: 'Rapordaki referans alt sınır' },
+            ref_high: { type: 'number', description: 'Rapordaki referans üst sınır' },
+          },
+          required: ['name', 'value'],
+        },
+      },
+    },
+    required: ['values'],
+  },
+};
+
+export async function extractLabs(file) {
+  const apiKey = await db.getSetting('api_key');
+  if (!apiKey) throw new AIError('Bu özellik için Profil ve ayarlar sayfasından API anahtarını eklemelisin.');
+  const model = MODELS.smart;
+  const isPdf = file.media_type === 'application/pdf';
+  const content = [
+    isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.data } }
+      : { type: 'image', source: { type: 'base64', media_type: file.media_type, data: file.data } },
+    {
+      type: 'text',
+      text:
+        'Bu bir kan/idrar tahlili raporu. Sayısal sonucu olan TÜM testleri eksiksiz çıkar: test adı, sonuç, birim ve rapordaki referans aralığı. ' +
+        'Ondalık virgülü noktaya çevir (5,2 → 5.2). "<0,5" gibi değerlerde sayıyı al. Referans tek sınırlıysa (örn. "<200") sadece o sınırı ver. ' +
+        'Yorum, açıklama, tekrar eden başlıklar ve sayısal olmayan sonuçları (pozitif/negatif gibi) alma. Aynı test birden çok kez geçiyorsa bir kez yaz. Tarihi numune alma tarihinden al.',
+    },
+  ];
+  const data = await callAPIStream(
+    apiKey,
+    {
+      model: model.id,
+      max_tokens: 8000,
+      system: 'Sen tıbbi rapor verilerini hatasız aktaran bir veri giriş uzmanısın. Sadece raporda yazanı aktar, tahmin etme, değer uydurma.',
+      messages: [{ role: 'user', content }],
+      tools: [LAB_TOOL],
+      tool_choice: { type: 'tool', name: 'lab_report' },
+    },
+    null
+  );
+  await recordUsage(model, data.usage);
+  const use = (data.content || []).find((b) => b.type === 'tool_use');
+  if (!use || !use.input || !Array.isArray(use.input.values) || !use.input.values.length) throw new AIError('Raporda okunabilir değer bulunamadı. Daha net bir dosya ya da fotoğraf dene.');
+  const n = (x) => (x == null || x === '' || isNaN(Number(x)) ? null : Number(x));
+  const values = use.input.values
+    .filter((v) => v && v.name && n(v.value) != null)
+    .map((v) => {
+      const m = matchLab(v.name);
+      return {
+        marker_key: m ? m.key : null,
+        name: m ? m.name : String(v.name).slice(0, 60),
+        value: n(v.value),
+        unit: v.unit || (m ? m.unit : ''),
+        ref_low: n(v.ref_low) ?? (m ? m.lo : null),
+        ref_high: n(v.ref_high) ?? (m ? m.hi : null),
+      };
+    });
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(use.input.date || '') ? use.input.date : null;
+  return { date, lab_name: String(use.input.lab_name || '').slice(0, 60), values };
+}
+
 export { slotLabel, round1, labByKey };

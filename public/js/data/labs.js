@@ -11,9 +11,9 @@ export const LABS = [
   { key: 'wbc', name: 'Lökosit (WBC)', unit: '10³/µL', lo: 4, hi: 10, cat: 'Kan sayımı', alias: 'wbc lokosit akyuvar' },
   { key: 'plt', name: 'Trombosit', unit: '10³/µL', lo: 150, hi: 400, cat: 'Kan sayımı', alias: 'plt trombosit' },
 
-  { key: 'alt', name: 'ALT', unit: 'U/L', lo: 0, hi: 50, cat: 'Karaciğer', alias: 'alt sgpt',
+  { key: 'alt', name: 'ALT', unit: 'U/L', lo: 0, hi: 50, cat: 'Karaciğer', alias: 'alt sgpt alanin aminotransferaz',
     note: 'Ağır antrenman da yükseltebilir; testten önceki 48 saat antrenman yapmadan tekrar ölçtürmek yorumu kolaylaştırır.' },
-  { key: 'ast', name: 'AST', unit: 'U/L', lo: 0, hi: 40, cat: 'Karaciğer', alias: 'ast sgot',
+  { key: 'ast', name: 'AST', unit: 'U/L', lo: 0, hi: 40, cat: 'Karaciğer', alias: 'ast sgot aspartat aminotransferaz',
     note: 'Kas hasarıyla da yükselir; CK ile birlikte değerlendirilir.' },
   { key: 'ggt', name: 'GGT', unit: 'U/L', lo: 0, hi: 60, cat: 'Karaciğer', alias: 'ggt gama',
     note: 'Antrenmandan pek etkilenmez; yükselmesi karaciğer kaynaklı olabilir.' },
@@ -56,7 +56,7 @@ export const LABS = [
   { key: 'ft3', name: 'Serbest T3', unit: 'pg/mL', lo: 2, hi: 4.4, cat: 'Tiroid', alias: 'st3 serbest t3 ft3' },
 
   { key: 'ferritin', name: 'Ferritin', unit: 'ng/mL', lo: 30, hi: 400, cat: 'Vitamin / mineral', alias: 'ferritin' },
-  { key: 'vitd', name: 'D vitamini (25-OH)', unit: 'ng/mL', lo: 30, hi: 100, cat: 'Vitamin / mineral', alias: 'd vitamini 25 oh' },
+  { key: 'vitd', name: 'D vitamini (25-OH)', unit: 'ng/mL', lo: 30, hi: 100, cat: 'Vitamin / mineral', alias: 'd vitamini vitamin 25 oh hidroksi kolekalsiferol' },
   { key: 'b12', name: 'B12 vitamini', unit: 'pg/mL', lo: 200, hi: 900, cat: 'Vitamin / mineral', alias: 'b12' },
   { key: 'na', name: 'Sodyum', unit: 'mmol/L', lo: 136, hi: 145, cat: 'Vitamin / mineral', alias: 'sodyum na' },
   { key: 'k', name: 'Potasyum', unit: 'mmol/L', lo: 3.5, hi: 5.1, cat: 'Vitamin / mineral', alias: 'potasyum k' },
@@ -74,13 +74,30 @@ const norm = (s) =>
 export function matchLab(name) {
   const n = norm(name);
   if (!n) return null;
+  // Puanlama: adın kelimeleri 2, takma ad kelimeleri 1 puan; testin adında olup sorguda olmayan kelimeler puan düşürür
+  // (örn. "LDL Kolesterol" → LDL, "Total kolesterol" değil)
+  const q = n.split(' ').filter(Boolean);
   let best = null;
+  let bestScore = 0;
   for (const l of LABS) {
-    const names = [norm(l.name), ...norm(l.alias).split(' ')];
-    if (norm(l.name) === n || l.key === n) return l;
-    if (names.some((x) => x.length > 1 && (n === x || n.split(' ').includes(x)))) best = best || l;
+    const ln = norm(l.name);
+    if (ln === n || l.key === n) return l;
+    const nameT = ln.split(' ').filter((x) => x.length > 1);
+    const aliasT = norm(l.alias).split(' ').filter((x) => x.length > 1);
+    if (aliasT.includes(n)) return l;
+    let score = 0;
+    for (const t of q) {
+      if (nameT.includes(t)) score += 2;
+      else if (aliasT.includes(t)) score += 1;
+    }
+    if (!score) continue;
+    score -= 0.25 * nameT.filter((t) => !q.includes(t)).length;
+    if (score > bestScore) {
+      best = l;
+      bestScore = score;
+    }
   }
-  return best;
+  return bestScore > 0 ? best : null;
 }
 
 // Değerin durumu: 'low' | 'high' | 'ok'

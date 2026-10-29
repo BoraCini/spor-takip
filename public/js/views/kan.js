@@ -44,15 +44,20 @@ export async function render(root) {
         <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Test ekle" data-act="add">${icon.plus}</button></div></header>
       <section class="card" style="text-align:center;padding:24px 16px">
         <p style="margin:0 0 6px;font-size:17px;font-weight:600">Henüz test eklemedin</p>
-        <p class="small muted" style="margin:0 0 16px;line-height:18px">Sonuçlarını elle girebilir ya da Danışman'a tahlil raporunun fotoğrafını gönderebilirsin; değerleri okuyup buraya kaydeder.</p>
-        <div class="btn-row"><button type="button" class="btn" data-act="add">Elle ekle</button><button type="button" class="btn primary" data-act="photo">Fotoğrafla ekle</button></div>
+        <p class="small muted" style="margin:0 0 16px;line-height:18px">Laboratuvarın ya da e-Nabız'ın verdiği PDF'i seç; değerler, birimler ve referans aralıkları otomatik okunur. İstersen raporun fotoğrafını çekebilir ya da elle girebilirsin.</p>
+        <label class="btn primary block" style="cursor:pointer;margin-bottom:8px">PDF'ten ekle<input type="file" accept="application/pdf,.pdf" class="sr-only" data-file="pdf"></label>
+        <div class="btn-row">
+          <label class="btn" style="cursor:pointer">Fotoğraftan<input type="file" accept="image/*" class="sr-only" data-file="img"></label>
+          <button type="button" class="btn" data-act="manual">Elle ekle</button>
+        </div>
       </section>`;
     root.onclick = (e) => {
       const b = e.target.closest('[data-act]');
       if (!b) return;
-      if (b.dataset.act === 'add') openTest(null);
-      else go('danisman?photo=1');
+      if (b.dataset.act === 'manual') openTest(null);
+      else if (b.dataset.act === 'add') openAddChooser();
     };
+    bindFileInputs(root);
     return;
   }
 
@@ -145,7 +150,7 @@ export async function render(root) {
     const b = e.target.closest('[data-act]');
     if (!b) return;
     const act = b.dataset.act;
-    if (act === 'add') openTest(null);
+    if (act === 'add') openAddChooser();
     else if (act === 'pick') {
       state.testId = b.dataset.id;
       refresh();
@@ -160,16 +165,96 @@ export async function render(root) {
   };
 }
 
+// ---------- PDF / fotoğraftan ekle ----------
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = () => reject(new Error('Dosya okunamadı'));
+    r.readAsDataURL(file);
+  });
+}
+
+async function importReport(file, kind) {
+  if (!file) return;
+  if (file.size > 25 * 1024 * 1024) return toast('Dosya çok büyük (en fazla 25 MB)', 4000);
+  const wait = openSheet({
+    title: 'Rapor okunuyor',
+    size: 'auto',
+    body: `<div class="empty" style="padding:30px 0"><div class="typing" style="margin:0 auto 12px;align-self:center;display:inline-flex"><i></i><i></i><i></i></div><br>Değerler ${kind === 'pdf' ? "PDF'ten" : 'fotoğraftan'} okunuyor…<br><span class="small">Uzun raporlarda 20–40 saniye sürebilir.</span></div>`,
+  });
+  try {
+    let data;
+    let media_type;
+    if (kind === 'pdf') {
+      data = await readFile(file);
+      media_type = 'application/pdf';
+    } else {
+      const { fileToImage } = await import('../barcode.js');
+      const img = await fileToImage(file);
+      data = img.data;
+      media_type = img.media_type;
+    }
+    const { extractLabs } = await import('../ai.js');
+    const res = await extractLabs({ data, media_type });
+    wait.close();
+    openTest(null, { test: { date: res.date || today(), lab_name: res.lab_name }, values: res.values, note: `${kind === 'pdf' ? "PDF'ten" : 'Fotoğraftan'} ${res.values.length} değer okundu${res.date ? '' : '; tarih okunamadı, kontrol et'}. Raporla karşılaştırıp kaydet.` });
+  } catch (e) {
+    wait.close();
+    toast(e.message || 'Rapor okunamadı', 5000);
+  }
+}
+
+function bindFileInputs(el) {
+  el.querySelectorAll('input[data-file]').forEach((inp) =>
+    inp.addEventListener('change', () => {
+      const f = inp.files && inp.files[0];
+      inp.value = '';
+      if (f) importReport(f, inp.dataset.file);
+    })
+  );
+}
+
+function openAddChooser() {
+  const s = openSheet({
+    title: 'Test ekle',
+    size: 'auto',
+    body: `
+      <div class="card flush">
+        <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">PDF'ten ekle</span>
+          <span class="row-sub">Laboratuvar veya e-Nabız raporu; tüm değerler otomatik okunur</span></span>${icon.chev}
+          <input type="file" accept="application/pdf,.pdf" class="sr-only" data-file="pdf"></label>
+        <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">Fotoğraftan ekle</span>
+          <span class="row-sub">Raporun fotoğrafını çek ya da ekran görüntüsü seç</span></span>${icon.chev}
+          <input type="file" accept="image/*" class="sr-only" data-file="img"></label>
+        <button type="button" class="row" data-manual><span class="row-main"><span class="row-title">Elle ekle</span></span>${icon.chev}</button>
+      </div>
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">PDF ve fotoğraf okuma Danışman'ın API anahtarını kullanır (bir rapor yaklaşık 1–3 sent). Okunan değerleri kaydetmeden önce görüp düzeltebilirsin.</p>`,
+  });
+  s.el.querySelectorAll('input[data-file]').forEach((inp) =>
+    inp.addEventListener('change', () => {
+      const f = inp.files && inp.files[0];
+      s.close();
+      if (f) importReport(f, inp.dataset.file);
+    })
+  );
+  s.el.querySelector('[data-manual]').addEventListener('click', () => {
+    s.close();
+    openTest(null);
+  });
+}
+
 // ---------- Test ekle / düzenle ----------
-function openTest(existing) {
+function openTest(existing, prefill = null) {
+  const src = existing || prefill;
   const st = {
-    date: existing?.test.date || today(),
-    lab: existing?.test.lab_name || '',
-    rows: (existing?.values || []).map((v) => ({ id: v.id, marker_key: v.marker_key, name: v.name, value: v.value, unit: v.unit, ref_low: v.ref_low, ref_high: v.ref_high })),
+    date: src?.test.date || today(),
+    lab: src?.test.lab_name || '',
+    rows: (src?.values || []).map((v) => ({ id: v.id, marker_key: v.marker_key, name: v.name, value: v.value, unit: v.unit, ref_low: v.ref_low, ref_high: v.ref_high })),
   };
   const removed = [];
   const s = openSheet({
-    title: existing ? 'Testi düzenle' : 'Test ekle',
+    title: existing ? 'Testi düzenle' : prefill ? 'Okunan değerler' : 'Test ekle',
     leftLabel: 'Vazgeç',
     rightLabel: 'Kaydet',
     onRight: async (api) => {
@@ -207,6 +292,7 @@ function openTest(existing) {
   const show = (n) => (n == null || isNaN(n) ? '' : String(n).replace('.', ','));
   const draw = () => {
     s.setBody(`
+      ${prefill && prefill.note ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">${esc(prefill.note)}</p>` : ''}
       <div class="grid2">
         <div class="field"><label for="t-date">Tarih</label><input id="t-date" class="input" type="date" value="${esc(st.date)}"></div>
         <div class="field"><label for="t-lab">Laboratuvar</label><input id="t-lab" class="input" value="${esc(st.lab)}" placeholder="İsteğe bağlı"></div>

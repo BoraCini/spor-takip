@@ -137,9 +137,15 @@ export function toast(msg, ms = 2200) {
 (function trackViewport() {
   const vv = window.visualViewport;
   const r = document.documentElement;
+  const typing = () => {
+    const a = document.activeElement;
+    return !!a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'file', 'button'].includes(a.type)));
+  };
   const sync = () => {
     r.style.setProperty('--vvh', (vv ? vv.height : window.innerHeight) + 'px');
     r.style.setProperty('--vvt', (vv ? vv.offsetTop : 0) + 'px');
+    // Uygulama yüksekliği: klavye kapalıyken gerçek ekran yüksekliği (iOS ana ekran uygulamasında 100dvh bazen yanlış)
+    if (!typing()) r.style.setProperty('--app-h', window.innerHeight + 'px');
   };
   sync();
   if (vv) {
@@ -147,6 +153,15 @@ export function toast(msg, ms = 2200) {
     vv.addEventListener('scroll', sync);
   }
   window.addEventListener('resize', sync);
+  window.addEventListener('orientationchange', () => setTimeout(sync, 300));
+  // iOS: klavye kapanınca sayfa kaymış kalabiliyor, altta boşluk oluşuyor; yerine oturt
+  document.addEventListener('focusout', () =>
+    setTimeout(() => {
+      if (typing()) return;
+      window.scrollTo(window.scrollX, window.scrollY);
+      sync();
+    }, 120)
+  );
   // Sayı alanına dokununca içeriği seç: yazınca eskisi silinsin
   document.addEventListener('focusin', (e) => {
     const t = e.target;

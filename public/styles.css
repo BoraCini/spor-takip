@@ -58,7 +58,7 @@ html, body {
   overscroll-behavior: none;
 }
 
-body { min-height: 100dvh; }
+body { min-height: var(--app-h, 100dvh); }
 
 button, a, .tabbar, .seg, .chip { -webkit-user-select: none; user-select: none; }
 
@@ -94,7 +94,7 @@ svg { display: block; }
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 24px);
-  min-height: 100dvh;
+  min-height: var(--app-h, 100dvh);
 }
 
 body.has-rest #app { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 96px); }
@@ -261,6 +261,8 @@ textarea.input { min-height: 88px; resize: vertical; line-height: 22px; }
   padding: 4px max(4px, env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
   display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
 }
+/* iOS'ta sekme çubuğu ile ekranın altı arasında boşluk kalırsa aynı renkle doldur */
+.tabbar::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 120px; background: var(--tab-bg); pointer-events: none; }
 .tabbar a {
   min-height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   color: var(--sub); font-size: 10px; font-weight: 500;
@@ -296,7 +298,7 @@ body.locked .tabbar, body.locked #restbar { display: none; }
 /* ---------- Chat ---------- */
 .chat-wrap {
   display: flex; flex-direction: column;
-  height: calc(100dvh - env(safe-area-inset-top) - var(--tabbar-h) - env(safe-area-inset-bottom));
+  height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top) - var(--tabbar-h) - env(safe-area-inset-bottom));
 }
 .chat-top { flex: none; }
 .chat-list {
@@ -548,7 +550,7 @@ body.kb-open .tabbar { display: none; }
 body.kb-open .chat-wrap { height: calc(var(--vvh, 100dvh) - env(safe-area-inset-top)); }
 body.kb-open .chat-top .chips { display: none; }
 
-body.chat-mode.has-rest .chat-wrap { height: calc(100dvh - env(safe-area-inset-top) - var(--tabbar-h) - env(safe-area-inset-bottom) - 62px); }
+body.chat-mode.has-rest .chat-wrap { height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top) - var(--tabbar-h) - env(safe-area-inset-bottom) - 62px); }
 body.has-rest .toast { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 80px); }
 select.input {
   padding-right: 36px;
