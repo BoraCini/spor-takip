@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.4.5';
+export const APP_VERSION = '1.5.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {

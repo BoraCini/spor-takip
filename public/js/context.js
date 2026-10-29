@@ -331,7 +331,9 @@ export async function buildContext() {
     byDate[k][n].push(isCardio(ex) ? `${s.duration_min || '?'} dk${s.distance_km ? ' ' + s.distance_km + ' km' : ''}` : `${s.weight_kg}kg×${s.reps}${s.rpe ? ' @RPE' + s.rpe : ''}`);
   }
   const cyc = await cycleInfo(t);
-  const comps = await db.list('compounds');
+  const allComps = await db.list('compounds');
+  const supps = allComps.filter((c) => c.category === 'destek');
+  const comps = allComps.filter((c) => c.category !== 'destek');
   const due = await dueOn(t);
   const injLogs = (await db.list('injection_logs')).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
   const tests = (await labTests()).slice(0, 3);
@@ -392,8 +394,26 @@ export async function buildContext() {
           saatler: c.kind === 'enjeksiyon' ? null : c.times || ['sabah'],
           not: c.notes || null,
         })),
-      bugun: due.pills.map((x) => `${x.compound.name} (${x.slot}): ${x.done ? 'alındı' : 'alınmadı'}`).concat(due.injections.map((x) => `${x.compound.name} enjeksiyon: ${x.done ? 'yapıldı' + (x.log?.site ? ' - ' + x.log.site : '') : 'yapılmadı'}`)),
-      son_enjeksiyonlar: injLogs.map((l) => `${l.date} ${(comps.find((c) => c.id === l.compound_id) || {}).name || ''} ${l.site || ''}`.trim()),
+      bugun: due.pills.filter((x) => x.compound.category !== 'destek').map((x) => `${x.compound.name} (${x.slot}): ${x.done ? 'alındı' : 'alınmadı'}`).concat(due.injections.map((x) => `${x.compound.name} enjeksiyon: ${x.done ? 'yapıldı' + (x.log?.site ? ' - ' + x.log.site : '') : 'yapılmadı'}`)),
+      son_enjeksiyonlar: injLogs.filter((l) => comps.some((c) => c.id === l.compound_id)).map((l) => `${l.date} ${(comps.find((c) => c.id === l.compound_id) || {}).name || ''} ${l.site || ''}`.trim()),
+    },
+    koruyucu_ilac_ve_vitaminler: {
+      kullanilanlar: supps
+        .filter((c) => c.active !== false)
+        .map((c) => ({
+          ad: c.name,
+          grup: c.group || null,
+          marka: c.brand || null,
+          urun: c.product || null,
+          icerik_miktar: c.strength || null,
+          bicim: c.form || null,
+          bir_seferde: doseText(c) || null,
+          gunler: (c.days && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6]).map((d) => WD_LONG[d]),
+          saatler: c.kind === 'enjeksiyon' ? null : c.times || ['sabah'],
+          not: c.notes || null,
+        })),
+      birakilanlar: supps.filter((c) => c.active === false).map((c) => c.name),
+      bugun: due.pills.filter((x) => x.compound.category === 'destek').map((x) => `${x.compound.name} (${x.slot}): ${x.done ? 'alındı' : 'alınmadı'}`),
     },
     son_tahliller: tests.map(({ test, values }) => ({
       tarih: test.date,

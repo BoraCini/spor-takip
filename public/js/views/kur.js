@@ -3,14 +3,29 @@ import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, 
 import { refresh } from '../app.js';
 import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel } from '../context.js';
 import { COMPOUND_GROUPS, searchCompounds, compoundInfo, findCompound } from '../data/compounds.js';
+import { SUPP_GROUPS, searchSupplements, findSupplement, unitForForm } from '../data/supplements.js';
 
 const UNITS = ['mg', 'mcg', 'IU', 'ml', 'tablet', 'kapsül', 'damla'];
+const SUPP_UNITS = ['kapsül', 'tablet', 'damla', 'sıkım', 'ölçek', 'ml', 'g', 'saşe', 'adet'];
+const FORMS = ['kapsül', 'yumuşak kapsül', 'tablet', 'dil altı tablet', 'çiğneme tableti', 'efervesan', 'damla', 'sprey', 'toz', 'sıvı', 'şurup', 'saşe', 'enjeksiyon'];
+const state = { tab: 'kur' };
+export const isSupp = (c) => c && c.category === 'destek';
 
-export async function render(root) {
+const segHTML = () => `<div class="seg" role="tablist" aria-label="Kür sekmeleri">
+    <button type="button" role="tab" aria-selected="${state.tab === 'kur'}" data-tab="kur">Kür</button>
+    <button type="button" role="tab" aria-selected="${state.tab === 'destek'}" data-tab="destek">Koruma &amp; vitamin</button>
+  </div>`;
+
+export async function render(root, params = {}) {
+  if (params.tab === 'kur' || params.tab === 'destek') state.tab = params.tab;
+  if (state.tab === 'destek') return renderSupp(root);
   const t = today();
   const ci = await cycleInfo(t);
-  const due = await dueOn(t);
-  const comps = await db.list('compounds');
+  const dueAll = await dueOn(t);
+  const due = { ...dueAll, pills: dueAll.pills.filter((x) => !isSupp(x.compound)), injections: dueAll.injections.filter((x) => !isSupp(x.compound)) };
+  due.total = due.pills.length + due.injections.length;
+  due.done = due.pills.filter((x) => x.done).length + due.injections.filter((x) => x.done).length;
+  const comps = (await db.list('compounds')).filter((c) => !isSupp(c));
   const sug = await suggestSite();
   const ws = weekStart(t);
   const weekInj = await db.list('injection_logs', (l) => l.date >= ws && l.date <= addDays(ws, 6));
@@ -37,6 +52,7 @@ export async function render(root) {
         <button type="button" class="icon-btn" aria-label="Madde ekle" data-act="add">${icon.plus}</button>
       </div>
     </header>
+    ${segHTML()}
 
     <button type="button" class="card" style="display:flex;flex-direction:column;gap:8px;width:calc(100% - 32px);text-align:left" data-act="cycle" aria-label="Kür bilgilerini düzenle">
       ${
@@ -141,6 +157,11 @@ export async function render(root) {
   `;
 
   root.onclick = async (e) => {
+    const tb = e.target.closest('[data-tab]');
+    if (tb) {
+      state.tab = tb.dataset.tab;
+      return refresh();
+    }
     const b = e.target.closest('[data-act]');
     if (!b) return;
     const act = b.dataset.act;
@@ -167,6 +188,263 @@ export async function render(root) {
       refresh();
     }
   };
+}
+
+// ---------- Koruma & vitamin sekmesi ----------
+async function renderSupp(root) {
+  const t = today();
+  const dueAll = await dueOn(t);
+  const pills = dueAll.pills.filter((x) => isSupp(x.compound));
+  const inj = dueAll.injections.filter((x) => isSupp(x.compound));
+  const items = (await db.list('compounds')).filter(isSupp).sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name, 'tr'));
+  const total = pills.length + inj.length;
+  const done = pills.filter((x) => x.done).length + inj.filter((x) => x.done).length;
+  root.innerHTML = `
+    <header class="hdr">
+      <div class="hdr-text"><span class="eyebrow">${esc(trDate(t, true))}</span><h1 class="title">Kür</h1></div>
+      <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Vitamin veya ilaç ekle" data-act="add">${icon.plus}</button></div>
+    </header>
+    ${segHTML()}
+    ${
+      !items.length
+        ? `<section class="card" style="text-align:center;padding:22px 16px">
+            <p style="margin:0 0 6px;font-size:17px;font-weight:600">Koruyucu ilaç ve vitamin ekle</p>
+            <p class="small muted" style="margin:0 0 14px;line-height:18px">Kullandığın vitamin, mineral, karaciğer/kalp koruyucu ve takviyeleri marka, ürün ve içerik bilgisiyle ekle. Her gün ne alacağını burada işaretlersin; Danışman da bunları bilir.</p>
+            <button type="button" class="btn primary" data-act="add">Ekle</button>
+          </section>`
+        : `<div class="sec"><h2>Bugün</h2>${total ? `<span class="meta">${done} / ${total} alındı</span>` : ''}</div>
+          ${
+            total
+              ? `<section class="card flush" aria-label="Bugün alınacaklar">
+              ${pills
+                .map(
+                  (p) => `<div class="row">
+                  <span style="width:52px;flex:none;font-size:13px;font-weight:600;color:var(--sub)">${esc(slotLabel(p.slot))}</span>
+                  <span class="row-main"><span class="row-title normal">${esc(p.compound.name)}</span><span class="row-sub">${esc(doseText(p.compound) || '')}</span></span>
+                  <button type="button" class="check-btn" aria-pressed="${p.done}" aria-label="${esc(slotLabel(p.slot))} ${esc(p.compound.name)}: ${p.done ? 'alındı, geri al' : 'alındı olarak işaretle'}"
+                    data-act="pill" data-id="${p.compound.id}" data-slot="${p.slot}" ${p.log ? `data-log="${p.log.id}"` : ''}><span class="check">${icon.check}</span></button>
+                </div>`
+                )
+                .join('')}
+              ${inj
+                .map(
+                  (x) => `<div class="row">
+                  <span style="width:52px;flex:none;font-size:13px;font-weight:600;color:var(--sub)">İğne</span>
+                  <span class="row-main"><span class="row-title normal">${esc(x.compound.name)}</span><span class="row-sub">${esc(doseText(x.compound) || '')}</span></span>
+                  <button type="button" class="check-btn" aria-pressed="${x.done}" aria-label="${esc(x.compound.name)}: ${x.done ? 'yapıldı, geri al' : 'yapıldı olarak işaretle'}"
+                    data-act="inj" data-id="${x.compound.id}" ${x.log ? `data-log="${x.log.id}"` : ''}><span class="check">${icon.check}</span></button>
+                </div>`
+                )
+                .join('')}
+            </section>`
+              : '<section class="card"><div class="empty" style="padding:8px 0">Bugün için planlanmış bir şey yok.</div></section>'
+          }
+          <div class="sec"><h2>Kullandıklarım</h2><span class="meta">${items.filter((c) => c.active !== false).length} aktif</span></div>
+          <section class="card flush" aria-label="Koruyucu ilaç ve vitaminler">
+            ${items
+              .map((c) => {
+                const days = c.days && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6];
+                const dayTxt = days.length === 7 ? 'Her gün' : days.map((d) => WD_SHORT[d]).join(', ');
+                const timeTxt = c.kind === 'enjeksiyon' ? 'iğne' : (c.times && c.times.length ? c.times : ['sabah']).map(slotLabel).join(', ').toLocaleLowerCase('tr-TR');
+                return `<button type="button" class="row" data-act="edit" data-id="${c.id}">
+                  <span class="row-main"><span class="row-title normal">${esc(c.name)}${c.active === false ? ' <span class="muted small">(bırakıldı)</span>' : ''}</span>
+                  <span class="row-sub">${esc([c.group, `${dayTxt} · ${timeTxt}`, doseText(c)].filter(Boolean).join(' · '))}</span></span>${icon.chev}</button>`;
+              })
+              .join('')}
+          </section>`
+    }
+    <p class="note">Danışman, kullandığın vitamin ve koruyucuları bilir; tahlil yorumlarken ve önerilerde bunları hesaba katar. Reçeteli ilaçların kullanımı ve dozu için doktoruna danış.</p>`;
+  root.onclick = async (e) => {
+    const tb = e.target.closest('[data-tab]');
+    if (tb) {
+      state.tab = tb.dataset.tab;
+      return refresh();
+    }
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'add') openSuppPicker();
+    else if (act === 'edit') openSupp((await db.get('compounds', b.dataset.id)) || null);
+    else if (act === 'pill') {
+      if (b.dataset.log) await db.remove('dose_logs', b.dataset.log);
+      else await db.put('dose_logs', { date: t, compound_id: b.dataset.id, slot: b.dataset.slot, taken_at: new Date().toISOString() });
+      refresh();
+    } else if (act === 'inj') {
+      if (b.dataset.log) await db.remove('injection_logs', b.dataset.log);
+      else await db.put('injection_logs', { date: t, compound_id: b.dataset.id, site: '', done_at: new Date().toISOString() });
+      refresh();
+    }
+  };
+}
+
+function openSuppPicker() {
+  const s = openSheet({
+    title: 'Vitamin / ilaç ekle',
+    body: `
+      <label class="sr-only" for="sq">Ara</label>
+      <input id="sq" class="input" type="search" placeholder="Ara: d3, magnezyum, tudca, omega…" autocomplete="off" style="margin-bottom:10px">
+      <div id="sres"></div>
+      <button type="button" class="btn block" data-manual style="margin-top:10px">Listede yok, elle ekle</button>
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Listeden türü seç; sonraki adımda marka, ürün adı ve içerik/miktar bilgisini (örn. Ocean · D3+K2 · 1000 IU + 100 mcg) girersin. Liste doz önermez.</p>`,
+  });
+  const q = s.el.querySelector('#sq');
+  const res = s.el.querySelector('#sres');
+  const draw = () => {
+    const hits = searchSupplements(q.value);
+    const groups = SUPP_GROUPS.map((g) => [g, hits.filter((c) => c.group === g)]).filter(([, l]) => l.length);
+    res.innerHTML = groups.length
+      ? groups
+          .map(
+            ([g, l]) => `<div class="sec" style="padding:8px 14px 6px"><h2>${esc(g)}</h2></div>
+            <div class="card flush search-res">${l
+              .map(
+                (c) => `<button type="button" class="row" data-sid="${c.id}"><span class="row-main"><span class="row-title normal">${esc(c.name)}${c.rx ? ' <span class="tag">reçeteli</span>' : ''}</span>
+                  <span class="row-sub">${esc([c.forms.join(', '), c.note].filter(Boolean).join(' · '))}</span></span>${icon.chev}</button>`
+              )
+              .join('')}</div>`
+          )
+          .join('')
+      : `<div class="empty">"${esc(q.value)}" bulunamadı. Aşağıdan elle ekleyebilirsin.</div>`;
+  };
+  draw();
+  q.addEventListener('input', draw);
+  s.el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.sid) {
+      s.close();
+      openSupp(null, findSupplement(b.dataset.sid));
+    } else if (b.hasAttribute('data-manual')) {
+      s.close();
+      openSupp(null, null, q.value.trim());
+    }
+  });
+}
+
+// Koruyucu / vitamin düzenleyici: marka, ürün, içerik, biçim, günlük kullanım
+function openSupp(c, preset = null, typed = '') {
+  const cat = preset || (c && c.catalog_id ? findSupplement(c.catalog_id) : null);
+  const form0 = c?.form || (cat ? cat.forms[0] : 'kapsül');
+  const st = {
+    brand: c?.brand || '',
+    product: c?.product || (cat ? cat.name : typed),
+    strength: c?.strength || '',
+    pack: c?.pack || '',
+    form: form0,
+    dose_amount: c?.dose_amount ?? '',
+    dose_unit: c?.dose_unit || unitForForm(form0),
+    days: c?.days ? [...c.days] : [],
+    times: c?.times ? [...c.times] : [],
+    active: c?.active !== false,
+    notes: c?.notes || '',
+  };
+  const s = openSheet({
+    title: c ? 'Düzenle' : 'Vitamin / ilaç ekle',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Kaydet',
+    onRight: async (api) => {
+      sync();
+      if (!st.product.trim()) return toast('Ürün adını yaz');
+      const n = parseNum(st.dose_amount);
+      const inj = st.form === 'enjeksiyon';
+      const name = [st.brand.trim(), st.product.trim(), st.strength.trim()].filter(Boolean).join(' ');
+      await db.put('compounds', {
+        ...(c || {}),
+        category: 'destek',
+        ...(cat ? { catalog_id: cat.id } : {}),
+        group: cat ? cat.group : c?.group || 'Diğer',
+        name,
+        brand: st.brand.trim(),
+        product: st.product.trim(),
+        strength: st.strength.trim(),
+        pack: st.pack.trim(),
+        form: st.form,
+        kind: inj ? 'enjeksiyon' : 'hap',
+        dose_amount: isNaN(n) ? null : n,
+        dose_unit: st.dose_unit,
+        days: !inj && !st.days.length ? [0, 1, 2, 3, 4, 5, 6] : st.days.sort(),
+        times: inj ? [] : st.times.length ? st.times : ['sabah'],
+        active: st.active,
+        notes: st.notes.trim(),
+      });
+      api.close();
+      toast('Kaydedildi');
+      refresh();
+    },
+  });
+  const sync = () => {
+    const g = (id) => s.el.querySelector(id);
+    if (g('#sp-brand')) st.brand = g('#sp-brand').value;
+    if (g('#sp-product')) st.product = g('#sp-product').value;
+    if (g('#sp-strength')) st.strength = g('#sp-strength').value;
+    if (g('#sp-pack')) st.pack = g('#sp-pack').value;
+    if (g('#sp-dose')) st.dose_amount = g('#sp-dose').value;
+    if (g('#sp-unit')) st.dose_unit = g('#sp-unit').value;
+    if (g('#sp-notes')) st.notes = g('#sp-notes').value;
+    if (g('#sp-active')) st.active = g('#sp-active').checked;
+  };
+  const draw = () => {
+    const inj = st.form === 'enjeksiyon';
+    const forms = cat ? [...new Set([...cat.forms, st.form])] : FORMS;
+    s.setBody(`
+      ${cat ? `<div class="card" style="margin:0 0 12px"><span class="small muted">${esc(cat.group)}${cat.rx ? ' · reçeteli' : ''}</span>
+        <p style="margin:2px 0 0;font-size:15px;font-weight:600">${esc(cat.name)}</p>${cat.note ? `<p class="small muted" style="margin:4px 0 0;line-height:18px">${esc(cat.note)}</p>` : ''}</div>` : ''}
+      <div class="grid2">
+        <div class="field"><label for="sp-brand">Marka</label><input id="sp-brand" class="input" value="${esc(st.brand)}" placeholder="Örn. Ocean"></div>
+        <div class="field"><label for="sp-product">Ürün</label><input id="sp-product" class="input" value="${esc(st.product)}" placeholder="Örn. D3+K2"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="sp-strength">İçerik / miktar</label><input id="sp-strength" class="input" value="${esc(st.strength)}" placeholder="Örn. 1000 IU + 100 mcg"></div>
+        <div class="field"><label for="sp-pack">Paket – isteğe bağlı</label><input id="sp-pack" class="input" value="${esc(st.pack)}" placeholder="Örn. 60 kapsül, 500 g"></div>
+      </div>
+      <div class="field"><span class="lbl">Biçim</span>
+        <div class="toggle-row">${forms.map((f) => `<button type="button" class="tog sm" aria-pressed="${st.form === f}" data-form="${esc(f)}">${esc(f)}</button>`).join('')}</div></div>
+      <div class="grid2">
+        <div class="field"><label for="sp-dose">Bir seferde</label><input id="sp-dose" class="input" inputmode="decimal" value="${esc(String(st.dose_amount).replace('.', ','))}" placeholder="Örn. 1"></div>
+        <div class="field"><label for="sp-unit">Birim</label><select id="sp-unit" class="input">${[...new Set([...SUPP_UNITS, ...UNITS, st.dose_unit])].map((u) => `<option ${st.dose_unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><span class="lbl">${inj ? 'Günler' : 'Günler (boş bırakırsan her gün)'}</span>
+        <div class="toggle-row">${WD_SHORT.map((d, i) => `<button type="button" class="tog" aria-pressed="${st.days.includes(i)}" aria-label="${WD_LONG[i]}" data-day="${i}">${d}</button>`).join('')}</div></div>
+      ${
+        inj
+          ? ''
+          : `<div class="field"><span class="lbl">Ne zaman</span>
+        <div class="toggle-row">${SLOTS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${st.times.includes(k)}" data-time="${k}">${l}</button>`).join('')}</div></div>`
+      }
+      <div class="field"><label for="sp-notes">Not</label><textarea id="sp-notes" class="input" placeholder="Örn. yağlı öğünle, akşam yemeğinden sonra">${esc(st.notes)}</textarea></div>
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <label for="sp-active" style="font-size:16px">Şu an kullanıyorum</label>
+        <span class="switch"><input id="sp-active" type="checkbox" ${st.active ? 'checked' : ''}><span></span></span>
+      </div>
+      ${c ? '<button type="button" class="btn danger block" data-del style="background:var(--card)">Sil</button>' : ''}`);
+  };
+  draw();
+  s.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.form) {
+      sync();
+      const prevDefault = unitForForm(st.form);
+      st.form = b.dataset.form;
+      if (st.dose_unit === prevDefault) st.dose_unit = unitForForm(st.form);
+      draw();
+    } else if (b.dataset.day) {
+      sync();
+      const d = Number(b.dataset.day);
+      st.days = st.days.includes(d) ? st.days.filter((x) => x !== d) : [...st.days, d];
+      draw();
+    } else if (b.dataset.time) {
+      sync();
+      const k = b.dataset.time;
+      st.times = st.times.includes(k) ? st.times.filter((x) => x !== k) : [...st.times, k];
+      draw();
+    } else if (b.hasAttribute('data-del')) {
+      if (!(await confirmSheet({ title: 'Sil', text: `"${c.name}" silinsin mi? Geçmiş kayıtların kalır. Sadece bıraktıysan "Şu an kullanıyorum"u kapatabilirsin.`, okLabel: 'Sil', danger: true }))) return;
+      await db.remove('compounds', c.id);
+      s.close();
+      refresh();
+    }
+  });
 }
 
 function pickSite(suggested) {

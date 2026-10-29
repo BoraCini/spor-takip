@@ -3,7 +3,7 @@
 // Alanlar: id, ad, arama kelimeleri, tür (enjeksiyon | hap), grup, ester sınıfı, yaklaşık yarılanma ömrü, not
 const C = (id, name, alias, kind, group, ester, hl, note = '') => ({ id, name, alias, kind, group, ester, hl, note });
 
-export const COMPOUND_GROUPS = ['Testosteron', 'Nandrolon', 'Boldenon', 'Trenbolon', 'Drostanolon (Masteron)', 'Metenolon (Primobolan)', 'Diğer enjeksiyonlar', 'Oral steroidler', 'Aromataz inhibitörleri', 'SERM', 'Prolaktin', 'Gonadotropin ve hormonlar', 'Tiroid', 'Diğer', 'Destek'];
+export const COMPOUND_GROUPS = ['Testosteron', 'Nandrolon', 'Boldenon', 'Trenbolon', 'Drostanolon (Masteron)', 'Metenolon (Primobolan)', 'Diğer enjeksiyonlar', 'Oral steroidler', 'Aromataz inhibitörleri', 'SERM', 'Prolaktin', 'Gonadotropin ve hormonlar', 'Tiroid', 'Diğer'];
 
 export const COMPOUNDS = [
   // ---- Testosteron ----
@@ -74,14 +74,6 @@ export const COMPOUNDS = [
   C('k_clen', 'Klenbuterol', 'clen clenbuterol', 'hap', 'Diğer', null, '~25–39 saat'),
   C('k_fina', 'Finasterid (Propecia/Proscar)', 'propecia proscar finasteride', 'hap', 'Diğer', null, '~5–6 saat'),
   C('k_duta', 'Dutasterid (Avodart)', 'avodart dutasteride', 'hap', 'Diğer', null, '~5 hafta'),
-  C('k_telmi', 'Telmisartan', 'telmisartan micardis tansiyon', 'hap', 'Diğer', null, '~24 saat'),
-  C('k_metf', 'Metformin', 'metformin glifor glucophage', 'hap', 'Diğer', null, '~6 saat'),
-  // ---- Destek ----
-  C('k_tudca', 'TUDCA', 'tudca safra asidi karaciğer', 'hap', 'Destek', null, null),
-  C('k_nac', 'NAC (N-asetilsistein)', 'nac asist n-acetylcysteine karaciğer', 'hap', 'Destek', null, null),
-  C('k_omega3', 'Omega-3 (balık yağı)', 'omega 3 balık yağı fish oil', 'hap', 'Destek', null, null),
-  C('k_vitd', 'D3 vitamini', 'd vitamini d3 cholecalciferol', 'hap', 'Destek', null, null),
-  C('k_citrus', 'Sitrüs bergamot', 'bergamot citrus kolesterol', 'hap', 'Destek', null, null),
 ];
 
 const norm = (s) =>

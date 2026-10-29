@@ -36,7 +36,7 @@ const refTxt = (v) => (v.ref_low != null && v.ref_high != null ? `${fmt(v.ref_lo
 export async function render(root) {
   const tests = await labTests();
   const cycles = await db.list('cycles');
-  const comps = await db.list('compounds', (c) => c.active !== false);
+  const comps = await db.list('compounds', (c) => c.active !== false && c.category !== 'destek');
 
   if (!tests.length) {
     root.innerHTML = `
