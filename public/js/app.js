@@ -1,10 +1,10 @@
 import * as db from './db.js';
 import { showLock, hasPin, setupPinFlow } from './lock.js';
-import { confirmSheet, esc, toast } from './util.js';
+import { confirmSheet, esc, toast, today, parseNum } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.4.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -110,9 +110,61 @@ function watchBackground() {
     if (document.visibilityState === 'hidden') hiddenAt = Date.now();
     else if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) {
       hiddenAt = 0;
-      lockIfNeeded();
-    }
+      lockIfNeeded().then(dailyWeight);
+    } else if (document.visibilityState === 'visible' && !locking) dailyWeight();
   });
+}
+
+// ---------- Günlük kilo sorusu ----------
+let weightAsking = false;
+async function dailyWeight() {
+  if (weightAsking) return;
+  if (!(await db.getSetting('daily_weight_prompt', true))) return;
+  const t = today();
+  const logs = await db.list('body_logs');
+  if (logs.some((r) => r.date === t)) return;
+  weightAsking = true;
+  const last = logs.sort((a, b) => b.date.localeCompare(a.date))[0];
+  const { logWeightToday } = await import('./context.js');
+  await new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'wprompt-back';
+    el.innerHTML = `
+      <div class="wprompt" role="dialog" aria-modal="true" aria-labelledby="wp-t">
+        <h2 id="wp-t">Bugünkü kilon kaç?</h2>
+        <p class="small muted">En tutarlı sonuç için sabah, tuvaletten sonra ve aç karnına tartıl.</p>
+        <div class="stepper" style="margin:14px 0 12px">
+          <button type="button" data-d="-0.1" aria-label="0,1 kg azalt">−</button>
+          <input id="wp-in" inputmode="decimal" placeholder="${last ? String(last.weight_kg).replace('.', ',') : 'kg'}" aria-label="Kilo (kg)">
+          <button type="button" data-d="0.1" aria-label="0,1 kg artır">+</button>
+        </div>
+        <button type="button" class="btn primary block" data-save>Kaydet</button>
+        <p class="small muted" style="margin:10px 0 0">${last ? `Son tartı: ${String(last.weight_kg).replace('.', ',')} kg · ` : ''}Bu soruyu Profil › Ayarlar'dan kapatabilirsin.</p>
+      </div>`;
+    document.body.appendChild(el);
+    const inp = el.querySelector('#wp-in');
+    el.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.d) {
+        const base = inp.value.trim() ? parseNum(inp.value) : last ? last.weight_kg : 70;
+        const v = Math.round((base + Number(b.dataset.d)) * 10) / 10;
+        inp.value = String(v).replace('.', ',');
+      } else if (b.hasAttribute('data-save')) {
+        const v = parseNum(inp.value);
+        if (!v || v < 30 || v > 300) {
+          inp.focus();
+          return toast('Kilonu gir (kg)');
+        }
+        await logWeightToday(v);
+        el.remove();
+        toast('Kilo kaydedildi');
+        resolve();
+      }
+    });
+  });
+  weightAsking = false;
+  if (current) refresh();
 }
 
 // ---------- İlk açılış ----------
@@ -201,6 +253,7 @@ async function start() {
     await lockIfNeeded();
   }
   await route();
+  if (onboarded) dailyWeight();
 }
 
 start();

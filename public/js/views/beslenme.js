@@ -535,6 +535,7 @@ async function openAmount(food, meal, existing = null, opts = {}) {
   if (!portions.some((p) => p[0] === sv.unit)) sv = { unit: 'gram', qty: sv.grams || 100 };
   let unit = sv.unit;
   let qty = sv.qty;
+  let typed = !!existing; // kullanıcı miktarı kendisi girdi mi (girmediyse öneri gri görünür)
   let selMeal = meal;
   const selecting = !!opts.selecting;
   const grams = () => {
@@ -620,7 +621,7 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       <div class="field"><label for="qty">Miktar (${esc(unit)})</label>
         <div class="stepper">
           <button type="button" data-step="-1" aria-label="Azalt">−</button>
-          <input id="qty" inputmode="decimal" value="${String(qty).replace('.', ',')}">
+          <input id="qty" inputmode="decimal" value="${typed ? String(qty).replace('.', ',') : ''}" placeholder="${String(qty).replace('.', ',')}">
           <button type="button" data-step="1" aria-label="Artır">+</button>
         </div>
         ${unit !== 'gram' ? `<div class="toggle-row" style="margin-top:4px">${[0.5, 1, 1.5, 2, 3].map((v) => `<button type="button" class="tog sm" data-q="${v}" aria-pressed="${qty === v}">${String(v).replace('.', ',')}</button>`).join('')}</div>` : ''}
@@ -638,9 +639,11 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       ${food.custom && !existing ? `<button type="button" class="btn danger block" data-del-food style="margin-top:4px">${food.overrides ? 'Orijinal değerlere dön' : 'Listemden sil'}</button>` : ''}
       ${existing ? `<button type="button" class="btn danger block" data-del style="margin-top:12px">Kaydı sil</button>` : ''}`);
     const q = s.el.querySelector('#qty');
+    const ph = qty;
     q.addEventListener('input', () => {
-      const v = parseNum(q.value);
+      const v = q.value.trim() === '' ? ph : parseNum(q.value);
       if (!isNaN(v)) {
+        typed = q.value.trim() !== '';
         qty = v;
         s.el.querySelectorAll('[data-q]').forEach((x) => x.setAttribute('aria-pressed', Number(x.dataset.q) === qty));
         refreshNums();
@@ -656,9 +659,11 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       unit = b.dataset.unit;
       const u = portions.find((p) => p[0] === unit);
       qty = unit === 'gram' ? Math.round(g) || 100 : Math.max(0.5, Math.round((g / u[1]) * 2) / 2) || 1;
+      typed = false;
       draw();
     } else if (b.dataset.q) {
       qty = Number(b.dataset.q);
+      typed = true;
       draw();
     } else if (b.dataset.meal) {
       selMeal = b.dataset.meal;
@@ -666,6 +671,7 @@ async function openAmount(food, meal, existing = null, opts = {}) {
     } else if (b.dataset.step) {
       const step = unit === 'gram' ? 10 : 0.5;
       qty = Math.max(0, round1(qty + Number(b.dataset.step) * step));
+      typed = true;
       s.el.querySelector('#qty').value = String(qty).replace('.', ',');
       s.el.querySelectorAll('[data-q]').forEach((x) => x.setAttribute('aria-pressed', Number(x.dataset.q) === qty));
       refreshNums();
@@ -758,7 +764,7 @@ async function openRecipe(existing, after) {
   const custom = markCustom(await db.list('custom_foods'));
   const pool = custom.filter((c) => !existing || c.id !== existing.id);
   const ingr = existing
-    ? existing.recipe.items.map((it) => ({ ...it, food: findFood(it.food_id, pool) })).filter((x) => x.food)
+    ? existing.recipe.items.map((it) => ({ ...it, typed: true, food: findFood(it.food_id, pool) })).filter((x) => x.food)
     : [];
   let servings = existing ? existing.recipe.servings : 4;
   let done = false;
@@ -850,7 +856,7 @@ async function openRecipe(existing, after) {
               <span class="row-main"><span class="row-title normal">${esc(cleanName(x.food.name))}</span>
               <span class="row-sub num" data-ik="${i}">${fmt(((x.food.k || 0) * (x.grams || 0)) / 100)} kcal</span></span>
               <label class="sr-only" for="rg-${i}">${esc(cleanName(x.food.name))} gram</label>
-              <input id="rg-${i}" class="input num" data-g="${i}" inputmode="decimal" value="${String(x.grams).replace('.', ',')}" style="width:76px;flex:none;text-align:right;min-height:38px;padding:6px 10px">
+              <input id="rg-${i}" class="input num" data-g="${i}" inputmode="decimal" value="${x.typed ? String(x.grams).replace('.', ',') : ''}" placeholder="${String(x.def ?? x.grams).replace('.', ',')}" style="width:76px;flex:none;text-align:right;min-height:38px;padding:6px 10px">
               <span class="small muted" style="flex:none">g</span>
               <button type="button" class="icon-btn" data-rm="${i}" aria-label="${esc(cleanName(x.food.name))} çıkar" style="flex:none;color:var(--sub)">${icon.close}</button>
             </div>`
@@ -880,7 +886,9 @@ async function openRecipe(existing, after) {
   s.el.addEventListener('input', (e) => {
     const i = e.target.dataset.g;
     if (i != null) {
-      const v = parseNum(e.target.value);
+      const empty = e.target.value.trim() === '';
+      const v = empty ? ingr[i].def ?? 0 : parseNum(e.target.value);
+      ingr[i].typed = !empty;
       ingr[i].grams = isNaN(v) ? 0 : v;
       s.el.querySelector(`[data-ik="${i}"]`).textContent = `${fmt(((ingr[i].food.k || 0) * ingr[i].grams) / 100)} kcal`;
       drawTot();
@@ -897,7 +905,8 @@ async function openRecipe(existing, after) {
     if (!b) return;
     if (b.dataset.add != null) {
       const f = found[Number(b.dataset.add)];
-      ingr.push({ food: f, grams: defaultServing(f).grams });
+      const dg = defaultServing(f).grams;
+      ingr.push({ food: f, grams: dg, def: dg, typed: false });
       q.value = '';
       drawRes();
       drawItems();
@@ -1025,7 +1034,7 @@ function openEstimate(meal, name = '') {
 
 async function runEstimate(meal, opts) {
   const { estimateFood } = await import('../ai.js');
-  const wait = openSheet({ title: 'Hesaplanıyor', body: `<div class="empty" style="padding:30px 0"><div class="typing" style="margin:0 auto 12px;align-self:center;display:inline-flex"><i></i><i></i><i></i></div><br>${opts.mode === 'label' ? 'Etiket okunuyor…' : 'Besin değerleri hesaplanıyor…'}</div>` });
+  const wait = openSheet({ title: 'Hesaplanıyor', size: 'auto', body: `<div class="empty" style="padding:30px 0"><div class="typing" style="margin:0 auto 12px;align-self:center;display:inline-flex"><i></i><i></i><i></i></div><br>${opts.mode === 'label' ? 'Etiket okunuyor…' : 'Besin değerleri hesaplanıyor…'}</div>` });
   try {
     const food = await estimateFood(opts);
     wait.close();

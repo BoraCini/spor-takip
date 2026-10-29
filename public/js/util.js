@@ -133,10 +133,39 @@ export function toast(msg, ms = 2200) {
 
 // ---- Alt sayfa (sheet) ----
 // openSheet({ title, body, left, right, onMount, onClose }) -> { el, close, setBody }
-export function openSheet({ title = '', body = '', leftLabel = 'Kapat', rightLabel = '', onRight, onMount, onClose } = {}) {
+// iOS: klavye açılınca görünür alanı takip et; pencereler bu alana sabitlenir, kaymaz
+(function trackViewport() {
+  const vv = window.visualViewport;
+  const r = document.documentElement;
+  const sync = () => {
+    r.style.setProperty('--vvh', (vv ? vv.height : window.innerHeight) + 'px');
+    r.style.setProperty('--vvt', (vv ? vv.offsetTop : 0) + 'px');
+  };
+  sync();
+  if (vv) {
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+  }
+  window.addEventListener('resize', sync);
+  // Sayı alanına dokununca içeriği seç: yazınca eskisi silinsin
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.tagName === 'INPUT' && /decimal|numeric/.test(t.getAttribute('inputmode') || '') && t.value) {
+      setTimeout(() => {
+        try {
+          t.setSelectionRange(0, t.value.length);
+        } catch {}
+      }, 0);
+    }
+  });
+})();
+
+const syncSheetLock = () => document.body.classList.toggle('sheet-open', !!document.querySelector('.sheet-backdrop'));
+
+export function openSheet({ title = '', body = '', leftLabel = 'Kapat', rightLabel = '', onRight, onMount, onClose, size = 'full' } = {}) {
   const root = document.getElementById('overlay-root');
   const back = document.createElement('div');
-  back.className = 'sheet-backdrop';
+  back.className = `sheet-backdrop ${size === 'auto' ? 'sheet-auto' : 'sheet-full'}`;
   back.innerHTML = `
     <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="sheet-hd">
@@ -156,6 +185,7 @@ export function openSheet({ title = '', body = '', leftLabel = 'Kapat', rightLab
       if (closed) return;
       closed = true;
       back.remove();
+      syncSheetLock();
       document.removeEventListener('keydown', onKey);
       onClose && onClose();
     },
@@ -174,6 +204,7 @@ export function openSheet({ title = '', body = '', leftLabel = 'Kapat', rightLab
   if (rb) rb.addEventListener('click', () => onRight && onRight(api));
   document.addEventListener('keydown', onKey);
   root.appendChild(back);
+  syncSheetLock();
   onMount && onMount(api);
   return api;
 }
@@ -183,6 +214,7 @@ export function confirmSheet({ title, text, okLabel = 'Tamam', danger = false })
     let result = false;
     const s = openSheet({
       title,
+      size: 'auto',
       leftLabel: 'Vazgeç',
       body: `
         <p style="font-size:16px;line-height:22px;margin:4px 4px 16px">${esc(text)}</p>

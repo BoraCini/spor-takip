@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, round1, lineChartSVG, parseDate, MONTHS_SHORT } from '../util.js';
 import { refresh } from '../app.js';
-import { programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES } from '../context.js';
+import { programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES, MUSCLE_GROUP, routineList, routineDay, sessionFor } from '../context.js';
 import { EXERCISE_PRESETS } from '../data/exercises.js';
 import * as rest from '../rest.js';
 import { renderProgress } from './ilerleme.js';
@@ -63,13 +63,32 @@ export async function render(root, params = {}) {
   const date = addDays(ws, state.wd);
   const week = await weekProgram();
   const hasAnyProgram = week.some((w) => w.day);
-  const { day, items } = week[state.wd];
+  const routines = await routineList();
+  const session = await sessionFor(date);
+  let day = null;
+  let items = [];
+  let srcKind = null; // 'routine' | 'week'
+  if (session) {
+    const r = await routineDay(session.routine_id);
+    if (r.day) {
+      day = r.day;
+      items = r.items;
+      srcKind = 'routine';
+    }
+  }
+  if (!srcKind && week[state.wd].day) {
+    day = week[state.wd].day;
+    items = week[state.wd].items;
+    srcKind = 'week';
+  }
+  const weekSessions = await db.list('workout_sessions', (x) => x.date >= ws && x.date <= addDays(ws, 6));
+  const rTitle = (id) => (routines.find((r) => r.day.id === id) || {}).day?.title;
   const logged = await db.list('workout_sets', (s) => s.date === date);
   const exs = await db.list('exercises');
 
   // Programda olmayan ama bu gün kaydedilmiş egzersizler (örn. Danışman'dan)
   const progIds = new Set(items.map((x) => x.exercise.id));
-  const extraIds = [...new Set(logged.map((s) => s.exercise_id))].filter((id) => !progIds.has(id));
+  const extraIds = [...new Set([...logged.map((s) => s.exercise_id), ...((state.added || {})[date] || [])])].filter((id) => !progIds.has(id));
   const allItems = [
     ...items,
     ...extraIds.map((id) => ({ pe: { target_sets: 0, target_reps: '' }, exercise: exs.find((e) => e.id === id) || { id, name: 'Egzersiz' }, extra: true })),
@@ -98,32 +117,42 @@ export async function render(root, params = {}) {
       let row;
       if (cardio) {
         const targetMin = parseInt(it.pe.target_reps, 10) || null;
-        const min = rec ? rec.duration_min : d ? d.min : lastVals ? lastVals.min : p ? p.duration_min : targetMin;
-        const km = rec ? rec.distance_km : d ? d.km : lastVals ? lastVals.km : p ? p.distance_km : null;
+        // Kutular boş başlar; öneri (önceki set / geçen seans / hedef) gri ipucu olarak görünür
+        const min = rec ? rec.duration_min : d && d.min != null ? d.min : null;
+        const km = rec ? rec.distance_km : d && d.km != null ? d.km : null;
+        const phMin = lastVals ? lastVals.min : p ? p.duration_min : targetMin;
+        const phKm = lastVals ? lastVals.km : p ? p.distance_km : null;
         if (done) cardioMin += Number(rec.duration_min) || 0;
-        lastVals = { min, km };
-        row = { n, rec, prevTxt: p ? `${p.duration_min || '–'} dk${p.distance_km ? ' · ' + kgTxt(p.distance_km) : ''}` : '–', min, km, done, key };
+        lastVals = { min: min ?? phMin, km: km ?? phKm };
+        row = { n, rec, prevTxt: p ? `${p.duration_min || '–'} dk${p.distance_km ? ' · ' + kgTxt(p.distance_km) : ''}` : '–', min, km, phMin, phKm, done, key };
       } else {
         const sugKg = sug ? sug.weight_kg : null;
         const sugReps = sug ? sug.reps : null;
-        const kg = rec ? rec.weight_kg : d ? d.kg : lastVals ? lastVals.kg : sugKg ?? (p ? p.weight_kg : null);
-        const reps = rec ? rec.reps : d ? d.reps : lastVals ? lastVals.reps : sugReps ?? (p ? p.reps : parseInt(it.pe.target_reps, 10) || null);
+        const kg = rec ? rec.weight_kg : d && d.kg != null ? d.kg : null;
+        const reps = rec ? rec.reps : d && d.reps != null ? d.reps : null;
+        const phKg = lastVals ? lastVals.kg : sugKg ?? (p ? p.weight_kg : null);
+        const phReps = lastVals ? lastVals.reps : sugReps ?? (p ? p.reps : parseInt(it.pe.target_reps, 10) || null);
         const rpe = rec ? rec.rpe ?? null : d ? d.rpe ?? null : null;
         if (done) {
           totalVol += (rec.weight_kg || 0) * (rec.reps || 0);
           doneSets++;
         }
-        lastVals = { kg, reps };
-        row = { n, rec, prevTxt: p ? `${kgTxt(p.weight_kg)} × ${p.reps}` : '–', kg, reps, rpe, done, key };
+        lastVals = { kg: kg ?? phKg, reps: reps ?? phReps };
+        row = { n, rec, prevTxt: p ? `${kgTxt(p.weight_kg)} × ${p.reps}` : '–', kg, reps, phKg, phReps, rpe, done, key };
       }
       rows.push(row);
     }
     const activeN = state.active[`${ex.id}|${date}`] ?? (rows.find((r) => !r.done) || {}).n;
     cards.push({ it, ex, cardio, rows, activeN, prev, sug, target });
   }
+  // Düzenleme kutuları yalnızca üzerinde çalışılan harekette açık olsun (ilk yarım kalan hareket)
+  state.focus = state.focus || {};
+  let focusEx = state.focus[date];
+  if (!cards.some((c) => c.ex.id === focusEx && c.rows.some((r) => !r.done))) focusEx = (cards.find((c) => c.rows.some((r) => !r.done)) || {}).ex?.id;
+  for (const c of cards) if (c.ex.id !== focusEx) c.activeN = null;
 
   const isToday = date === t;
-  const title = day ? (day.rest ? 'Dinlenme' : day.title || WD_LONG[state.wd]) : hasAnyProgram ? 'Program yok' : 'Antrenman';
+  const title = day ? (day.rest ? 'Dinlenme' : day.title || WD_LONG[state.wd]) : 'Antrenman';
   const summary = [doneSets ? `${doneSets} set · ${fmt(totalVol)} kg hacim` : '', cardioMin ? `${fmt(cardioMin)} dk kardiyo` : ''].filter(Boolean).join(' · ');
 
   const weightRows = (c) =>
@@ -134,8 +163,8 @@ export async function render(root, params = {}) {
       <div class="set-grid set-row ${r.done ? 'done' : ''} ${active ? 'active' : ''}" data-act="pick" data-ex="${c.ex.id}" data-n="${r.n}" role="group" aria-label="Set ${r.n}">
         <span class="n">${r.n}</span>
         <span class="prev">${esc(r.prevTxt)}</span>
-        <span class="v">${kgTxt(r.kg)}</span>
-        <span class="v">${r.reps ?? '–'}${r.rpe ? `<small class="rpe-tag">@${r.rpe}</small>` : ''}</span>
+        <span class="v ${r.kg == null ? 'ph' : ''}">${kgTxt(r.kg ?? r.phKg)}</span>
+        <span class="v ${r.reps == null ? 'ph' : ''}">${r.reps ?? r.phReps ?? '–'}${r.rpe ? `<small class="rpe-tag">@${r.rpe}</small>` : ''}</span>
         <button type="button" class="set-check" aria-pressed="${r.done}" aria-label="Set ${r.n} ${r.done ? 'tamamlandı, geri al' : 'tamamla'}" data-act="done" data-ex="${c.ex.id}" data-n="${r.n}">${icon.check}</button>
       </div>
       ${
@@ -144,11 +173,11 @@ export async function render(root, params = {}) {
           <div><div style="display:flex;justify-content:space-between;align-items:center"><label for="kg-${c.ex.id}">Kg</label>
             <button type="button" class="plate-link" data-act="plates" data-ex="${c.ex.id}" data-n="${r.n}">Plaka</button></div>
             <div class="stepper"><button type="button" aria-label="Kiloyu 2,5 azalt" data-act="kg" data-d="-2.5" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
-            <input id="kg-${c.ex.id}" inputmode="decimal" value="${r.kg == null ? '' : kgTxt(r.kg)}" data-in="kg" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="0">
+            <input id="kg-${c.ex.id}" inputmode="decimal" value="${r.kg == null ? '' : kgTxt(r.kg)}" data-in="kg" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phKg == null ? '0' : kgTxt(r.phKg)}">
             <button type="button" aria-label="Kiloyu 2,5 artır" data-act="kg" data-d="2.5" data-ex="${c.ex.id}" data-n="${r.n}">+</button></div></div>
           <div><label for="rp-${c.ex.id}">Tekrar</label>
             <div class="stepper"><button type="button" aria-label="Tekrarı azalt" data-act="reps" data-d="-1" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
-            <input id="rp-${c.ex.id}" inputmode="numeric" value="${r.reps ?? ''}" data-in="reps" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="0">
+            <input id="rp-${c.ex.id}" inputmode="numeric" value="${r.reps ?? ''}" data-in="reps" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phReps ?? '0'}">
             <button type="button" aria-label="Tekrarı artır" data-act="reps" data-d="1" data-ex="${c.ex.id}" data-n="${r.n}">+</button></div></div>
           <div class="rpe-row" role="group" aria-label="RPE (zorluk, isteğe bağlı)">
             <span class="rpe-lbl">RPE</span>
@@ -170,8 +199,8 @@ export async function render(root, params = {}) {
       <div class="set-grid set-row ${r.done ? 'done' : ''} ${active ? 'active' : ''}" data-act="pick" data-ex="${c.ex.id}" data-n="${r.n}" role="group" aria-label="Kayıt ${r.n}">
         <span class="n">${r.n}</span>
         <span class="prev">${esc(r.prevTxt)}</span>
-        <span class="v">${r.min ?? '–'}</span>
-        <span class="v">${r.km == null ? '–' : kgTxt(r.km)}</span>
+        <span class="v ${r.min == null ? 'ph' : ''}">${r.min ?? r.phMin ?? '–'}</span>
+        <span class="v ${r.km == null ? 'ph' : ''}">${(r.km ?? r.phKm) == null ? '–' : kgTxt(r.km ?? r.phKm)}</span>
         <button type="button" class="set-check" aria-pressed="${r.done}" aria-label="Kayıt ${r.n} ${r.done ? 'tamamlandı, geri al' : 'tamamla'}" data-act="done" data-ex="${c.ex.id}" data-n="${r.n}">${icon.check}</button>
       </div>
       ${
@@ -179,13 +208,13 @@ export async function render(root, params = {}) {
           ? `<div class="set-editor">
           <div><label for="mn-${c.ex.id}">Süre (dk)</label>
             <div class="stepper"><button type="button" aria-label="Süreyi azalt" data-act="min" data-d="-1" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
-            <input id="mn-${c.ex.id}" inputmode="decimal" value="${r.min ?? ''}" data-in="min" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="0">
+            <input id="mn-${c.ex.id}" inputmode="decimal" value="${r.min ?? ''}" data-in="min" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phMin ?? '0'}">
             <button type="button" aria-label="Süreyi artır" data-act="min" data-d="1" data-ex="${c.ex.id}" data-n="${r.n}">+</button></div></div>
           <div><label for="km-${c.ex.id}">Mesafe (km)</label>
             <div class="stepper"><button type="button" aria-label="Mesafeyi azalt" data-act="km" data-d="-0.1" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
-            <input id="km-${c.ex.id}" inputmode="decimal" value="${r.km == null ? '' : kgTxt(r.km)}" data-in="km" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="–">
+            <input id="km-${c.ex.id}" inputmode="decimal" value="${r.km == null ? '' : kgTxt(r.km)}" data-in="km" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phKm == null ? '–' : kgTxt(r.phKm)}">
             <button type="button" aria-label="Mesafeyi artır" data-act="km" data-d="0.1" data-ex="${c.ex.id}" data-n="${r.n}">+</button></div></div>
-          ${r.min && r.km ? `<p class="small muted" style="grid-column:1/-1;margin:2px 4px 0">Tempo: ${pace(r.min, r.km)}</p>` : ''}
+          ${(r.min ?? r.phMin) && (r.km ?? r.phKm) ? `<p class="small muted" style="grid-column:1/-1;margin:2px 4px 0">Tempo: ${pace(r.min ?? r.phMin, r.km ?? r.phKm)}</p>` : ''}
         </div>`
           : ''
       }`;
@@ -203,7 +232,8 @@ export async function render(root, params = {}) {
       <div class="hdr-actions">
         <button type="button" class="icon-btn" aria-label="Önceki hafta" data-act="wprev">${icon.left}</button>
         ${state.weekOffset < 0 ? `<button type="button" class="icon-btn" aria-label="Sonraki hafta" data-act="wnext">${icon.right}</button>` : ''}
-        <button type="button" class="icon-btn" aria-label="Programı düzenle" data-act="edit-program">${icon.edit}</button>
+        <button type="button" class="icon-btn" aria-label="Rutinler" data-act="routines">${icon.book}</button>
+        <button type="button" class="icon-btn" aria-label="${srcKind === 'routine' ? 'Rutini düzenle' : 'Haftalık programı düzenle'}" data-act="${srcKind === 'routine' ? 'edit-routine' : 'edit-program'}">${icon.edit}</button>
       </div>
     </header>
 
@@ -216,7 +246,8 @@ export async function render(root, params = {}) {
       ${week
         .map((w, i) => {
           const dd = addDays(ws, i);
-          const lbl = w.day ? (w.day.rest ? 'Dinlen' : w.day.title || '—') : '—';
+          const ses = weekSessions.find((x) => x.date === dd);
+          const lbl = ses && rTitle(ses.routine_id) ? rTitle(ses.routine_id) : w.day ? (w.day.rest ? 'Dinlen' : w.day.title || '—') : '—';
           return `<button type="button" aria-pressed="${i === state.wd}" data-wd="${i}" aria-label="${WD_LONG[i]}: ${esc(lbl)}">
             ${dd === t ? '<span class="today-dot" aria-hidden="true"></span>' : ''}
             <span class="d">${WD_SHORT[i]}</span><span class="t">${esc(lbl)}</span></button>`;
@@ -225,17 +256,35 @@ export async function render(root, params = {}) {
     </nav>
 
     ${
-      !hasAnyProgram && !allItems.length
-        ? `<section class="card" style="text-align:center;padding:24px 16px">
-            <p style="margin:0 0 6px;font-size:17px;font-weight:600">Henüz bir programın yok</p>
-            <p class="small muted" style="margin:0 0 14px;line-height:18px">Haftanın her günü için egzersizlerini, set ve tekrar hedeflerini gir. İstersen Danışman'dan hedefine göre bir program önermesini de isteyebilirsin.</p>
-            <button type="button" class="btn primary" data-act="edit-program">Programı oluştur</button>
+      !allItems.length
+        ? `<section class="card" style="padding:16px">
+            <p style="margin:0 0 4px;font-size:17px;font-weight:600">${day && day.rest ? 'Bugün dinlenme günün' : isToday ? 'Bugün ne çalışıyorsun?' : 'Bu gün ne çalıştın?'}</p>
+            <p class="small muted" style="margin:0 0 12px;line-height:18px">${
+              routines.length
+                ? 'Bir rutin seç; hareketler gelsin, her sette kilo ve tekrarı girip ✓ ile işaretle.'
+                : 'Push day, Pull day, Leg day gibi rutinlerini bir kez oluştur; antrenmana başlarken seç, hareketler hazır gelsin.'
+            }</p>
+            ${
+              routines.length
+                ? `<div class="card flush" style="margin:0 0 10px;background:var(--bg)">${routines
+                    .map(
+                      (r) => `<button type="button" class="row" data-act="start" data-id="${r.day.id}" style="padding:8px 12px">
+                        <span class="row-main"><span class="row-title">${esc(r.day.title || 'Rutin')}</span>
+                        <span class="row-sub">${r.items.length ? esc(r.items.map((x) => x.exercise.name).join(', ')) : 'Hareket yok'}</span></span>
+                        <span class="pill" aria-hidden="true">Başla</span></button>`
+                    )
+                    .join('')}</div>`
+                : ''
+            }
+            <div class="btn-row">
+              <button type="button" class="btn ${routines.length ? '' : 'primary'}" data-act="new-routine">+ Yeni rutin</button>
+              <button type="button" class="btn" data-act="free">Boş antrenman</button>
+            </div>
           </section>`
-        : day && day.rest && !allItems.length
-        ? `<section class="card" style="text-align:center;padding:24px 16px"><p style="margin:0;font-size:17px;font-weight:600">Dinlenme günü</p><p class="small muted" style="margin:6px 0 0">Toparlanma da antrenmanın parçası.</p></section>`
-        : !allItems.length
-        ? `<section class="card" style="text-align:center;padding:24px 16px"><p class="muted" style="margin:0 0 12px">Bu gün için egzersiz yok.</p><button type="button" class="btn primary" data-act="edit-program">Güne egzersiz ekle</button></section>`
-        : ''
+        : `<div class="routine-bar">
+            <span class="small muted">${srcKind === 'routine' ? 'Rutin' : srcKind === 'week' ? 'Haftalık program' : 'Serbest antrenman'}${day && day.title ? ': <b style="color:var(--text)">' + esc(day.title) + '</b>' : ''}</span>
+            <button type="button" class="link" data-act="routines">${srcKind ? 'Değiştir' : 'Rutin seç'}</button>
+          </div>`
     }
 
     ${cards
@@ -264,7 +313,8 @@ export async function render(root, params = {}) {
       </section>`
       )
       .join('')}
-    ${allItems.length ? `<p class="note">Değerleri +/− ile ayarla ya da rakama dokunup yaz; ✓ ile kaydet. "Öneri" geçen seferki performansına göre kademeli yüklenme önerir; ilk sete otomatik yazılır. RPE isteğe bağlı: 10 = tükeniş, 8 = 2 tekrar daha yapabilirdin.</p>` : ''}
+    ${allItems.length ? `<button type="button" class="btn block" style="margin:12px 16px 0;width:calc(100% - 32px)" data-act="add-ex">+ Hareket ekle</button>` : ''}
+    ${allItems.length ? `<p class="note">Gri rakamlar öneridir: boş bırakıp ✓'e basarsan onlar kaydedilir, istersen dokunup kendi değerini yaz. "Öneri" geçen seferki performansına göre kademeli yüklenme önerir. Başka bir harekete geçmek için satırına dokun. RPE isteğe bağlı: 10 = tükeniş, 8 = 2 tekrar daha yapabilirdin.</p>` : ''}
   `;
 
   // Yardımcılar
@@ -304,6 +354,28 @@ export async function render(root, params = {}) {
       state.weekOffset = Math.min(0, state.weekOffset + 1);
       refresh();
     } else if (act === 'edit-program') openProgramEditor(state.wd);
+    else if (act === 'edit-routine') openProgramEditor(null, day, () => refresh());
+    else if (act === 'routines') openRoutines(date, session, !!week[state.wd].day);
+    else if (act === 'start') {
+      await startSession(date, b.dataset.id);
+      refresh();
+    } else if (act === 'new-routine')
+      openProgramEditor(null, null, async (saved) => {
+        if (saved) await startSession(date, saved.id);
+        refresh();
+      });
+    else if (act === 'free' || act === 'add-ex') {
+      const picked = await pickExercises();
+      if (!picked.length) return;
+      for (const x of picked) {
+        let ex = await findOrCreateExercise(x.name, { cardio: x.muscle === 'Kardiyo' });
+        if (x.muscle && !ex.muscle) ex = await db.put('exercises', { ...ex, muscle: x.muscle, kind: x.muscle === 'Kardiyo' ? 'kardiyo' : 'agirlik' });
+        state.extra[ex.id] = Math.max(state.extra[ex.id] || 0, 1);
+        state.added = state.added || {};
+        (state.added[date] = state.added[date] || []).includes(ex.id) || state.added[date].push(ex.id);
+      }
+      refresh();
+    }
     else if (act === 'history') openHistory(exs.find((x) => x.id === exId) || cardOf(exId).ex);
     else if (act === 'sug-info') {
       const c = cardOf(exId);
@@ -316,14 +388,16 @@ export async function render(root, params = {}) {
     } else if (act === 'pick') {
       if (e.target.closest('.set-check')) return;
       state.active[`${exId}|${date}`] = Number(b.dataset.n);
+      state.focus = state.focus || {};
+      state.focus[date] = exId;
       refresh();
     } else if (act === 'kg' || act === 'reps' || act === 'min' || act === 'km') {
       const row = rowOf(exId, b.dataset.n);
       const d = Number(b.dataset.d);
-      if (act === 'kg') await saveRow(row, exId, { kg: Math.max(0, round1((row.kg || 0) + d)) });
-      else if (act === 'reps') await saveRow(row, exId, { reps: Math.max(0, (row.reps || 0) + d) });
-      else if (act === 'min') await saveRow(row, exId, { min: Math.max(0, round1((row.min || 0) + d)) });
-      else await saveRow(row, exId, { km: Math.max(0, round1((row.km || 0) + d)) });
+      if (act === 'kg') await saveRow(row, exId, { kg: Math.max(0, round1((row.kg ?? row.phKg ?? 0) + d)) });
+      else if (act === 'reps') await saveRow(row, exId, { reps: Math.max(0, (row.reps ?? row.phReps ?? 0) + d) });
+      else if (act === 'min') await saveRow(row, exId, { min: Math.max(0, round1((row.min ?? row.phMin ?? 0) + d)) });
+      else await saveRow(row, exId, { km: Math.max(0, round1((row.km ?? row.phKm ?? 0) + d)) });
       refresh();
     } else if (act === 'rpe') {
       const row = rowOf(exId, b.dataset.n);
@@ -332,7 +406,7 @@ export async function render(root, params = {}) {
       refresh();
     } else if (act === 'plates') {
       const row = rowOf(exId, b.dataset.n);
-      openPlates(row.kg);
+      openPlates(row.kg ?? row.phKg);
     } else if (act === 'done') {
       const c = cardOf(exId);
       const row = rowOf(exId, b.dataset.n);
@@ -340,12 +414,15 @@ export async function render(root, params = {}) {
         await db.put('workout_sets', { ...row.rec, done: false });
         state.active[`${exId}|${date}`] = row.n;
       } else if (c.cardio) {
-        if (!row.min) return toast('Önce süreyi gir');
-        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, duration_min: row.min, distance_km: row.km ?? null, weight_kg: 0, reps: 0, done: true });
+        const min = row.min ?? row.phMin;
+        if (!min) return toast('Önce süreyi gir');
+        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, duration_min: min, distance_km: row.km ?? row.phKm ?? null, weight_kg: 0, reps: 0, done: true });
         delete state.active[`${exId}|${date}`];
       } else {
-        if (row.kg == null || row.reps == null) return toast('Önce kilo ve tekrarı gir');
-        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, weight_kg: row.kg, reps: row.reps, rpe: row.rpe ?? null, done: true });
+        const kg = row.kg ?? row.phKg;
+        const reps = row.reps ?? row.phReps;
+        if (kg == null || reps == null) return toast('Önce kilo ve tekrarı gir');
+        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, weight_kg: kg, reps, rpe: row.rpe ?? null, done: true });
         delete state.active[`${exId}|${date}`];
         if (isToday) {
           rest.start(await db.getSetting('rest_seconds', 90));
@@ -364,24 +441,27 @@ export async function render(root, params = {}) {
     const inp = e.target.closest('[data-in]');
     if (!inp) return;
     const row = rowOf(inp.dataset.ex, inp.dataset.n);
-    const v = parseNum(inp.value);
-    if (isNaN(v)) return;
     const f = inp.dataset.in;
-    if (f === 'kg') row.kg = v;
-    else if (f === 'reps') row.reps = Math.round(v);
-    else if (f === 'min') row.min = v;
-    else if (f === 'km') row.km = v;
-    await saveRow(row, inp.dataset.ex, { [f]: f === 'reps' ? Math.round(v) : v });
+    const empty = inp.value.trim() === '';
+    let v = empty ? null : parseNum(inp.value);
+    if (!empty && isNaN(v)) return;
+    if (f === 'reps' && v != null) v = Math.round(v);
+    row[f] = v;
+    await saveRow(row, inp.dataset.ex, { [f]: v });
     // satırdaki görünen değeri güncelle (yeniden çizmeden, odak kaybolmasın)
     const rowEl = root.querySelector(`.set-row[data-ex="${inp.dataset.ex}"][data-n="${inp.dataset.n}"]`);
     if (rowEl) {
       const vs = rowEl.querySelectorAll('.v');
       if (f === 'kg' || f === 'reps') {
-        vs[0].textContent = kgTxt(row.kg);
-        vs[1].textContent = row.reps ?? '–';
+        vs[0].textContent = kgTxt(row.kg ?? row.phKg);
+        vs[0].classList.toggle('ph', row.kg == null);
+        vs[1].textContent = row.reps ?? row.phReps ?? '–';
+        vs[1].classList.toggle('ph', row.reps == null);
       } else {
-        vs[0].textContent = row.min ?? '–';
-        vs[1].textContent = row.km == null ? '–' : kgTxt(row.km);
+        vs[0].textContent = row.min ?? row.phMin ?? '–';
+        vs[0].classList.toggle('ph', row.min == null);
+        vs[1].textContent = (row.km ?? row.phKm) == null ? '–' : kgTxt(row.km ?? row.phKm);
+        vs[1].classList.toggle('ph', row.km == null);
       }
     }
   };
@@ -447,31 +527,98 @@ function openPlates(initial) {
 }
 
 // ---------- Program düzenleyici ----------
-async function openProgramEditor(wd) {
-  const { day, items } = await programDay(wd);
+// Seçilen rutini o güne bağla (seans)
+async function startSession(date, routineId) {
+  const cur = await sessionFor(date);
+  const r = await routineDay(routineId);
+  await db.put('workout_sessions', { ...(cur || {}), date, routine_id: routineId, routine_title: r.day ? r.day.title : '' });
+}
+
+function openRoutines(date, session, hasWeekDay) {
+  return (async () => {
+    const routines = await routineList();
+    const s = openSheet({
+      title: 'Rutinler',
+      body: `
+        ${
+          routines.length
+            ? `<div class="card flush">${routines
+                .map(
+                  (r) => `<div class="row">
+                    <button type="button" class="row-main" style="text-align:left" data-start="${r.day.id}">
+                      <span class="row-title">${esc(r.day.title || 'Rutin')}${session && session.routine_id === r.day.id ? ' <span class="tag">bugün</span>' : ''}</span>
+                      <span class="row-sub">${r.items.length} hareket${r.items.length ? ' · ' + esc(r.items.map((x) => x.exercise.name).join(', ')) : ''}</span>
+                    </button>
+                    <button type="button" class="icon-btn" style="background:transparent;color:var(--sub)" aria-label="${esc(r.day.title)} düzenle" data-edit="${r.day.id}">${icon.edit}</button>
+                  </div>`
+                )
+                .join('')}</div>`
+            : '<div class="empty">Henüz rutinin yok. Push day, Pull day, Leg day gibi rutinlerini oluştur; antrenmana başlarken buradan seç.</div>'
+        }
+        <button type="button" class="btn primary block" data-new>+ Yeni rutin</button>
+        ${session ? `<button type="button" class="btn block" data-clear style="margin-top:8px">${hasWeekDay ? 'Haftalık programa dön' : 'Bu günden rutini kaldır'}</button>` : ''}
+        <p class="small muted" style="margin:10px 4px 0;line-height:18px">Bir rutine dokununca ${esc(trDate(date))} için o rutin açılır. Haftanın günlerine sabit program istersen kalem simgesinden haftalık programı da düzenleyebilirsin.</p>`,
+    });
+    s.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.start) {
+        await startSession(date, b.dataset.start);
+        s.close();
+        refresh();
+      } else if (b.dataset.edit) {
+        const r = routines.find((x) => x.day.id === b.dataset.edit);
+        s.close();
+        openProgramEditor(null, r.day, () => refresh());
+      } else if (b.hasAttribute('data-new')) {
+        s.close();
+        openProgramEditor(null, null, async (saved) => {
+          if (saved) await startSession(date, saved.id);
+          refresh();
+        });
+      } else if (b.hasAttribute('data-clear')) {
+        await db.remove('workout_sessions', session.id);
+        s.close();
+        refresh();
+      }
+    });
+  })();
+}
+
+// wd: haftanın günü (haftalık program) ya da null (rutin). routine: düzenlenecek rutin, null ise yeni rutin
+async function openProgramEditor(wd, routine = null, after = null) {
+  const isRoutine = wd == null;
+  const { day, items } = isRoutine ? await routineDay(routine && routine.id) : await programDay(wd);
   let title = day?.title || '';
   let subtitle = day?.subtitle || '';
   let isRest = !!day?.rest;
-  let list = items.map((x) => ({ id: x.pe.id, exercise_id: x.exercise.id, name: x.exercise.name, sets: x.pe.target_sets ?? 3, reps: x.pe.target_reps ?? '8-12' }));
+  let list = items.map((x) => ({ id: x.pe.id, exercise_id: x.exercise.id, name: x.exercise.name, sets: x.pe.target_sets ?? '', reps: x.pe.target_reps ?? '' }));
   const removed = [];
+  let saved = null;
 
   const s = openSheet({
-    title: `${WD_LONG[wd]} programı`,
+    title: isRoutine ? (day ? 'Rutini düzenle' : 'Yeni rutin') : `${WD_LONG[wd]} programı`,
     leftLabel: 'Vazgeç',
     rightLabel: 'Kaydet',
+    onClose: () => after && after(saved),
     onRight: async (api) => {
       syncInputs();
-      const d = await db.put('program_days', { ...(day || {}), weekday: wd, title: title.trim(), subtitle: subtitle.trim(), rest: isRest });
+      if (isRoutine && !title.trim()) return toast('Rutine bir ad ver (örn. Push Day)');
+      const d = await db.put('program_days', isRoutine
+        ? { ...(day || {}), routine: true, title: title.trim(), subtitle: subtitle.trim() }
+        : { ...(day || {}), weekday: wd, title: title.trim(), subtitle: subtitle.trim(), rest: isRest });
       for (const id of removed) await db.remove('program_exercises', id);
       let order = 0;
       for (const x of list) {
         let ex = x.exercise_id ? { id: x.exercise_id } : await findOrCreateExercise(x.name, { cardio: x.muscle === 'Kardiyo' });
         if (!x.exercise_id && x.muscle && !ex.muscle) ex = await db.put('exercises', { ...ex, muscle: x.muscle, kind: x.muscle === 'Kardiyo' ? 'kardiyo' : 'agirlik' });
-        await db.put('program_exercises', { ...(x.id ? { id: x.id } : {}), day_id: d.id, exercise_id: ex.id, order: order++, target_sets: Number(x.sets) || 0, target_reps: String(x.reps || '').trim() });
+        const cardio = x.muscle === 'Kardiyo' || /dk/.test(String(x.reps));
+        await db.put('program_exercises', { ...(x.id ? { id: x.id } : {}), day_id: d.id, exercise_id: ex.id, order: order++, target_sets: Number(x.sets) || (cardio ? 1 : 3), target_reps: String(x.reps || '').trim() || (cardio ? '20 dk' : '8-12') });
       }
+      saved = d;
+      toast(isRoutine ? 'Rutin kaydedildi' : 'Program kaydedildi');
       api.close();
-      toast('Program kaydedildi');
-      refresh();
+      if (!after) refresh();
     },
   });
 
@@ -489,16 +636,16 @@ async function openProgramEditor(wd) {
 
   const draw = () => {
     s.setBody(`
-      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      ${isRoutine ? '' : `<div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <label for="pd-rest" style="font-size:16px">Dinlenme günü</label>
         <span class="switch"><input id="pd-rest" type="checkbox" ${isRest ? 'checked' : ''}><span></span></span>
-      </div>
+      </div>`}
       ${
         isRest
           ? ''
           : `
       <div class="grid2">
-        <div class="field"><label for="pd-title">Gün adı</label><input id="pd-title" class="input" value="${esc(title)}" placeholder="Push, Pull, Bacak…"></div>
+        <div class="field"><label for="pd-title">${isRoutine ? 'Rutin adı' : 'Gün adı'}</label><input id="pd-title" class="input" value="${esc(title)}" placeholder="Push Day, Leg Day…"></div>
         <div class="field"><label for="pd-sub">Kas grupları</label><input id="pd-sub" class="input" value="${esc(subtitle)}" placeholder="Göğüs · Omuz · Triceps"></div>
       </div>
       <div class="sec" style="padding-top:4px"><h2>Egzersizler</h2></div>
@@ -510,10 +657,10 @@ async function openProgramEditor(wd) {
                   (x, i) => `<div class="row" data-row="${i}" style="flex-wrap:wrap;gap:8px">
               <span class="row-main" style="flex-basis:100%"><span class="row-title">${esc(x.name)}</span></span>
               <label class="sr-only" for="ps-${i}">Set sayısı</label>
-              <input id="ps-${i}" class="input" style="width:56px;text-align:center" inputmode="numeric" data-f="sets" value="${esc(x.sets)}">
+              <input id="ps-${i}" class="input" style="width:56px;text-align:center" inputmode="numeric" data-f="sets" value="${esc(x.sets)}" placeholder="${x.muscle === 'Kardiyo' ? '1' : '3'}">
               <span class="muted">×</span>
               <label class="sr-only" for="pr-${i}">Tekrar hedefi</label>
-              <input id="pr-${i}" class="input" style="width:80px;text-align:center" data-f="reps" value="${esc(x.reps)}" placeholder="8-12">
+              <input id="pr-${i}" class="input" style="width:80px;text-align:center" data-f="reps" value="${esc(x.reps)}" placeholder="${x.muscle === 'Kardiyo' ? '20 dk' : '8-12'}">
               <span style="flex:1"></span>
               <button type="button" class="icon-btn ed-ic" aria-label="Yukarı taşı" data-mv="-1" data-i="${i}" ${i === 0 ? 'disabled' : ''}>${icon.up}</button>
               <button type="button" class="icon-btn ed-ic" aria-label="Aşağı taşı" data-mv="1" data-i="${i}" ${i === list.length - 1 ? 'disabled' : ''}>${icon.down}</button>
@@ -524,10 +671,12 @@ async function openProgramEditor(wd) {
             : '<div class="empty">Henüz egzersiz yok</div>'
         }
       </div>
-      <button type="button" class="btn primary block" data-add>+ Egzersiz ekle</button>
-      <p class="small muted" style="margin:10px 4px 0">Set × tekrar örnekleri: 4 × 8, 3 × 8-12, 5 × 5. Kardiyo için tekrar yerine süre yazabilirsin (örn. 20 dk).</p>`
+      <button type="button" class="btn primary block" data-add>+ Hareket ekle</button>
+      <p class="small muted" style="margin:10px 4px 0">Set × tekrar boş kalırsa 3 × 8-12 kabul edilir. Örnekler: 4 × 8, 5 × 5. Kardiyo için tekrar yerine süre yazabilirsin (örn. 20 dk).</p>
+      ${isRoutine && day ? '<button type="button" class="btn danger block" data-del-routine style="margin-top:12px;background:var(--card)">Rutini sil</button>' : ''}`
       }`);
-    s.el.querySelector('#pd-rest').addEventListener('change', (e) => {
+    const restSw = s.el.querySelector('#pd-rest');
+    if (restSw) restSw.addEventListener('change', (e) => {
       syncInputs();
       isRest = e.target.checked;
       draw();
@@ -552,60 +701,107 @@ async function openProgramEditor(wd) {
       draw();
     } else if (b.hasAttribute('data-add')) {
       syncInputs();
-      const picked = await pickExercise();
-      if (picked) {
-        const cardio = picked.muscle === 'Kardiyo';
-        list.push({ name: picked.name, muscle: picked.muscle, sets: cardio ? 1 : 3, reps: cardio ? '20 dk' : '8-12' });
-        draw();
-      }
+      const picked = await pickExercises();
+      for (const p of picked) list.push({ name: p.name, muscle: p.muscle, sets: '', reps: '' });
+      if (picked.length) draw();
+    } else if (b.hasAttribute('data-del-routine')) {
+      if (!(await confirmSheet({ title: 'Rutini sil', text: `"${day.title}" rutini silinsin mi? Yaptığın setler ve geçmiş kayıtlar silinmez.`, okLabel: 'Sil', danger: true }))) return;
+      for (const x of items) await db.remove('program_exercises', x.pe.id);
+      await db.remove('program_days', day.id);
+      toast('Rutin silindi');
+      s.close();
     }
   });
 }
 
-function pickExercise() {
+const normTr = (x) =>
+  String(x || '')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c');
+const PICK_GROUPS = ['Tümü', 'Göğüs', 'Sırt', 'Omuz', 'Kol', 'Bacak', 'Karın', 'Kardiyo'];
+
+// Birden fazla hareket seçilebilen liste. resolve([{name, muscle}])
+function pickExercises() {
   return new Promise(async (resolve) => {
     const mine = await db.list('exercises');
-    const names = [...new Set([...mine.map((m) => m.name), ...EXERCISE_PRESETS.map((p) => p[0])])];
-    const muscle = Object.fromEntries([...EXERCISE_PRESETS.map((p) => [p[0], p[1]]), ...mine.filter((m) => m.muscle).map((m) => [m.name, m.muscle])]);
-    let result = null;
+    const map = new Map();
+    for (const p of EXERCISE_PRESETS) map.set(p[0], { name: p[0], muscle: p[1], alias: p[2] || '' });
+    for (const m of mine) if (!map.has(m.name)) map.set(m.name, { name: m.name, muscle: m.muscle || '', alias: '', mine: true });
+    const all = [...map.values()];
+    const picked = new Map();
+    let group = 'Tümü';
+    let done = false;
     const s = openSheet({
-      title: 'Egzersiz seç',
+      title: 'Hareket seç',
       leftLabel: 'Vazgeç',
-      body: `<label class="sr-only" for="exq">Egzersiz ara</label>
-        <input id="exq" class="input" type="search" placeholder="Ara ya da yeni egzersiz adı yaz" autocomplete="off" style="margin-bottom:10px">
+      body: `<label class="sr-only" for="exq">Hareket ara</label>
+        <input id="exq" class="input" type="search" placeholder="Ara: bench, squat, lateral raise…" autocomplete="off" style="margin-bottom:10px">
+        <div class="toggle-row" id="exg" style="margin-bottom:10px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px"></div>
         <div class="card flush search-res" id="exres"></div>`,
-      onClose: () => resolve(result),
+      onClose: () => resolve(done ? [...picked.values()] : []),
     });
+    const ft = document.createElement('div');
+    ft.className = 'sheet-ft';
+    ft.hidden = true;
+    s.sheet.appendChild(ft);
     const res = s.el.querySelector('#exres');
     const q = s.el.querySelector('#exq');
+    const grp = s.el.querySelector('#exg');
+    const updFt = () => {
+      ft.hidden = !picked.size;
+      ft.innerHTML = `<button type="button" class="btn primary block" data-ok>${picked.size} hareket ekle</button>`;
+    };
     const draw = () => {
-      const v = q.value.trim().toLocaleLowerCase('tr-TR');
-      const hits = names.filter((n) => !v || n.toLocaleLowerCase('tr-TR').includes(v)).slice(0, 60);
-      const exact = names.some((n) => n.toLocaleLowerCase('tr-TR') === v);
+      const v = normTr(q.value.trim());
+      grp.innerHTML = PICK_GROUPS.map((g) => `<button type="button" class="tog sm" aria-pressed="${g === group}" data-g="${g}" style="flex:none">${g}</button>`).join('');
+      const hits = all.filter((x) => {
+        if (!v) return group === 'Tümü' || (MUSCLE_GROUP[x.muscle] || x.muscle) === group;
+        return v.split(' ').every((w) => normTr(x.name + ' ' + x.alias + ' ' + x.muscle).includes(w));
+      });
+      const exact = all.some((x) => normTr(x.name) === v);
       res.innerHTML =
-        (v && !exact ? `<button type="button" class="row" data-name="${esc(q.value.trim())}"><span class="row-main"><span class="row-title" style="color:var(--accent)">+ "${esc(q.value.trim())}" ekle</span></span></button>` : '') +
-        hits.map((n) => `<button type="button" class="row" data-name="${esc(n)}"><span class="row-main"><span class="row-title normal">${esc(n)}</span>${muscle[n] ? `<span class="row-sub">${esc(muscle[n])}</span>` : ''}</span></button>`).join('');
+        (v && !exact ? `<button type="button" class="row" data-new="${esc(q.value.trim())}"><span class="row-main"><span class="row-title" style="color:var(--accent)">+ "${esc(q.value.trim())}" adında yeni hareket</span></span></button>` : '') +
+        (hits.length
+          ? hits
+              .map(
+                (x) => `<button type="button" class="row" data-name="${esc(x.name)}" aria-pressed="${picked.has(x.name)}">
+                  <span class="row-main"><span class="row-title normal">${esc(x.name)}</span><span class="row-sub">${esc(x.muscle || 'Kas grubu yok')}${x.mine ? ' · senin' : ''}</span></span>
+                  <span class="check" aria-hidden="true">${icon.check}</span></button>`
+              )
+              .join('')
+          : v ? '' : '<div class="empty">Bu grupta hareket yok.</div>');
     };
     draw();
     q.addEventListener('input', draw);
-    res.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-name]');
+    s.sheet.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
       if (!b) return;
-      const name = b.dataset.name;
-      if (muscle[name]) {
-        result = { name, muscle: muscle[name] };
+      if (b.dataset.g) {
+        group = b.dataset.g;
+        draw();
+      } else if (b.dataset.name) {
+        const x = map.get(b.dataset.name);
+        if (picked.has(x.name)) picked.delete(x.name);
+        else picked.set(x.name, { name: x.name, muscle: x.muscle });
+        b.setAttribute('aria-pressed', picked.has(x.name));
+        updFt();
+      } else if (b.dataset.new) {
+        const name = b.dataset.new;
+        res.innerHTML = `<div style="padding:12px 0"><p style="margin:0 0 10px;font-size:15px">"${esc(name)}" hangi kas grubunu çalıştırıyor?</p>
+          <div class="toggle-row">${MUSCLES.map((m) => `<button type="button" class="tog" data-muscle="${esc(m)}" data-for="${esc(name)}">${esc(m)}</button>`).join('')}</div></div>`;
+      } else if (b.dataset.muscle) {
+        const name = b.dataset.for;
+        const x = { name, muscle: b.dataset.muscle, alias: '', mine: true };
+        map.set(name, x);
+        all.unshift(x);
+        picked.set(name, { name, muscle: x.muscle });
+        q.value = '';
+        draw();
+        updFt();
+      } else if (b.hasAttribute('data-ok')) {
+        done = true;
         s.close();
-        return;
       }
-      // yeni egzersiz: kas grubunu sor
-      s.setBody(`<p style="margin:0 4px 12px;font-size:15px">"${esc(name)}" hangi kas grubunu çalıştırıyor?</p>
-        <div class="toggle-row">${MUSCLES.map((m) => `<button type="button" class="tog" data-muscle="${esc(m)}">${esc(m)}</button>`).join('')}</div>`);
-      s.el.addEventListener('click', (ev) => {
-        const mb = ev.target.closest('[data-muscle]');
-        if (!mb) return;
-        result = { name, muscle: mb.dataset.muscle };
-        s.close();
-      });
     });
   });
 }

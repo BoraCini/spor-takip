@@ -2,6 +2,7 @@ import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate } from '../util.js';
 import { refresh } from '../app.js';
 import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel } from '../context.js';
+import { COMPOUND_GROUPS, searchCompounds, compoundInfo, findCompound } from '../data/compounds.js';
 
 const UNITS = ['mg', 'mcg', 'IU', 'ml', 'tablet', 'kapsül', 'damla'];
 
@@ -143,7 +144,7 @@ export async function render(root) {
     const b = e.target.closest('[data-act]');
     if (!b) return;
     const act = b.dataset.act;
-    if (act === 'add') openCompound(null);
+    if (act === 'add') openCompoundPicker();
     else if (act === 'edit') openCompound(comps.find((c) => c.id === b.dataset.id));
     else if (act === 'cycle') openCycle(ci.cycle);
     else if (act === 'ics') openIcs(comps, ci);
@@ -188,10 +189,57 @@ function pickSite(suggested) {
   });
 }
 
-function openCompound(c) {
+// Katalogdan madde seç (besin listesi gibi): ara ya da gruplara göz at
+function openCompoundPicker() {
+  const s = openSheet({
+    title: 'Madde ekle',
+    body: `
+      <label class="sr-only" for="cq">Madde ara</label>
+      <input id="cq" class="input" type="search" placeholder="Ara: enantat, boldenon, anastrozol…" autocomplete="off" style="margin-bottom:10px">
+      <div id="cres"></div>
+      <button type="button" class="btn block" data-manual style="margin-top:10px">Listede yok, elle ekle</button>
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Ester ve yarılanma süreleri literatürdeki yaklaşık değerlerdir, kaynağa göre değişir. Liste doz önermez; dozu kendin girersin.</p>`,
+  });
+  const q = s.el.querySelector('#cq');
+  const res = s.el.querySelector('#cres');
+  const draw = () => {
+    const hits = searchCompounds(q.value);
+    const groups = COMPOUND_GROUPS.map((g) => [g, hits.filter((c) => c.group === g)]).filter(([, l]) => l.length);
+    res.innerHTML = groups.length
+      ? groups
+          .map(
+            ([g, l]) => `<div class="sec" style="padding:8px 14px 6px"><h2>${esc(g)}</h2></div>
+            <div class="card flush search-res">${l
+              .map(
+                (c) => `<button type="button" class="row" data-cid="${c.id}"><span class="row-main"><span class="row-title normal">${esc(c.name)}</span>
+                  <span class="row-sub">${esc(compoundInfo(c))}</span></span>${icon.chev}</button>`
+              )
+              .join('')}</div>`
+          )
+          .join('')
+      : `<div class="empty">"${esc(q.value)}" bulunamadı. Aşağıdan elle ekleyebilirsin.</div>`;
+  };
+  draw();
+  q.addEventListener('input', draw);
+  s.el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.cid) {
+      const c = findCompound(b.dataset.cid);
+      s.close();
+      openCompound(null, c);
+    } else if (b.hasAttribute('data-manual')) {
+      s.close();
+      openCompound(null, null, q.value.trim());
+    }
+  });
+}
+
+function openCompound(c, preset = null, typedName = '') {
+  const cat = preset || (c && c.catalog_id ? findCompound(c.catalog_id) : null);
   const st = {
-    name: c?.name || '',
-    kind: c?.kind || 'enjeksiyon',
+    name: c?.name || preset?.name || typedName || '',
+    kind: c?.kind || preset?.kind || 'enjeksiyon',
     dose_amount: c?.dose_amount ?? '',
     dose_unit: c?.dose_unit || 'mg',
     days: c?.days ? [...c.days] : [],
@@ -210,6 +258,7 @@ function openCompound(c) {
       const n = parseNum(st.dose_amount);
       await db.put('compounds', {
         ...(c || {}),
+        ...(cat ? { catalog_id: cat.id } : {}),
         name: st.name.trim(),
         kind: st.kind,
         dose_amount: isNaN(n) ? null : n,
@@ -235,6 +284,8 @@ function openCompound(c) {
   const draw = () => {
     const isInj = st.kind === 'enjeksiyon';
     s.setBody(`
+      ${cat ? `<div class="card" style="margin:0 0 12px"><span class="small muted">${esc(cat.group)}</span>
+        <p style="margin:2px 0 0;font-size:15px;font-weight:600">${esc(compoundInfo(cat))}</p>${cat.note ? `<p class="small muted" style="margin:4px 0 0;line-height:18px">${esc(cat.note)}</p>` : ''}</div>` : ''}
       <div class="field"><label for="c-name">Ad</label><input id="c-name" class="input" value="${esc(st.name)}" placeholder="Maddenin adı"></div>
       <div class="field"><span class="lbl">Tür</span>
         <div class="seg" style="margin:0" role="radiogroup" aria-label="Tür">

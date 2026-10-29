@@ -427,16 +427,22 @@ body.locked .tabbar, body.locked #restbar { display: none; }
 .trend text { font-size: 11px; fill: var(--sub); }
 
 /* ---------- Sheet ---------- */
+/* Pencere görünür alana (klavye hariç) sabitlenir: hep aynı yükseklikte üstte durur, kaymaz */
 .sheet-backdrop {
-  position: fixed; inset: 0; z-index: 50; background: var(--backdrop);
-  display: flex; align-items: flex-end; justify-content: center;
-  animation: fadeIn .18s ease-out;
+  position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); z-index: 50;
+  background: var(--backdrop); display: flex; align-items: flex-end; justify-content: center;
+  animation: fadeIn .18s ease-out; overscroll-behavior: contain; touch-action: none;
 }
+.sheet-backdrop .sheet { touch-action: manipulation; }
 .sheet {
-  width: 100%; max-width: 560px; max-height: calc(100dvh - env(safe-area-inset-top) - 16px);
-  background: var(--bg); border-radius: 16px 16px 0 0; display: flex; flex-direction: column;
+  width: 100%; max-width: 560px;
+  background: var(--bg); border-radius: 16px 16px 0 0; display: flex; flex-direction: column; overflow: hidden;
   animation: slideUp .22s ease-out;
 }
+.sheet-full .sheet { height: calc(var(--vvh, 100dvh) - max(env(safe-area-inset-top), 12px) - 10px); }
+.sheet-auto .sheet { max-height: calc(var(--vvh, 100dvh) - max(env(safe-area-inset-top), 12px) - 10px); }
+.sheet-bd { flex: 1; min-height: 0; }
+body.sheet-open { overflow: hidden; }
 .sheet-hd {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 4px 16px; flex: none;
 }
@@ -606,3 +612,20 @@ select.input {
 .note-item { display: flex; align-items: center; gap: 8px; min-height: 48px; border-top: 1px solid var(--sep); font-size: 15px; }
 .note-item:first-child { border-top: 0; }
 .note-item span { flex: 1; }
+
+/* ---------- Günlük kilo penceresi ---------- */
+.wprompt-back {
+  position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); z-index: 60;
+  background: var(--backdrop); display: flex; align-items: flex-start; justify-content: center;
+  padding: calc(max(env(safe-area-inset-top), 12px) + 12vh) 16px 16px; animation: fadeIn .18s ease-out;
+}
+.wprompt { width: 100%; max-width: 360px; background: var(--card); border-radius: 18px; padding: 20px 18px 16px; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.wprompt h2 { margin: 0 0 4px; font-size: 20px; font-weight: 700; }
+.wprompt p { margin: 0; line-height: 18px; }
+body.locked .wprompt-back { display: none; }
+
+/* ---------- Antrenman: öneri rakamları, rutin çubuğu ---------- */
+.set-row .v.ph { color: var(--sub); font-weight: 500; }
+.routine-bar { margin: 0 16px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px; }
+.routine-bar .link { font-size: 15px; font-weight: 600; color: var(--accent); min-height: 36px; }
+.faceid-btn { margin-top: -6px; }

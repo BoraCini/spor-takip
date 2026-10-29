@@ -37,8 +37,69 @@ export async function verifyPin(pin) {
   return (await derive(pin, unb64(salt))) === hash;
 }
 
+// ---------- Face ID / Touch ID (WebAuthn, cihazın kendi doğrulayıcısı) ----------
+// Biyometrik veri hiçbir zaman uygulamaya gelmez; iPhone yüzü doğrular, uygulama yalnızca "doğrulandı" cevabını alır.
+export function faceIdSupported() {
+  return !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+}
+
+export async function faceIdAvailable() {
+  try {
+    return faceIdSupported() && (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());
+  } catch {
+    return false;
+  }
+}
+
+export async function hasFaceId() {
+  return !!(await db.getSetting('faceid_cred'));
+}
+
+export async function enableFaceId() {
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: 'SporCoach', id: location.hostname },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'sporcoach', displayName: 'SporCoach' },
+      pubKeyCredParams: [
+        { type: 'public-key', alg: -7 },
+        { type: 'public-key', alg: -257 },
+      ],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+      timeout: 60000,
+      attestation: 'none',
+    },
+  });
+  if (!cred) throw new Error('Face ID kurulamadı');
+  await db.setSetting('faceid_cred', b64(cred.rawId));
+  return true;
+}
+
+export async function disableFaceId() {
+  await db.remove('settings', 'faceid_cred');
+}
+
+export async function verifyFaceId() {
+  const id = await db.getSetting('faceid_cred');
+  if (!id) return false;
+  try {
+    const a = await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rpId: location.hostname,
+        allowCredentials: [{ type: 'public-key', id: unb64(id), transports: ['internal'] }],
+        userVerification: 'required',
+        timeout: 60000,
+      },
+    });
+    return !!(a && a.response && a.response.authenticatorData);
+  } catch {
+    return false;
+  }
+}
+
 // Tuş takımlı tam ekran; mode: 'unlock' | 'set' | 'confirm'
-function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabel, onCancel }) {
+function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabel, onCancel, topLabel, onTop }) {
   const el = document.createElement('div');
   el.className = 'lock';
   el.setAttribute('role', 'dialog');
@@ -51,6 +112,7 @@ function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabe
     <h1>${esc(title)}</h1>
     ${text ? `<p>${esc(text)}</p>` : ''}
     <div class="pin-dots" aria-live="polite" aria-label="Girilen hane sayısı">${'<i></i>'.repeat(PIN_LEN)}</div>
+    ${topLabel ? `<button type="button" class="btn ghost faceid-btn" data-top>${esc(topLabel)}</button>` : ''}
     <div class="keypad">
       ${keys.map((k) => `<button type="button" data-k="${k}">${k}</button>`).join('')}
       ${extraLabel ? `<button type="button" class="txt" data-extra>${esc(extraLabel)}</button>` : '<span></span>'}
@@ -97,6 +159,7 @@ function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabe
       paint();
     } else if (b.hasAttribute('data-extra')) onExtra && onExtra(api);
     else if (b.hasAttribute('data-cancel')) onCancel && onCancel(api);
+    else if (b.hasAttribute('data-top')) onTop && onTop(api);
   });
   const onKey = (e) => {
     if (/^\d$/.test(e.key)) press(e.key);
@@ -111,21 +174,34 @@ function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabe
 }
 
 // Kilidi aç — PIN doğru girilene kadar bekler
-export function showLock({ onForgot } = {}) {
-  return new Promise((resolve) => {
+export function showLock({ onForgot, allowFaceId = true } = {}) {
+  return new Promise(async (resolve) => {
     document.body.classList.add('locked');
-    keypadScreen({
+    const face = allowFaceId && (await hasFaceId()) && faceIdSupported();
+    let finished = false;
+    const finish = (api) => {
+      if (finished) return;
+      finished = true;
+      api.close();
+      document.body.classList.remove('locked');
+      resolve(true);
+    };
+    const tryFace = async (api) => {
+      if (await verifyFaceId()) finish(api);
+    };
+    const kp = keypadScreen({
       title: 'PIN kodunu gir',
+      text: face ? 'ya da Face ID ile aç' : '',
       extraLabel: 'Unuttum',
       onExtra: (api) => onForgot && onForgot(api),
+      topLabel: face ? 'Face ID ile aç' : '',
+      onTop: tryFace,
       onComplete: async (pin, api) => {
-        if (await verifyPin(pin)) {
-          api.close();
-          document.body.classList.remove('locked');
-          resolve(true);
-        } else api.reset(true);
+        if (await verifyPin(pin)) finish(api);
+        else api.reset(true);
       },
     });
+    if (face) tryFace(kp); // açılışta kendiliğinden dene; olmazsa butona dokunulur
   });
 }
 

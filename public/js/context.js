@@ -51,6 +51,44 @@ export async function programDay(wd) {
   return { day, items };
 }
 
+// Bugünün kilosunu kaydet (aynı gün tekrar girilirse günceller) ve profildeki kiloyu da güncelle
+export async function logWeightToday(v) {
+  const d = today();
+  const existing = (await db.list('body_logs', (r) => r.date === d))[0];
+  await db.put('body_logs', { ...(existing || {}), date: d, weight_kg: v });
+  const p = await db.getProfile();
+  p.weight_kg = v;
+  await db.saveProfile(p);
+}
+
+// ---------- Rutinler (Push day, Leg day gibi isimli antrenmanlar) ----------
+export async function routineList() {
+  const days = (await db.list('program_days', (d) => d.routine)).sort((a, b) => (a.title || '').localeCompare(b.title || '', 'tr'));
+  const pes = await db.list('program_exercises');
+  const exs = await db.list('exercises');
+  return days.map((day) => {
+    const items = pes
+      .filter((x) => x.day_id === day.id)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .map((pe) => ({ pe, exercise: exs.find((e) => e.id === pe.exercise_id) }))
+      .filter((x) => x.exercise);
+    return { day, items };
+  });
+}
+
+export async function routineDay(id) {
+  const day = id ? await db.get('program_days', id) : null;
+  if (!day || day.deleted_at) return { day: null, items: [] };
+  const pes = (await db.list('program_exercises', (x) => x.day_id === day.id)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const exs = await db.list('exercises');
+  return { day, items: pes.map((pe) => ({ pe, exercise: exs.find((e) => e.id === pe.exercise_id) })).filter((x) => x.exercise) };
+}
+
+// O gün için seçilen rutin (seans)
+export async function sessionFor(date) {
+  return (await db.list('workout_sessions', (s) => s.date === date))[0] || null;
+}
+
 export async function weekProgram() {
   const out = [];
   for (let wd = 0; wd < 7; wd++) out.push(await programDay(wd));
@@ -327,6 +365,8 @@ export async function buildContext() {
       kayitlar: entries.map((e) => `${e.meal}: ${e.name} ${e.grams}g (${e.kcal} kcal)`),
     },
     beslenme_plani: plan.map((x) => `${x.time || ''} ${x.name}: ${x.items || ''} (${x.kcal || '?'} kcal, P${x.protein_g || '?'} K${x.carb_g || '?'} Y${x.fat_g || '?'})`),
+    rutinler: (await routineList()).map((r) => ({ ad: r.day.title, egzersizler: r.items.map((x) => `${x.exercise.name} ${x.pe.target_sets || '?'}x${x.pe.target_reps || '?'}`) })),
+    son_seanslar: (await db.list('workout_sessions', (x) => x.date >= addDays(t, -21))).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((x) => `${x.date}: ${x.routine_title || ''}`),
     haftalik_program: week.map((w, i) => ({
       gun: WD_LONG[i],
       baslik: w.day ? (w.day.rest ? 'Dinlenme' : w.day.title || '') : 'Belirlenmedi',

@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadOrShare, lineChartSVG, MONTHS_SHORT, parseDate } from '../util.js';
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
-import { hasPin, setupPinFlow, clearPin, showLock } from '../lock.js';
+import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
 import { monthUsage } from '../ai.js';
 import { waterTarget } from '../context.js';
 import * as push from '../push.js';
@@ -34,6 +34,9 @@ export async function render(root, params) {
   const accent = (await db.getSetting('accent')) || ACCENTS[0].value;
   const restSec = await db.getSetting('rest_seconds', 90);
   const pin = await hasPin();
+  const faceAvail = pin && (await faceIdAvailable());
+  const faceOn = await hasFaceId();
+  const dailyWeight = await db.getSetting('daily_weight_prompt', true);
   const apiKey = await db.getSetting('api_key', '');
   const usage = await monthUsage();
   const wTarget = await waterTarget(p);
@@ -215,6 +218,14 @@ export async function render(root, params) {
             : `<button type="button" class="list-btn" data-act="pin-set"><span class="k">PIN kilidi belirle</span>${icon.chev}</button>`
         }
       </div>
+      ${
+        pin
+          ? faceAvail || faceOn
+            ? `<div class="kv"><label class="k" for="faceid">Face ID ile aç</label><span class="switch"><input id="faceid" type="checkbox" ${faceOn ? 'checked' : ''}><span></span></span></div>`
+            : `<p class="small muted" style="margin:6px 0 0;line-height:18px">Face ID, uygulama ana ekrandan açıldığında kullanılabilir.</p>`
+          : `<p class="small muted" style="margin:6px 0 0;line-height:18px">Face ID ile açmak için önce PIN belirle (Face ID olmazsa PIN yedek olarak kullanılır).</p>`
+      }
+      <div class="kv"><label class="k" for="daily-w">Her gün ilk açılışta kilomu sor</label><span class="switch"><input id="daily-w" type="checkbox" ${dailyWeight ? 'checked' : ''}><span></span></span></div>
       <p class="small muted" style="margin:6px 0 0;line-height:18px">PIN bir ekran kilididir; telefonunun kendi şifresi asıl korumadır.</p>
     </section>
 
@@ -248,6 +259,29 @@ export async function render(root, params) {
       if (['height_cm', 'weight_kg', 'birth_year', 'sex', 'activity'].includes(key)) refresh();
     });
   });
+
+  const fid = root.querySelector('#faceid');
+  if (fid)
+    fid.addEventListener('change', async () => {
+      if (fid.checked) {
+        try {
+          await enableFaceId();
+          toast('Face ID açıldı');
+        } catch (err) {
+          fid.checked = false;
+          toast(err && err.name === 'NotAllowedError' ? 'Face ID izni verilmedi' : 'Face ID kurulamadı: ' + (err.message || err), 4000);
+        }
+      } else {
+        await disableFaceId();
+        toast('Face ID kapatıldı');
+      }
+    });
+  const dw = root.querySelector('#daily-w');
+  if (dw)
+    dw.addEventListener('change', async () => {
+      await db.setSetting('daily_weight_prompt', dw.checked);
+      toast(dw.checked ? 'Her gün kilon sorulacak' : 'Günlük kilo sorusu kapatıldı');
+    });
 
   root.onclick = async (e) => {
     const t = e.target.closest('[data-act],[data-phase],[data-accent]');
@@ -323,6 +357,7 @@ export async function render(root, params) {
     } else if (act === 'pin-off') {
       await showLock({});
       await clearPin();
+      await disableFaceId();
       toast('PIN kilidi kapatıldı');
       refresh();
     } else if (act === 'export') {
