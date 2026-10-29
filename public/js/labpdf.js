@@ -13,6 +13,14 @@ const LETTER = /[A-Za-zÇĞİÖŞÜçğıöşü]/;
 // Test olmayan satırlar (hasta bilgisi, başlıklar vb.)
 const JUNK = /(tarih|\btel\b|telefon|faks|\bfax\b|protokol|barkod|sayfa|\bya[sş]\b|do[gğ]um|kimlik|adres|hasta\b|hasta ad|doktor|\bdr\.|uzman|onay|kabul|numune|rapor|\bistem|birim ad|referans|tetkik ad|test ad|cinsiyet|e-?posta|www\.|http|kurum|poliklinik|servis|dosya|sicil|imza)/i;
 
+// Hemogramdaki kısaltmaların Türkçe karşılıkları
+const ABBR = {
+  'BA#': 'Bazofil (sayı)', 'BA%': 'Bazofil %', 'EO#': 'Eozinofil (sayı)', 'EO%': 'Eozinofil %', 'LY#': 'Lenfosit (sayı)', 'LY%': 'Lenfosit %',
+  'MO#': 'Monosit (sayı)', 'MO%': 'Monosit %', 'NE#': 'Nötrofil (sayı)', 'NE%': 'Nötrofil %', 'IG': 'İmmatür granülosit (sayı)', 'IG%': 'İmmatür granülosit %',
+  'NRBC #': 'Çekirdekli eritrosit (sayı)', 'NRBC %': 'Çekirdekli eritrosit %', 'NRBC#': 'Çekirdekli eritrosit (sayı)', 'NRBC%': 'Çekirdekli eritrosit %',
+  'PCT': 'Trombositokrit (PCT)',
+};
+
 const toNum = (s) => {
   if (s == null) return null;
   const v = parseFloat(String(s).replace(/[<>≤≥=\s]/g, '').replace(',', '.'));
@@ -97,24 +105,60 @@ function findDate(lines) {
 }
 
 function findLabName(lines) {
+  const t = lines.find((x) => /sa[gğ]l[ıi]k tesisi|kurum ad[ıi]|laboratuvar ad[ıi]/i.test(x));
+  if (t) {
+    const v = t.split(/:\s*/).slice(1).join(':').split('\t')[0].replace(/^T\.?C\.?\s*SA[GĞ]LIK BAKANLI[GĞ]I\s*/i, '').trim();
+    if (v) return v.length > 60 ? v.slice(0, 60) : v.toLocaleLowerCase('tr-TR').replace(/(^|\s)\S/g, (c) => c.toLocaleUpperCase('tr-TR'));
+  }
   const head = lines.slice(0, 15).filter((x) => x.length < 70 && !RE_DATE.test(x) && !/bakanl|e-?nab[ıi]z/i.test(x));
   const l = head.find((x) => /laboratuvar|hastane|t[ıi]p merkezi|\blab\b|klinik/i.test(x)) || head.find((x) => /sa[gğ]l[ıi]k/i.test(x));
   return l ? l.replace(/\t/g, ' ').trim() : '';
 }
 
 // Metin satırlarından değerleri çıkar
-export function parseLabLines(lines) {
+// Satıra sığmayıp alt satıra taşan test adlarını birleştir (örn. "DHEA-" + "SO4)", "(CKD-" + "EPI)")
+function mergeWrapped(lines) {
+  const out = [];
+  const unclosed = (x) => (x.match(/\(/g) || []).length > (x.match(/\)/g) || []).length;
+  for (let i = 0; i < lines.length; i++) {
+    const cur = lines[i];
+    const next = lines[i + 1];
+    const cells = cur.split('\t');
+    let openIdx = -1;
+    for (let k = cells.length - 1; k >= 0; k--) if (unclosed(cells[k])) { openIdx = k; break; }
+    if (openIdx >= 0 && next && /^[^\t]{1,25}\)/.test(next) && !RE_NUM_TOKEN.test((next.split('\t')[1] || '').trim())) {
+      const nCells = next.split('\t');
+      cells[openIdx] = (cells[openIdx] + nCells[0]).replace(/-\s*\)$/, ')');
+      // taşan diğer parçalar (birim devamı gibi) sonraki hücrelere eklenir
+      for (let k = 1; k < nCells.length; k++) {
+        const idx = openIdx + k;
+        if (idx < cells.length) cells[idx] = cells[idx] + nCells[k];
+        else cells.push(nCells[k]);
+      }
+      out.push(cells.join('\t'));
+      i++;
+    } else out.push(cur);
+  }
+  return out;
+}
+
+export function parseLabLines(rawLines) {
+  const lines = mergeWrapped(rawLines);
   const values = [];
-  const seen = new Set();
+  const seen = new Map();
   for (const l of lines) {
     const r = parseLine(l);
     if (!r) continue;
-    const m = matchLab(r.name);
-    // Tanınan bir test ya da birimi ve referansı olan bir satır olmalı (çöp satırları elemek için)
-    if (!m && !(r.unit && (r.ref_low != null || r.ref_high != null))) continue;
+    let m = null;
+    if (ABBR[r.name]) r.name = ABBR[r.name];
+    else m = matchLab(r.name);
+    // Tanınan bir test ya da birimi olan bir satır olmalı (çöp satırları elemek için)
+    if (!m && !r.unit) continue;
+    // Aynı teste ikinci kez denk gelinirse (örn. RDW-CV ve RDW-SD) ikincisini kendi adıyla tut
+    if (m && seen.has(m.key)) m = null;
     const key = m ? m.key : r.name.toLocaleLowerCase('tr-TR');
     if (seen.has(key)) continue;
-    seen.add(key);
+    seen.set(key, true);
     values.push({
       marker_key: m ? m.key : null,
       name: m ? m.name : r.name,

@@ -9,6 +9,10 @@ export const LABS = [
   { key: 'hgb', name: 'Hemoglobin', unit: 'g/dL', lo: 13.5, hi: 17.5, cat: 'Kan sayımı', alias: 'hgb hb hemoglobin' },
   { key: 'rbc', name: 'Eritrosit (RBC)', unit: '10⁶/µL', lo: 4.5, hi: 5.9, cat: 'Kan sayımı', alias: 'rbc eritrosit alyuvar' },
   { key: 'wbc', name: 'Lökosit (WBC)', unit: '10³/µL', lo: 4, hi: 10, cat: 'Kan sayımı', alias: 'wbc lokosit akyuvar' },
+  { key: 'mcv', name: 'MCV', unit: 'fL', lo: 80, hi: 100, cat: 'Kan sayımı', alias: 'mcv' },
+  { key: 'mch', name: 'MCH', unit: 'pg', lo: 27, hi: 33, cat: 'Kan sayımı', alias: 'mch' },
+  { key: 'mchc', name: 'MCHC', unit: 'g/dL', lo: 32, hi: 36, cat: 'Kan sayımı', alias: 'mchc' },
+  { key: 'rdw', name: 'RDW', unit: '%', lo: 11.5, hi: 14.5, cat: 'Kan sayımı', alias: 'rdw rdw-cv' },
   { key: 'plt', name: 'Trombosit', unit: '10³/µL', lo: 150, hi: 400, cat: 'Kan sayımı', alias: 'plt trombosit' },
 
   { key: 'alt', name: 'ALT', unit: 'U/L', lo: 0, hi: 50, cat: 'Karaciğer', alias: 'alt sgpt alanin aminotransferaz',
@@ -22,7 +26,8 @@ export const LABS = [
   { key: 'crea', name: 'Kreatinin', unit: 'mg/dL', lo: 0.7, hi: 1.2, cat: 'Böbrek', alias: 'kreatinin creatinine', training: 'high',
     note: 'Yüksek kas kütlesi ve kreatin kullanımıyla hafif yüksek çıkabilir; eGFR ve sistatin C ile birlikte yorumlanır.' },
   { key: 'egfr', name: 'eGFR', unit: 'mL/dk/1,73m²', lo: 90, hi: null, cat: 'Böbrek', alias: 'egfr gfr' },
-  { key: 'urea', name: 'Üre', unit: 'mg/dL', lo: 17, hi: 43, cat: 'Böbrek', alias: 'ure bun' },
+  { key: 'urea', name: 'Üre', unit: 'mg/dL', lo: 17, hi: 43, cat: 'Böbrek', alias: 'ure' },
+  { key: 'bun', name: 'BUN (kan üre azotu)', unit: 'mg/dL', lo: 6, hi: 20, cat: 'Böbrek', alias: 'bun kan ure azotu' },
   { key: 'uric', name: 'Ürik asit', unit: 'mg/dL', lo: 3.4, hi: 7, cat: 'Böbrek', alias: 'urik asit' },
   { key: 'ck', name: 'CK (kreatin kinaz)', unit: 'U/L', lo: 0, hi: 190, cat: 'Diğer', alias: 'ck cpk kreatin kinaz', training: 'high',
     note: 'Antrenman sonrası günlerce yüksek kalabilir.' },
@@ -58,6 +63,17 @@ export const LABS = [
   { key: 'ferritin', name: 'Ferritin', unit: 'ng/mL', lo: 30, hi: 400, cat: 'Vitamin / mineral', alias: 'ferritin' },
   { key: 'vitd', name: 'D vitamini (25-OH)', unit: 'ng/mL', lo: 30, hi: 100, cat: 'Vitamin / mineral', alias: 'd vitamini vitamin 25 oh hidroksi kolekalsiferol' },
   { key: 'b12', name: 'B12 vitamini', unit: 'pg/mL', lo: 200, hi: 900, cat: 'Vitamin / mineral', alias: 'b12' },
+  { key: 'alb', name: 'Albümin', unit: 'g/L', lo: 35, hi: 52, cat: 'Karaciğer', alias: 'albumin albümin' },
+  { key: 'fe', name: 'Demir', unit: 'µg/dL', lo: 60, hi: 170, cat: 'Vitamin / mineral', alias: 'demir serum demiri fe' },
+  { key: 'uibc', name: 'Serbest demir bağlama kapasitesi (UIBC)', unit: 'µg/dL', lo: 125, hi: 345, cat: 'Vitamin / mineral', alias: 'uibc' },
+  { key: 'tibc', name: 'Total demir bağlama kapasitesi (TIBC)', unit: 'µg/dL', lo: 250, hi: 450, cat: 'Vitamin / mineral', alias: 'tibc' },
+  { key: 'folat', name: 'Folat', unit: 'µg/L', lo: 3.9, hi: 26.8, cat: 'Vitamin / mineral', alias: 'folat folik asit' },
+  { key: 'ca', name: 'Kalsiyum', unit: 'mg/dL', lo: 8.4, hi: 10.2, cat: 'Vitamin / mineral', alias: 'kalsiyum ca' },
+  { key: 'mg', name: 'Magnezyum', unit: 'mg/dL', lo: 1.6, hi: 2.6, cat: 'Vitamin / mineral', alias: 'magnezyum mg' },
+  { key: 'p', name: 'Fosfor', unit: 'mg/dL', lo: 2.5, hi: 4.5, cat: 'Vitamin / mineral', alias: 'fosfor' },
+  { key: 'zn', name: 'Çinko', unit: 'µg/dL', lo: 70, hi: 127, cat: 'Vitamin / mineral', alias: 'cinko çinko zn' },
+  { key: 'cl', name: 'Klor', unit: 'mmol/L', lo: 98, hi: 107, cat: 'Vitamin / mineral', alias: 'klor klorür' },
+  { key: 'dheas', name: 'DHEA-S', unit: 'µg/dL', lo: 44, hi: 492, cat: 'Hormon', alias: 'dhea dheas dhea-s so4 dehidroepiandrosteron sulfat' },
   { key: 'na', name: 'Sodyum', unit: 'mmol/L', lo: 136, hi: 145, cat: 'Vitamin / mineral', alias: 'sodyum na' },
   { key: 'k', name: 'Potasyum', unit: 'mmol/L', lo: 3.5, hi: 5.1, cat: 'Vitamin / mineral', alias: 'potasyum k' },
   { key: 'crp', name: 'CRP', unit: 'mg/L', lo: 0, hi: 5, cat: 'Diğer', alias: 'crp' },
@@ -72,10 +88,12 @@ const norm = (s) =>
     .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
 export function matchLab(name) {
-  const n = norm(name);
+  const n = norm(name).replace(/\bvitamin ([a-z0-9]+)\b/, '$1 vitamini');
   if (!n) return null;
   // Puanlama: adın kelimeleri 2, takma ad kelimeleri 1 puan; testin adında olup sorguda olmayan kelimeler puan düşürür
   // (örn. "LDL Kolesterol" → LDL, "Total kolesterol" değil)
+  // Tek başına ayırt edici olmayan kelimeler (örn. "Serbest Demir…" serbest testosteron sanılmasın)
+  const GENERIC = new Set(['serbest', 'total', 'toplam', 'free', 'aclik', 'kan', 'serum', 'plazma', 'vitamini', 'vitamin', 'hormon', 'kolesterol', 'sayisi', 'orani']);
   const q = n.split(' ').filter(Boolean);
   let best = null;
   let bestScore = 0;
@@ -86,11 +104,16 @@ export function matchLab(name) {
     const aliasT = norm(l.alias).split(' ').filter((x) => x.length > 1);
     if (aliasT.includes(n)) return l;
     let score = 0;
+    let strong = 0;
     for (const t of q) {
       if (nameT.includes(t)) score += 2;
       else if (aliasT.includes(t)) score += 1;
+      else continue;
+      if (!GENERIC.has(t)) strong++;
     }
-    if (!score) continue;
+    if (!score || !strong) continue;
+    // sorgudaki eşleşmeyen ayırt edici kelimeler de puan düşürür
+    score -= 0.5 * q.filter((t) => t.length > 1 && !GENERIC.has(t) && !nameT.includes(t) && !aliasT.includes(t)).length;
     score -= 0.25 * nameT.filter((t) => !q.includes(t)).length;
     if (score > bestScore) {
       best = l;

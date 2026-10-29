@@ -194,7 +194,8 @@ async function importReport(file, kind) {
         note: `PDF'ten ${res.values.length} değer okundu${res.date ? '' : '; tarih bulunamadı, kontrol et'}. Raporla karşılaştırıp kaydet; eksik değer varsa "+ Değer ekle" ile ekle.`,
       });
     } catch (e) {
-      toast(e.message || 'PDF okunamadı', 6000);
+      toast(e && e.code === 'NO_TEXT' ? e.message : `PDF okunamadı: ${(e && (e.message || e.name)) || 'bilinmeyen hata'}`, 7000);
+      if (!e || e.code !== 'NO_TEXT') console.error(e);
     }
     return;
   }
