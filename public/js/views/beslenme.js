@@ -128,13 +128,13 @@ export async function render(root, params) {
     );
     const doneIds = new Set(entries.filter((e) => e.plan_item_id).map((e) => e.plan_item_id));
     body += `
-      <section class="card" aria-label="Plan özeti" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-        <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+      <section class="card" aria-label="Plan özeti" style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
           <span style="font-size:17px;font-weight:600">${esc(phaseLbl)} planı</span>
-          <span class="small muted num">${fmt(pt.kcal)} kcal · P ${fmt(pt.p)} · K ${fmt(pt.c)} · Y ${fmt(pt.f)}</span>
-          ${tg.kcal ? `<span class="small muted num">Hedef: ${fmt(tg.kcal)} kcal · P ${fmt(tg.protein_g)} · K ${fmt(tg.carb_g)} · Y ${fmt(tg.fat_g)}</span>` : ''}
+          <button type="button" class="pill" data-act="plan-add">Öğün ekle</button>
         </div>
-        <button type="button" class="pill" data-act="plan-add">Öğün ekle</button>
+        <div class="kv" style="min-height:0;border:0;font-size:14px"><span class="k muted">Plan</span><span class="v num">${fmt(pt.kcal)} kcal · P ${fmt(pt.p)} · K ${fmt(pt.c)} · Y ${fmt(pt.f)}</span></div>
+        ${tg.kcal ? `<div class="kv" style="min-height:0;border:0;font-size:14px"><span class="k muted">Hedef</span><span class="v num">${fmt(tg.kcal)} kcal · P ${fmt(tg.protein_g)} · K ${fmt(tg.carb_g)} · Y ${fmt(tg.fat_g)}</span></div>` : ''}
       </section>
       <div class="sec"><h2>${state.date === today() ? 'Bugünkü öğünler' : relDay(state.date)}</h2><span class="meta">${doneIds.size} / ${plan.length} öğün</span></div>
       <section class="card flush" aria-label="Plan öğünleri">

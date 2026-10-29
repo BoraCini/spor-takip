@@ -170,8 +170,7 @@ export async function render(root, params = {}) {
       ${
         active
           ? `<div class="set-editor">
-          <div><div style="display:flex;justify-content:space-between;align-items:center"><label for="kg-${c.ex.id}">Kg</label>
-            <button type="button" class="plate-link" data-act="plates" data-ex="${c.ex.id}" data-n="${r.n}">Plaka</button></div>
+          <div><label for="kg-${c.ex.id}">Kg</label>
             <div class="stepper"><button type="button" aria-label="Kiloyu 2,5 azalt" data-act="kg" data-d="-2.5" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
             <input id="kg-${c.ex.id}" inputmode="decimal" value="${r.kg == null ? '' : kgTxt(r.kg)}" data-in="kg" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phKg == null ? '0' : kgTxt(r.phKg)}">
             <button type="button" aria-label="Kiloyu 2,5 artır" data-act="kg" data-d="2.5" data-ex="${c.ex.id}" data-n="${r.n}">+</button></div></div>
@@ -557,7 +556,7 @@ function openRoutines(date, session, hasWeekDay) {
         }
         <button type="button" class="btn primary block" data-new>+ Yeni rutin</button>
         ${session ? `<button type="button" class="btn block" data-clear style="margin-top:8px">${hasWeekDay ? 'Haftalık programa dön' : 'Bu günden rutini kaldır'}</button>` : ''}
-        <p class="small muted" style="margin:10px 4px 0;line-height:18px">Bir rutine dokununca ${esc(trDate(date))} için o rutin açılır. Haftanın günlerine sabit program istersen kalem simgesinden haftalık programı da düzenleyebilirsin.</p>`,
+        <p class="small muted" style="margin:10px 4px 0;line-height:18px">Bir rutine dokununca ${esc(trDate(date))} için o rutin açılır; kalemle rutini düzenlersin.</p>`,
     });
     s.el.addEventListener('click', async (e) => {
       const b = e.target.closest('button');
@@ -648,7 +647,7 @@ async function openProgramEditor(wd, routine = null, after = null) {
         <div class="field"><label for="pd-title">${isRoutine ? 'Rutin adı' : 'Gün adı'}</label><input id="pd-title" class="input" value="${esc(title)}" placeholder="Push Day, Leg Day…"></div>
         <div class="field"><label for="pd-sub">Kas grupları</label><input id="pd-sub" class="input" value="${esc(subtitle)}" placeholder="Göğüs · Omuz · Triceps"></div>
       </div>
-      <div class="sec" style="padding-top:4px"><h2>Egzersizler</h2></div>
+      <div class="sec" style="padding-top:4px"><h2>Hareketler</h2></div>
       <div class="card flush">
         ${
           list.length

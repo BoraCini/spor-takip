@@ -465,6 +465,13 @@ body.sheet-open { overflow: hidden; }
 @keyframes slideUp { from { transform: translateY(40px); opacity: .6; } to { transform: none; opacity: 1; } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .sheet, .sheet-backdrop { animation: none; } }
+@media (prefers-color-scheme: dark) {
+  /* Seçili sekme koyu temada da öne çıksın (iOS gibi) */
+  .seg { background: #1C1C1E; }
+  .seg button[aria-selected="true"] { background: #48484A; box-shadow: none; }
+  .sheet { background: #0E0E10; box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.08); }
+  .sheet-ft { background: #0E0E10; }
+}
 
 .search-res .row { min-height: 52px; }
 .frow { gap: 4px; }
@@ -584,7 +591,9 @@ select.input {
 .rpe-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rpe-row .rpe-lbl { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: .03em; padding: 0 4px; }
 .rpe-row .tog { min-height: 36px; min-width: 44px; padding: 0 10px; }
-.rpe-tag { font-size: 11px; color: var(--sub); font-weight: 500; margin-left: 2px; }
+.set-row .v { position: relative; }
+/* RPE etiketi tekrar sayısının hizasını bozmasın */
+.rpe-tag { position: absolute; left: calc(50% + 0.55em); top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--sub); font-weight: 500; }
 .plate-link { font-size: 12px; font-weight: 600; color: var(--accent); min-height: 24px; padding: 0 4px; }
 .plates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .plate {
@@ -637,3 +646,12 @@ body.locked .wprompt-back { display: none; }
 .routine-bar { margin: 0 16px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px; }
 .routine-bar .link { font-size: 15px; font-weight: 600; color: var(--accent); min-height: 36px; }
 .faceid-btn { margin-top: -6px; }
+
+/* ---------- Tahlil düzenleme (sıkı satırlar) ---------- */
+.lab-ed-hd, .lab-ed-grid { display: grid; grid-template-columns: 1.1fr 1fr 0.9fr 0.9fr; gap: 6px; }
+.lab-ed-hd { text-align: center; padding: 0 12px 4px; font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: .03em; }
+.lab-ed { padding: 8px 0 10px; border-top: 1px solid var(--sep); }
+.lab-ed:first-child { border-top: 0; }
+.lab-ed-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 32px; }
+.lab-ed-name { font-size: 15px; font-weight: 600; min-width: 0; }
+.lab-ed-grid .input { min-height: 40px; padding: 8px 10px; font-size: 16px; text-align: center; }

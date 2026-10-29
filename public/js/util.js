@@ -327,9 +327,19 @@ export function lineChartSVG(points, { band, w = 326, h = 110, color = 'var(--ac
   points.forEach((p, i) => {
     out += `<circle cx="${x(i)}" cy="${y(p.value)}" r="3.5" fill="var(--card)" stroke="${color}" stroke-width="2"/>`;
   });
-  const step = Math.max(1, Math.ceil(points.length / 5));
+  // Etiketler üst üste binmesin: ilk ve son her zaman, aradakiler yeterli boşluk varsa
+  const GAP = 96;
+  const last = points.length - 1;
+  const show = new Set([last]);
+  let prevX = -Infinity;
+  for (let i = 0; i < last; i++) {
+    if (x(i) - prevX >= GAP && x(last) - x(i) >= GAP) {
+      show.add(i);
+      prevX = x(i);
+    }
+  }
   points.forEach((p, i) => {
-    if (i % step === 0 || i === points.length - 1) {
+    if (show.has(i)) {
       const anchor = i === 0 && points.length > 1 ? 'start' : i === points.length - 1 && points.length > 1 ? 'end' : 'middle';
       out += `<text x="${x(i)}" y="${h - 6}" text-anchor="${anchor}">${esc(p.label)} · ${esc(fmt(p.value, 1))}</text>`;
     }

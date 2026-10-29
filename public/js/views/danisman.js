@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr } from '../util.js';
 import { go, refresh } from '../app.js';
-import { dayNutrition, targetsOf, programDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
+import { dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
 import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
 import { weekday } from '../util.js';
 import { runTurn, commitCard, cardNutrition, AIError, undoNote } from '../ai.js';
@@ -34,7 +34,11 @@ export async function render(root, params) {
   const p = await db.getProfile();
   const tg = targetsOf(p);
   const { totals } = await dayNutrition(t);
-  const { day, items } = await programDay(weekday(t));
+  // Bugün seçilen rutin varsa onu, yoksa haftalık programı göster
+  const ses = await sessionFor(t);
+  let { day, items } = ses ? await routineDay(ses.routine_id) : { day: null, items: [] };
+  if (!day) ({ day, items } = await programDay(weekday(t)));
+  const doneSets = (await db.list('workout_sets', (x) => x.date === t && x.done)).length;
   const due = await dueOn(t);
   const hasKey = !!(await db.getSetting('api_key'));
   voiceReply = !!(await db.getSetting('voice_reply', false));
@@ -63,7 +67,7 @@ export async function render(root, params) {
           <a href="#/antrenman" class="chipcard">
             <span class="lbl">Antrenman</span>
             <span class="val">${esc(day ? (day.rest ? 'Dinlenme' : day.title || 'Antrenman') : '—')}</span>
-            <span class="sub">${esc(day && !day.rest ? day.subtitle || `${items.length} egzersiz` : day ? 'toparlanma' : 'program yok')}</span>
+            <span class="sub">${esc(doneSets ? `${doneSets} set yapıldı` : day && !day.rest ? `${items.length} hareket` : day ? 'toparlanma' : 'rutin seç')}</span>
           </a>
           <a href="#/kur" class="chipcard">
             <span class="lbl">Kür</span>

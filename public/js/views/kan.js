@@ -120,9 +120,12 @@ export async function render(root) {
     }
 
     <section class="card" aria-label="Seçili test" style="display:flex;flex-direction:column;gap:12px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-        <span style="font-size:17px;font-weight:600">${esc(trDateYear(date))}${cur.test.lab_name ? ' · ' + esc(cur.test.lab_name) : ''}</span>
-        <span class="small muted" style="white-space:nowrap">${cycWeek && cycWeek > 0 ? `Kür haftası ${cycWeek}` : ''}</span>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+          <span style="font-size:17px;font-weight:600">${esc(trDateYear(date))}</span>
+          ${cur.test.lab_name ? `<span class="small muted">${esc(cur.test.lab_name)}</span>` : ''}
+        </div>
+        ${cycWeek && cycWeek > 0 ? `<span class="pill" style="height:28px;font-size:13px;display:inline-flex;align-items:center;color:var(--sub)">Kür haftası ${cycWeek}</span>` : ''}
       </div>
       <div class="stat3">
         <div><b class="${groups.attention.length ? 'warn' : ''}">${groups.attention.length}</b><span>dikkat</span></div>
@@ -131,7 +134,7 @@ export async function render(root) {
       </div>
       <div class="btn-row">
         <button type="button" class="btn" data-act="edit">Düzenle</button>
-        <button type="button" class="btn primary" data-act="ask">Danışmana yorumlat</button>
+        <button type="button" class="btn primary" data-act="ask">Yorumlat</button>
       </div>
     </section>
 
@@ -143,7 +146,7 @@ export async function render(root) {
            ${state.showNormal ? `<section class="card flush">${groups.normal.map((x) => valueRow(x, 'normal')).join('')}</section>` : ''}`
         : ''
     }
-    <p class="note">Gruplama uygulamanın kurallarına göre otomatik yapılır ve tıbbi değerlendirme yerine geçmez. Detaylı yorum için "Danışmana yorumlat"ı kullan; müdahale gerektiren değerleri doktorunla paylaş. Bir değere dokunursan geçmiş testlerdeki gidişatını görürsün.</p>
+    <p class="note">Gruplama uygulamanın kurallarına göre otomatik yapılır ve tıbbi değerlendirme yerine geçmez. Detaylı yorum için "Yorumlat"ı kullan; müdahale gerektiren değerleri doktorunla paylaş. Bir değere dokunursan geçmiş testlerdeki gidişatını görürsün.</p>
   `;
 
   root.onclick = async (e) => {
@@ -318,22 +321,25 @@ function openTest(existing, prefill = null) {
         <div class="field"><label for="t-date">Tarih</label><input id="t-date" class="input" type="date" value="${esc(st.date)}"></div>
         <div class="field"><label for="t-lab">Laboratuvar</label><input id="t-lab" class="input" value="${esc(st.lab)}" placeholder="İsteğe bağlı"></div>
       </div>
+      ${st.rows.length ? `<div class="lab-ed-hd" aria-hidden="true"><span>Değer</span><span>Birim</span><span>Ref. alt</span><span>Ref. üst</span></div>` : ''}
+      <div class="card flush" style="padding:0 12px">
       ${st.rows
         .map(
-          (r, i) => `<div class="card" data-vrow="${i}" style="padding:12px">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
-              <span style="font-size:16px;font-weight:600">${esc(r.name)}</span>
-              <button type="button" class="icon-btn" style="background:transparent;color:var(--warn);width:36px;height:36px" aria-label="${esc(r.name)} sil" data-rm="${i}">${icon.trash}</button>
+          (r, i) => `<div class="lab-ed" data-vrow="${i}">
+            <div class="lab-ed-top">
+              <span class="lab-ed-name">${esc(r.name)}</span>
+              <button type="button" class="icon-btn" style="background:transparent;color:var(--warn);width:32px;height:32px" aria-label="${esc(r.name)} sil" data-rm="${i}">${icon.trash}</button>
             </div>
-            <div class="grid2">
-              <div class="field" style="margin-bottom:8px"><label for="v-${i}">Değer</label><input id="v-${i}" class="input" inputmode="decimal" data-f="value" value="${esc(show(r.value))}"></div>
-              <div class="field" style="margin-bottom:8px"><label for="u-${i}">Birim</label><input id="u-${i}" class="input" data-f="unit" value="${esc(r.unit || '')}"></div>
-              <div class="field" style="margin-bottom:0"><label for="lo-${i}">Ref. alt</label><input id="lo-${i}" class="input" inputmode="decimal" data-f="lo" value="${esc(show(r.ref_low))}"></div>
-              <div class="field" style="margin-bottom:0"><label for="hi-${i}">Ref. üst</label><input id="hi-${i}" class="input" inputmode="decimal" data-f="hi" value="${esc(show(r.ref_high))}"></div>
+            <div class="lab-ed-grid">
+              <input class="input" inputmode="decimal" data-f="value" value="${esc(show(r.value))}" aria-label="${esc(r.name)} değer" id="v-${i}">
+              <input class="input" data-f="unit" value="${esc(r.unit || '')}" aria-label="${esc(r.name)} birim">
+              <input class="input" inputmode="decimal" data-f="lo" value="${esc(show(r.ref_low))}" aria-label="${esc(r.name)} referans alt" placeholder="–">
+              <input class="input" inputmode="decimal" data-f="hi" value="${esc(show(r.ref_high))}" aria-label="${esc(r.name)} referans üst" placeholder="–">
             </div>
           </div>`
         )
         .join('')}
+      </div>
       <button type="button" class="btn primary block" data-addv>+ Değer ekle</button>
       <p class="small muted" style="margin:10px 4px 0;line-height:18px">Referans aralıkları otomatik dolar; raporundaki aralık farklıysa onu yaz, çünkü laboratuvarlar farklı aralık kullanır.</p>
       ${existing ? '<button type="button" class="btn danger block" data-del style="margin-top:14px;background:var(--card)">Testi sil</button>' : ''}`);
