@@ -3,7 +3,7 @@ import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, con
 import { refresh, go } from '../app.js';
 import { dayNutrition, targetsOf, MEALS, mealLabel, waterDay, waterTarget } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
-import { searchFoods, nutrientsFor, findFood } from '../data/foods.js';
+import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION } from '../data/foods.js';
 
 let state = { tab: 'log', date: today() };
 
@@ -91,7 +91,7 @@ export async function render(root, params) {
                   .map(
                     (e) => `<button type="button" class="row" data-act="edit-entry" data-id="${e.id}">
                       <span class="row-main"><span class="row-title normal">${esc(e.name)}${e.estimated ? '<span class="est">tahmini</span>' : ''}</span>
-                      <span class="row-sub">${e.grams ? fmt(e.grams) + ' g · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
+                      <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams)) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
                       <span class="row-end">${fmt(e.kcal)}</span></button>`
                   )
                   .join('')
@@ -251,7 +251,7 @@ function mealForTime(t) {
   return 'ara';
 }
 
-// ---------- Besin ekleme ----------
+// ---------- Besin ekleme (FatSecret tarzı) ----------
 async function scanAndAdd(meal) {
   const code = await scanBarcode();
   if (!code) return;
@@ -259,178 +259,390 @@ async function scanAndAdd(meal) {
   if (food) openAmount({ ...food, custom: true }, meal);
 }
 
-async function openAddFood(meal) {
-  const custom = await db.list('custom_foods');
-  const recentLogs = (await db.list('food_logs', (x) => x.food_id && x.grams)).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-  const recent = [];
-  const seen = new Set();
-  for (const l of recentLogs) {
-    if (seen.has(l.food_id)) continue;
-    const f = findFood(l.food_id, custom);
-    if (!f) continue;
-    seen.add(l.food_id);
-    recent.push({ food: f, grams: l.grams });
-    if (recent.length >= 8) break;
+const markCustom = (list) => list.map((c) => ({ ...c, custom: true }));
+const cleanName = (n) => String(n || '').replace(/\s*~$/, '');
+
+// Kayıt geçmişinden son ve sık kullanılanlar
+async function foodHistory(custom) {
+  const logs = (await db.list('food_logs', (x) => x.food_id && x.grams)).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  const last = new Map();
+  const count = new Map();
+  for (const l of logs) {
+    count.set(l.food_id, (count.get(l.food_id) || 0) + 1);
+    if (!last.has(l.food_id)) last.set(l.food_id, l);
   }
+  const recent = [...last.keys()].map((id) => findFood(id, custom)).filter(Boolean).slice(0, 30);
+  const frequent = [...count.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => findFood(id, custom))
+    .filter(Boolean)
+    .slice(0, 30);
+  return { last, count, recent, frequent };
+}
+
+function srcTag(f) {
+  if (f.recipe) return 'tarif';
+  if (f.custom) return 'benim';
+  if (f.approx || /~$/.test(f.name)) return 'yaklaşık';
+  return '';
+}
+
+function srcLine(f) {
+  if (f.recipe) return `Tarifin · ${fmt(f.recipe.servings)} porsiyon`;
+  if (f.custom) {
+    if (f.source === 'Yapay zekâ tahmini') return 'Kendi besinin · yapay zekâ tahmini';
+    if (f.source === 'Etiketten okundu') return 'Kendi besinin · etiketten okundu';
+    if (f.barcode) return 'Kendi besinin · Open Food Facts';
+    return 'Kendi besinin';
+  }
+  if (f.src === 'usda') return 'Kaynak: USDA FoodData Central';
+  if (f.approx || /~$/.test(f.name)) return 'Yaklaşık değer: tarife ve markaya göre değişir';
+  return 'Kaynak: USDA ortalamaları';
+}
+
+async function openAddFood(meal, startTab = null) {
+  const custom = markCustom(await db.list('custom_foods'));
+  const hist = await foodHistory(custom);
+  const mine = custom.filter((c) => !c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  const recipes = custom.filter((c) => c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  let tab = startTab || 'son';
+  let selMeal = meal;
+  const picked = new Map(); // id -> { food, unit, qty, grams }
+  const serv = (f) => picked.get(f.id) || defaultServing(f, hist.last.get(f.id));
+  const TABS = [
+    ['son', 'Son'],
+    ['sik', 'Sık'],
+    ['benim', 'Benim'],
+    ['tarif', 'Tarifler'],
+  ];
+
   const s = openSheet({
     title: 'Besin ekle',
     body: `
-      <div class="btn-row" style="margin-bottom:10px">
-        <button type="button" class="btn primary" data-act="scan" style="display:flex;align-items:center;gap:6px">${icon.barcode}<span>Barkod okut</span></button>
-        <button type="button" class="btn" data-act="custom">Kendi besinim</button>
-      </div>
+      <div class="toggle-row" style="margin-bottom:10px" role="group" aria-label="Öğün">${MEALS.map(
+        ([k, l]) => `<button type="button" class="tog" aria-pressed="${k === selMeal}" data-meal="${k}">${l}</button>`
+      ).join('')}</div>
       <label class="sr-only" for="fsearch">Besin ara</label>
-      <input id="fsearch" class="input" type="search" placeholder="Ara: yumurta, tavuk, pilav…" autocomplete="off" style="margin-bottom:10px">
-      <div id="frecent"></div>
-      <div class="card flush search-res" id="fres"></div>
-      <div id="fmore"></div>`,
+      <input id="fsearch" class="input" type="search" placeholder="Ara: patates, basmati, mantı…" autocomplete="off" enterkeyhint="search" style="margin-bottom:10px">
+      <div class="qa-grid" id="fqa">
+        <button type="button" class="qa" data-act="scan">${icon.barcode}<span>Barkod</span></button>
+        <label class="qa">${icon.camera}<span>Fotoğraf</span><input type="file" accept="image/*" capture="environment" class="sr-only" data-photo></label>
+        <button type="button" class="qa" data-act="quick">${icon.bolt}<span>Hızlı kalori</span></button>
+        <button type="button" class="qa" data-act="custom">${icon.plus}<span>Yeni besin</span></button>
+      </div>
+      <div class="seg" role="tablist" aria-label="Listeler" id="ftabs" style="margin:12px 0 10px"></div>
+      <div id="flist"></div>
+      <div id="fmore"></div>
+      <p class="small muted" style="margin:16px 4px 0;line-height:17px">${esc(FOOD_ATTRIBUTION)}</p>`,
   });
-  const res = s.el.querySelector('#fres');
-  const rec = s.el.querySelector('#frecent');
-  const draw = (q) => {
-    let list = searchFoods(q, custom);
-    rec.innerHTML =
-      !q && recent.length
-        ? `<div class="sec" style="padding:0 14px 6px"><h2>Son eklediklerin</h2><span class="meta">+ ile aynı miktarı ekle</span></div>
-           <div class="card flush" style="margin-bottom:14px">${recent
-             .map(
-               (r, i) => `<div class="row">
-                 <button type="button" class="row-main" style="text-align:left" data-id="${esc(r.food.id)}"><span class="row-title normal">${esc(r.food.name)}</span>
-                 <span class="row-sub">${fmt(r.grams)} g · ${fmt(nutrientsFor(r.food, r.grams).kcal)} kcal</span></button>
-                 <button type="button" class="pill" data-quick="${i}" aria-label="${esc(r.food.name)} ${fmt(r.grams)} g ekle">+</button>
-               </div>`
-             )
-             .join('')}</div>
-           <div class="sec" style="padding:0 14px 6px"><h2>Tüm besinler</h2></div>`
-        : '';
-    res.innerHTML = list.length
-      ? list
-          .map(
-            (f) => `<button type="button" class="row" data-id="${esc(f.id)}">
-              <span class="row-main"><span class="row-title normal">${esc(f.name)}${f.custom ? ' <span class="muted small">(benim)</span>' : ''}</span>
-              <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}${f.approx ? ' · yaklaşık' : ''}${f.portions && f.portions[0] ? ` · 1 ${esc(f.portions[0][0])} ${fmt(f.portions[0][1])} g` : ''}</span></span>${icon.chev}</button>`
-          )
-          .join('')
-      : `<div class="empty">Listede "${esc(q)}" bulunamadı.</div>`;
-    const more = s.el.querySelector('#fmore');
-    more.innerHTML = q.trim()
-      ? `<div class="sec" style="padding:14px 14px 6px"><h2>${list.length ? 'Aradığın bu değil mi?' : 'Başka yollar'}</h2></div>
-         <div class="card flush">
-           <button type="button" class="row" data-act="ai-est"><span class="row-main"><span class="row-title" style="color:var(--accent)">Yapay zekâyla hesapla: "${esc(q.trim())}"</span>
-             <span class="row-sub">Standart tarife göre kalori, protein, karbonhidrat, yağ ve lif tahmini</span></span>${icon.chev}</button>
-           <button type="button" class="row" data-act="off-search"><span class="row-main"><span class="row-title" style="color:var(--accent)">Paketli ürünlerde ara</span>
-             <span class="row-sub">Open Food Facts veritabanında marka/ürün adıyla</span></span>${icon.chev}</button>
-         </div>`
-      : '';
-  };
-  draw('');
+  const ft = document.createElement('div');
+  ft.className = 'sheet-ft';
+  ft.hidden = true;
+  s.sheet.appendChild(ft);
   const inp = s.el.querySelector('#fsearch');
-  inp.addEventListener('input', () => draw(inp.value));
-  s.el.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-id],[data-act],[data-quick]');
+  const listEl = s.el.querySelector('#flist');
+  const moreEl = s.el.querySelector('#fmore');
+  const tabsEl = s.el.querySelector('#ftabs');
+  const qaEl = s.el.querySelector('#fqa');
+  const byId = new Map();
+
+  const row = (f) => {
+    byId.set(f.id, f);
+    const sv = serv(f);
+    const n = nutrientsFor(f, sv.grams);
+    const tag = srcTag(f);
+    const on = picked.has(f.id);
+    return `<div class="row frow">
+      <button type="button" class="row-main" data-open="${esc(f.id)}" style="text-align:left">
+        <span class="row-title normal">${esc(cleanName(f.name))}${tag ? ` <span class="tag">${tag}</span>` : ''}</span>
+        <span class="row-sub"><span data-sv>${esc(servingText(sv.unit, sv.qty, sv.grams))}</span> · <b class="num" data-kc>${fmt(n.kcal)} kcal</b></span>
+        <span class="row-sub num" data-mc>P ${fmt(n.protein_g, 1)} · K ${fmt(n.carb_g, 1)} · Y ${fmt(n.fat_g, 1)}</span>
+      </button>
+      <button type="button" class="check-btn" aria-pressed="${on}" data-pick="${esc(f.id)}" aria-label="${esc(cleanName(f.name))}: ${on ? 'seçimi kaldır' : 'seç'}"><span class="check">${icon.check}</span></button>
+    </div>`;
+  };
+  const list = (arr, empty) => (arr.length ? `<div class="card flush search-res">${arr.map(row).join('')}</div>` : `<div class="empty">${empty}</div>`);
+
+  const draw = () => {
+    const q = inp.value.trim();
+    tabsEl.hidden = !!q;
+    qaEl.hidden = !!q;
+    if (q) {
+      const res = searchFoods(q, custom, hist.count);
+      listEl.innerHTML = res.length
+        ? `<div class="sec" style="padding:0 14px 6px"><h2>Sonuçlar</h2><span class="meta">${res.length >= 60 ? '60+' : res.length} besin</span></div>${list(res, '')}`
+        : `<div class="empty">Listede "${esc(q)}" bulunamadı.</div>`;
+      moreEl.innerHTML = `<div class="sec" style="padding:14px 14px 6px"><h2>${res.length ? 'Aradığın bu değil mi?' : 'Başka yollar'}</h2></div>
+         <div class="card flush">
+           <button type="button" class="row" data-act="ai-est"><span class="row-main"><span class="row-title" style="color:var(--accent)">Yapay zekâyla hesapla: "${esc(q)}"</span>
+             <span class="row-sub">Ev ve restoran yemekleri için kalori ve makro tahmini</span></span>${icon.chev}</button>
+           <button type="button" class="row" data-act="off-search"><span class="row-main"><span class="row-title" style="color:var(--accent)">Paketli ürünlerde ara</span>
+             <span class="row-sub">Open Food Facts'te marka veya ürün adıyla</span></span>${icon.chev}</button>
+         </div>`;
+      return;
+    }
+    moreEl.innerHTML = '';
+    tabsEl.innerHTML = TABS.map(([k, l]) => `<button type="button" role="tab" aria-selected="${tab === k}" data-tab="${k}">${l}</button>`).join('');
+    if (tab === 'son') listEl.innerHTML = list(hist.recent, 'Henüz kayıt yok. Yukarıdan ara ya da barkod okut.');
+    else if (tab === 'sik') listEl.innerHTML = list(hist.frequent, 'En az iki kez eklediğin besinler burada görünür.');
+    else if (tab === 'benim')
+      listEl.innerHTML = `<button type="button" class="btn block" data-act="custom" style="margin-bottom:10px">+ Yeni besin</button>${list(mine, 'Kendi eklediğin, barkodla okuttuğun veya yapay zekâya hesaplattığın besinler burada durur.')}`;
+    else
+      listEl.innerHTML = `<button type="button" class="btn block" data-act="recipe" style="margin-bottom:10px">+ Yeni tarif</button>${list(
+        recipes,
+        'Evde yaptığın yemeği malzemeleriyle bir kez gir; porsiyon başına kalori ve makroyu uygulama hesaplasın.'
+      )}`;
+  };
+
+  const updateRow = (id) => {
+    const f = byId.get(id);
+    if (!f) return;
+    const sv = serv(f);
+    const n = nutrientsFor(f, sv.grams);
+    s.el.querySelectorAll(`[data-open="${CSS.escape(id)}"]`).forEach((b) => {
+      b.querySelector('[data-sv]').textContent = servingText(sv.unit, sv.qty, sv.grams);
+      b.querySelector('[data-kc]').textContent = `${fmt(n.kcal)} kcal`;
+      b.querySelector('[data-mc]').textContent = `P ${fmt(n.protein_g, 1)} · K ${fmt(n.carb_g, 1)} · Y ${fmt(n.fat_g, 1)}`;
+    });
+    s.el.querySelectorAll(`[data-pick="${CSS.escape(id)}"]`).forEach((b) => {
+      const on = picked.has(id);
+      b.setAttribute('aria-pressed', on);
+      b.setAttribute('aria-label', `${cleanName(f.name)}: ${on ? 'seçimi kaldır' : 'seç'}`);
+    });
+  };
+  const updateFt = () => {
+    if (!picked.size) {
+      ft.hidden = true;
+      return;
+    }
+    const tot = [...picked.values()].reduce((a, x) => a + nutrientsFor(x.food, x.grams).kcal, 0);
+    ft.hidden = false;
+    ft.innerHTML = `<button type="button" class="btn primary block" data-addall>${picked.size} besini ekle · ${fmt(tot)} kcal</button>`;
+  };
+
+  const logOne = (food, sv, src = 'manuel') =>
+    db.put('food_logs', {
+      date: state.date,
+      meal: selMeal,
+      food_id: food.id,
+      name: cleanName(food.name),
+      grams: sv.grams,
+      unit: sv.unit,
+      qty: sv.qty,
+      estimated: false,
+      source: src,
+      ...nutrientsFor(food, sv.grams),
+    });
+
+  draw();
+  inp.addEventListener('input', draw);
+  s.sheet.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-meal],[data-tab],[data-pick],[data-open],[data-act],[data-addall]');
     if (!b) return;
-    if (b.dataset.quick) {
-      const r = recent[Number(b.dataset.quick)];
-      await db.put('food_logs', { date: state.date, meal, food_id: r.food.id, name: r.food.name, grams: r.grams, estimated: false, source: 'hizli', ...nutrientsFor(r.food, r.grams) });
-      toast(`${r.food.name} eklendi`);
+    if (b.dataset.meal) {
+      selMeal = b.dataset.meal;
+      s.el.querySelectorAll('[data-meal]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.meal === selMeal));
+      return;
+    }
+    if (b.dataset.tab) {
+      tab = b.dataset.tab;
+      draw();
+      return;
+    }
+    if (b.dataset.pick) {
+      const id = b.dataset.pick;
+      const f = byId.get(id);
+      if (picked.has(id)) picked.delete(id);
+      else picked.set(id, { food: f, ...defaultServing(f, hist.last.get(id)) });
+      updateRow(id);
+      updateFt();
+      return;
+    }
+    if (b.dataset.open) {
+      const f = byId.get(b.dataset.open);
+      if (!f) return;
+      openAmount(f, selMeal, null, {
+        serving: serv(f),
+        selecting: picked.size > 0,
+        onSelect: (sv) => {
+          picked.set(f.id, { food: f, ...sv });
+          updateRow(f.id);
+          updateFt();
+        },
+        onLogged: () => s.close(),
+        onChanged: () => {
+          s.close();
+          openAddFood(selMeal, tab);
+        },
+      });
+      return;
+    }
+    if (b.hasAttribute('data-addall')) {
+      const items = [...picked.values()];
+      for (const x of items) await logOne(x.food, x, 'coklu');
+      toast(`${items.length} besin eklendi`);
       s.close();
       refresh();
       return;
     }
-    if (b.dataset.act === 'scan') {
+    const act = b.dataset.act;
+    const q = inp.value.trim();
+    if (act === 'scan') {
       s.close();
-      scanAndAdd(meal);
-      return;
-    }
-    if (b.dataset.act === 'custom') {
+      scanAndAdd(selMeal);
+    } else if (act === 'quick') {
       s.close();
-      openSmartCustom(meal, inp.value.trim());
-      return;
-    }
-    if (b.dataset.act === 'ai-est') {
+      openQuickAdd(selMeal);
+    } else if (act === 'custom') {
       s.close();
-      openEstimate(meal, inp.value.trim());
-      return;
-    }
-    if (b.dataset.act === 'off-search') {
+      openSmartCustom(selMeal, q);
+    } else if (act === 'recipe') {
       s.close();
-      openProductSearch(meal, inp.value.trim());
-      return;
+      openRecipe(null, () => openAddFood(selMeal, 'tarif'));
+    } else if (act === 'ai-est') {
+      s.close();
+      openEstimate(selMeal, q);
+    } else if (act === 'off-search') {
+      s.close();
+      openProductSearch(selMeal, q);
     }
-    const food = findFood(b.dataset.id, custom);
-    if (!food) return;
+  });
+  s.el.querySelector('[data-photo]').addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
     s.close();
-    openAmount(food, meal);
+    await runEstimate(selMeal, { name: inp.value.trim(), image: await fileToImage(f), mode: 'photo' });
   });
 }
 
-async function openAmount(food, meal, existing = null) {
-  const portions = [['gram', 1], ...(food.portions || [])];
-  let unit = existing ? 'gram' : portions.length > 1 ? portions[1][0] : 'gram';
-  let qty = existing ? existing.grams : unit === 'gram' ? 100 : 1;
+// Porsiyon seçimi ve besin detayı
+async function openAmount(food, meal, existing = null, opts = {}) {
+  const portions = [...(food.portions || []), ['gram', 1]];
+  let sv;
+  if (existing) {
+    sv =
+      existing.unit && existing.unit !== 'gram' && portions.some((p) => p[0] === existing.unit)
+        ? { unit: existing.unit, qty: existing.qty || 1 }
+        : { unit: 'gram', qty: existing.grams };
+  } else if (opts.serving) sv = { unit: opts.serving.unit, qty: opts.serving.qty };
+  else {
+    const last = (await db.list('food_logs', (x) => x.food_id === food.id && x.grams)).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+    sv = defaultServing(food, last);
+  }
+  if (!portions.some((p) => p[0] === sv.unit)) sv = { unit: 'gram', qty: sv.grams || 100 };
+  let unit = sv.unit;
+  let qty = sv.qty;
   let selMeal = meal;
+  const selecting = !!opts.selecting;
   const grams = () => {
     const u = portions.find((p) => p[0] === unit);
     return round1(qty * (u ? u[1] : 1));
   };
   const s = openSheet({
-    title: food.name,
+    title: cleanName(food.name),
     leftLabel: 'Vazgeç',
-    rightLabel: existing ? 'Kaydet' : 'Ekle',
+    rightLabel: selecting ? 'Seç' : existing ? 'Kaydet' : 'Ekle',
     onRight: async (api) => {
       const g = grams();
       if (!g || g <= 0) return toast('Miktar gir');
+      if (selecting) {
+        opts.onSelect && opts.onSelect({ unit, qty, grams: g });
+        api.close();
+        return;
+      }
       const n = nutrientsFor(food, g);
-      await db.put('food_logs', { ...(existing || {}), date: existing ? existing.date : state.date, meal: selMeal, food_id: food.id, name: food.name, grams: g, estimated: false, source: 'manuel', ...n });
+      await db.put('food_logs', {
+        ...(existing || {}),
+        date: existing ? existing.date : state.date,
+        meal: selMeal,
+        food_id: food.id,
+        name: cleanName(food.name),
+        grams: g,
+        unit,
+        qty,
+        estimated: false,
+        source: existing ? existing.source || 'manuel' : 'manuel',
+        ...n,
+      });
       api.close();
-      toast(existing ? 'Güncellendi' : `${food.name} eklendi`);
+      opts.onLogged && opts.onLogged();
+      toast(existing ? 'Güncellendi' : `${cleanName(food.name)} eklendi`);
       refresh();
     },
   });
+  const sumHTML = () => {
+    const g = grams() || 0;
+    const n = nutrientsFor(food, g);
+    const ek = { p: n.protein_g * 4, c: n.carb_g * 4, f: n.fat_g * 9 };
+    const tot = ek.p + ek.c + ek.f;
+    const pc = (x) => (tot ? Math.round((x / tot) * 100) : 0);
+    return `
+      <div class="fs-head">
+        <div class="fs-kcal"><span class="big-num">${fmt(n.kcal)}</span><span class="small muted">kcal · ${fmt(g)} g</span></div>
+        <div class="fs-macs">
+          <div class="fs-mac"><span class="lbl"><i class="dot c"></i>Karb.</span><span class="val">${fmt(n.carb_g, 1)} g</span><span class="small muted">%${pc(ek.c)}</span></div>
+          <div class="fs-mac"><span class="lbl"><i class="dot f"></i>Yağ</span><span class="val">${fmt(n.fat_g, 1)} g</span><span class="small muted">%${pc(ek.f)}</span></div>
+          <div class="fs-mac"><span class="lbl"><i class="dot p"></i>Protein</span><span class="val">${fmt(n.protein_g, 1)} g</span><span class="small muted">%${pc(ek.p)}</span></div>
+        </div>
+      </div>
+      <div class="mbar3" aria-hidden="true">${tot ? `<span class="c" style="width:${pc(ek.c)}%"></span><span class="f" style="width:${pc(ek.f)}%"></span><span class="p" style="width:${pc(ek.p)}%"></span>` : ''}</div>`;
+  };
+  const tblHTML = () => {
+    const g = grams() || 0;
+    const n = nutrientsFor(food, g);
+    const rows = [
+      ['Kalori', `${fmt(n.kcal)} kcal`],
+      ['Protein', `${fmt(n.protein_g, 1)} g`],
+      ['Karbonhidrat', `${fmt(n.carb_g, 1)} g`],
+      ['Lif', `${fmt(n.fiber_g, 1)} g`],
+      ['Yağ', `${fmt(n.fat_g, 1)} g`],
+      ['Sodyum', food.na == null ? '–' : `${fmt(n.sodium_mg)} mg`],
+    ];
+    if (food.ka) rows.push(['Potasyum', `${fmt(n.potassium_mg)} mg`]);
+    return rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('') +
+      `<p class="small muted" style="margin:8px 0 0">100 g: ${fmt(food.k)} kcal · P ${fmt(food.p, 1)} · K ${fmt(food.c, 1)} · Y ${fmt(food.f, 1)}</p>`;
+  };
+  const refreshNums = () => {
+    s.el.querySelector('#fs-sum').innerHTML = sumHTML();
+    s.el.querySelector('#fs-tbl').innerHTML = tblHTML();
+  };
   const draw = () => {
-    const g = grams();
-    const n = nutrientsFor(food, g || 0);
     s.setBody(`
-      <div class="field"><span class="lbl">Birim</span>
+      <p class="small muted" style="margin:-2px 4px 10px;text-align:center">${esc(srcLine(food))}</p>
+      <div class="card" id="fs-sum">${sumHTML()}</div>
+      <div class="field"><span class="lbl">Porsiyon</span>
         <div class="toggle-row">${portions
-          .map(([l, gr]) => `<button type="button" class="tog" aria-pressed="${unit === l}" data-unit="${esc(l)}">${esc(l)}${gr !== 1 ? ` (${fmt(gr)} g)` : ''}</button>`)
+          .map(([l, gr]) => `<button type="button" class="tog" aria-pressed="${unit === l}" data-unit="${esc(l)}">${esc(l)}${gr !== 1 ? ` · ${fmt(gr)} g` : ''}</button>`)
           .join('')}</div></div>
       <div class="field"><label for="qty">Miktar (${esc(unit)})</label>
         <div class="stepper">
           <button type="button" data-step="-1" aria-label="Azalt">−</button>
           <input id="qty" inputmode="decimal" value="${String(qty).replace('.', ',')}">
           <button type="button" data-step="1" aria-label="Artır">+</button>
-        </div></div>
-      <div class="field"><span class="lbl">Öğün</span>
-        <div class="toggle-row">${MEALS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${selMeal === k}" data-meal="${k}">${l}</button>`).join('')}</div></div>
-      <div class="card" style="margin:0">
-        <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:17px;font-weight:600">${fmt(g)} g</span><span class="big-num" style="font-size:24px">${fmt(n.kcal)} kcal</span></div>
-        <div class="macros" style="margin-top:8px">
-          <div class="macro"><span class="lbl">Protein</span><span class="val">${fmt(n.protein_g, 1)} g</span></div>
-          <div class="macro"><span class="lbl">Karbonhidrat</span><span class="val">${fmt(n.carb_g, 1)} g</span></div>
-          <div class="macro"><span class="lbl">Yağ</span><span class="val">${fmt(n.fat_g, 1)} g</span></div>
         </div>
+        ${unit !== 'gram' ? `<div class="toggle-row" style="margin-top:4px">${[0.5, 1, 1.5, 2, 3].map((v) => `<button type="button" class="tog sm" data-q="${v}" aria-pressed="${qty === v}">${String(v).replace('.', ',')}</button>`).join('')}</div>` : ''}
       </div>
+      ${
+        selecting
+          ? ''
+          : `<div class="field"><span class="lbl">Öğün</span>
+        <div class="toggle-row">${MEALS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${selMeal === k}" data-meal="${k}">${l}</button>`).join('')}</div></div>`
+      }
+      <div class="sec" style="padding:4px 14px 6px"><h2>Besin değerleri</h2></div>
+      <div class="card" id="fs-tbl">${tblHTML()}</div>
+      ${food.recipe ? `<button type="button" class="btn block" data-edit-recipe style="margin-top:4px">Tarifi düzenle</button>` : food.custom && !existing ? `<button type="button" class="btn block" data-edit-food style="margin-top:4px">Besini düzenle</button>` : ''}
+      ${food.custom && !existing ? `<button type="button" class="btn danger block" data-del-food style="margin-top:4px">Listemden sil</button>` : ''}
       ${existing ? `<button type="button" class="btn danger block" data-del style="margin-top:12px">Kaydı sil</button>` : ''}`);
     const q = s.el.querySelector('#qty');
     q.addEventListener('input', () => {
       const v = parseNum(q.value);
       if (!isNaN(v)) {
         qty = v;
-        updatePreview();
+        s.el.querySelectorAll('[data-q]').forEach((x) => x.setAttribute('aria-pressed', Number(x.dataset.q) === qty));
+        refreshNums();
       }
     });
-  };
-  const updatePreview = () => {
-    const g = grams();
-    const n = nutrientsFor(food, g || 0);
-    const card = s.el.querySelector('.card');
-    card.querySelector('span[style*="17px"]').textContent = `${fmt(g)} g`;
-    card.querySelector('.big-num').textContent = `${fmt(n.kcal)} kcal`;
-    const vals = card.querySelectorAll('.macro .val');
-    vals[0].textContent = `${fmt(n.protein_g, 1)} g`;
-    vals[1].textContent = `${fmt(n.carb_g, 1)} g`;
-    vals[2].textContent = `${fmt(n.fat_g, 1)} g`;
   };
   draw();
   s.el.addEventListener('click', async (e) => {
@@ -440,21 +652,258 @@ async function openAmount(food, meal, existing = null) {
       const g = grams();
       unit = b.dataset.unit;
       const u = portions.find((p) => p[0] === unit);
-      qty = unit === 'gram' ? g || 100 : Math.max(1, Math.round((g / u[1]) * 2) / 2) || 1;
+      qty = unit === 'gram' ? Math.round(g) || 100 : Math.max(0.5, Math.round((g / u[1]) * 2) / 2) || 1;
+      draw();
+    } else if (b.dataset.q) {
+      qty = Number(b.dataset.q);
       draw();
     } else if (b.dataset.meal) {
       selMeal = b.dataset.meal;
-      draw();
+      s.el.querySelectorAll('[data-meal]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.meal === selMeal));
     } else if (b.dataset.step) {
       const step = unit === 'gram' ? 10 : 0.5;
       qty = Math.max(0, round1(qty + Number(b.dataset.step) * step));
       s.el.querySelector('#qty').value = String(qty).replace('.', ',');
-      updatePreview();
+      s.el.querySelectorAll('[data-q]').forEach((x) => x.setAttribute('aria-pressed', Number(x.dataset.q) === qty));
+      refreshNums();
     } else if (b.hasAttribute('data-del')) {
       await db.remove('food_logs', existing.id);
       s.close();
       toast('Silindi');
       refresh();
+    } else if (b.hasAttribute('data-edit-recipe')) {
+      s.close();
+      openRecipe(food, () => (opts.onChanged ? opts.onChanged() : refresh()));
+    } else if (b.hasAttribute('data-edit-food')) {
+      s.close();
+      const { custom: _c, ...raw } = food;
+      const saved = await reviewFood(raw);
+      if (saved) toast('Besin güncellendi');
+      opts.onChanged && opts.onChanged();
+    } else if (b.hasAttribute('data-del-food')) {
+      if (!(await confirmSheet({ title: 'Listemden sil', text: `"${cleanName(food.name)}" listenden silinsin mi? Daha önceki kayıtların etkilenmez.`, okLabel: 'Sil', danger: true }))) return;
+      await db.remove('custom_foods', food.id);
+      s.close();
+      toast('Silindi');
+      opts.onChanged && opts.onChanged();
+    }
+  });
+}
+
+// Değerini bildiğin bir şeyi hızlıca ekle (sadece kalori, isteğe bağlı makrolar)
+function openQuickAdd(meal) {
+  let selMeal = meal;
+  const s = openSheet({
+    title: 'Hızlı kalori ekle',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Ekle',
+    body: `
+      <div class="field"><label for="qa-k">Kalori (kcal)</label><input id="qa-k" class="input" inputmode="decimal" placeholder="Örn. 450"></div>
+      <div class="grid3">
+        <div class="field"><label for="qa-p">Protein (g)</label><input id="qa-p" class="input" inputmode="decimal"></div>
+        <div class="field"><label for="qa-c">Karb. (g)</label><input id="qa-c" class="input" inputmode="decimal"></div>
+        <div class="field"><label for="qa-f">Yağ (g)</label><input id="qa-f" class="input" inputmode="decimal"></div>
+      </div>
+      <div class="field"><label for="qa-n">Açıklama – isteğe bağlı</label><input id="qa-n" class="input" placeholder="Örn. Restoranda akşam yemeği"></div>
+      <div class="field"><span class="lbl">Öğün</span>
+        <div class="toggle-row">${MEALS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${selMeal === k}" data-meal="${k}">${l}</button>`).join('')}</div></div>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Paketin üzerinde yazan ya da başka bir yerden bildiğin değerleri doğrudan girmek için.</p>`,
+    onRight: async (api) => {
+      const v = (id) => parseNum(s.el.querySelector(id).value);
+      const k = v('#qa-k');
+      if (isNaN(k) || k <= 0) return toast('Kaloriyi gir');
+      const name = s.el.querySelector('#qa-n').value.trim() || 'Hızlı ekleme';
+      await db.put('food_logs', {
+        date: state.date,
+        meal: selMeal,
+        name,
+        grams: null,
+        kcal: Math.round(k),
+        protein_g: v('#qa-p') || 0,
+        carb_g: v('#qa-c') || 0,
+        fat_g: v('#qa-f') || 0,
+        fiber_g: 0,
+        sodium_mg: 0,
+        potassium_mg: 0,
+        estimated: false,
+        source: 'hizli-kalori',
+      });
+      api.close();
+      toast('Eklendi');
+      refresh();
+    },
+  });
+  s.el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-meal]');
+    if (!b) return;
+    selMeal = b.dataset.meal;
+    s.el.querySelectorAll('[data-meal]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.meal === selMeal));
+  });
+  setTimeout(() => s.el.querySelector('#qa-k').focus(), 250);
+}
+
+// Tarif oluşturucu: malzemeleri gir, porsiyon başına değerleri hesapla
+async function openRecipe(existing, after) {
+  const custom = markCustom(await db.list('custom_foods'));
+  const pool = custom.filter((c) => !existing || c.id !== existing.id);
+  const ingr = existing
+    ? existing.recipe.items.map((it) => ({ ...it, food: findFood(it.food_id, pool) })).filter((x) => x.food)
+    : [];
+  let servings = existing ? existing.recipe.servings : 4;
+  let done = false;
+  const totals = () => {
+    const t = { g: 0, k: 0, p: 0, c: 0, f: 0, fb: 0, na: 0, ka: 0 };
+    for (const x of ingr) {
+      const r = (x.grams || 0) / 100;
+      t.g += x.grams || 0;
+      t.k += (x.food.k || 0) * r;
+      t.p += (x.food.p || 0) * r;
+      t.c += (x.food.c || 0) * r;
+      t.f += (x.food.f || 0) * r;
+      t.fb += (x.food.fb || 0) * r;
+      t.na += (x.food.na || 0) * r;
+      t.ka += (x.food.ka || 0) * r;
+    }
+    return t;
+  };
+  const s = openSheet({
+    title: existing ? 'Tarifi düzenle' : 'Yeni tarif',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Kaydet',
+    onClose: () => {
+      if (!done && after) after();
+    },
+    body: `
+      <div class="field"><label for="rc-name">Tarifin adı</label><input id="rc-name" class="input" value="${esc(existing ? existing.name : '')}" placeholder="Örn. Annemin mercimek köftesi"></div>
+      <div class="field"><label for="rc-serv">Kaç porsiyon çıkıyor?</label>
+        <div class="stepper">
+          <button type="button" data-sstep="-1" aria-label="Azalt">−</button>
+          <input id="rc-serv" inputmode="numeric" value="${servings}">
+          <button type="button" data-sstep="1" aria-label="Artır">+</button>
+        </div></div>
+      <div class="sec" style="padding:4px 14px 6px"><h2>Malzemeler</h2><span class="meta" id="rc-count"></span></div>
+      <div class="card flush" id="rc-items"></div>
+      <label class="sr-only" for="rc-q">Malzeme ara</label>
+      <input id="rc-q" class="input" type="search" placeholder="Malzeme ara ve ekle: bulgur, soğan…" autocomplete="off" style="margin-bottom:8px">
+      <div id="rc-res"></div>
+      <div class="card" id="rc-tot"></div>
+      <p class="small muted" style="margin:0 4px 12px;line-height:18px">Malzemeleri çiğ ağırlıklarıyla gir. Kaydettiğin tarif "Tarifler" sekmesinde ve aramada çıkar; Danışman da onu tanır.</p>
+      ${existing ? '<button type="button" class="btn danger block" data-del-recipe>Tarifi sil</button>' : ''}`,
+    onRight: async (api) => {
+      const name = s.el.querySelector('#rc-name').value.trim();
+      if (!name) return toast('Tarife bir ad ver');
+      if (!ingr.length) return toast('En az bir malzeme ekle');
+      const t = totals();
+      if (!t.g) return toast('Malzeme miktarlarını gir');
+      const per = (x) => Math.round((x / t.g) * 100 * 10) / 10;
+      done = true;
+      const saved = await db.put('custom_foods', {
+        ...(existing ? { id: existing.id } : {}),
+        name,
+        alias: 'tarif',
+        k: Math.round((t.k / t.g) * 100),
+        p: per(t.p),
+        c: per(t.c),
+        f: per(t.f),
+        fb: per(t.fb),
+        na: Math.round((t.na / t.g) * 100),
+        ka: Math.round((t.ka / t.g) * 100),
+        portions: [['porsiyon', Math.round(t.g / servings)]],
+        recipe: { servings, items: ingr.map((x) => ({ food_id: x.food.id, name: cleanName(x.food.name), grams: x.grams })) },
+        source: 'tarif',
+      });
+      api.close();
+      toast(existing ? 'Tarif güncellendi' : 'Tarif kaydedildi');
+      if (after) after(saved);
+      else refresh();
+    },
+  });
+  const itemsEl = s.el.querySelector('#rc-items');
+  const resEl = s.el.querySelector('#rc-res');
+  const totEl = s.el.querySelector('#rc-tot');
+  const q = s.el.querySelector('#rc-q');
+  const drawTot = () => {
+    const t = totals();
+    const sv = servings || 1;
+    s.el.querySelector('#rc-count').textContent = ingr.length ? `${ingr.length} malzeme` : '';
+    totEl.innerHTML = `
+      <div class="kv"><span class="k">Toplam</span><span class="v">${fmt(t.g)} g · ${fmt(t.k)} kcal</span></div>
+      <div class="kv"><span class="k">1 porsiyon</span><span class="v"><b>${fmt(t.k / sv)} kcal</b> · ${fmt(t.g / sv)} g</span></div>
+      <div class="kv"><span class="k">Porsiyonda P · K · Y</span><span class="v">${fmt(t.p / sv, 1)} · ${fmt(t.c / sv, 1)} · ${fmt(t.f / sv, 1)} g</span></div>`;
+  };
+  const drawItems = () => {
+    itemsEl.innerHTML = ingr.length
+      ? ingr
+          .map(
+            (x, i) => `<div class="row">
+              <span class="row-main"><span class="row-title normal">${esc(cleanName(x.food.name))}</span>
+              <span class="row-sub num" data-ik="${i}">${fmt(((x.food.k || 0) * (x.grams || 0)) / 100)} kcal</span></span>
+              <label class="sr-only" for="rg-${i}">${esc(cleanName(x.food.name))} gram</label>
+              <input id="rg-${i}" class="input num" data-g="${i}" inputmode="decimal" value="${String(x.grams).replace('.', ',')}" style="width:76px;flex:none;text-align:right;min-height:38px;padding:6px 10px">
+              <span class="small muted" style="flex:none">g</span>
+              <button type="button" class="icon-btn" data-rm="${i}" aria-label="${esc(cleanName(x.food.name))} çıkar" style="flex:none;color:var(--sub)">${icon.close}</button>
+            </div>`
+          )
+          .join('')
+      : `<div class="empty">Henüz malzeme yok. Aşağıdan ara ve ekle.</div>`;
+    drawTot();
+  };
+  let found = [];
+  const drawRes = () => {
+    const v = q.value.trim();
+    found = v ? searchFoods(v, pool).slice(0, 8) : [];
+    resEl.innerHTML = found.length
+      ? `<div class="card flush search-res" style="margin-bottom:10px">${found
+          .map((f, i) => {
+            const d = defaultServing(f);
+            return `<button type="button" class="row" data-add="${i}"><span class="row-main"><span class="row-title normal">${esc(cleanName(f.name))}</span>
+              <span class="row-sub">${esc(servingText(d.unit, d.qty, d.grams))} · ${fmt(nutrientsFor(f, d.grams).kcal)} kcal</span></span><span class="pill" aria-hidden="true">+</span></button>`;
+          })
+          .join('')}</div>`
+      : v
+      ? `<div class="empty" style="padding:8px 0 14px">Bulunamadı. Önce "Yeni besin" ile ekleyebilirsin.</div>`
+      : '';
+  };
+  drawItems();
+  q.addEventListener('input', drawRes);
+  s.el.addEventListener('input', (e) => {
+    const i = e.target.dataset.g;
+    if (i != null) {
+      const v = parseNum(e.target.value);
+      ingr[i].grams = isNaN(v) ? 0 : v;
+      s.el.querySelector(`[data-ik="${i}"]`).textContent = `${fmt(((ingr[i].food.k || 0) * ingr[i].grams) / 100)} kcal`;
+      drawTot();
+    } else if (e.target.id === 'rc-serv') {
+      const v = parseInt(e.target.value, 10);
+      if (v > 0) {
+        servings = v;
+        drawTot();
+      }
+    }
+  });
+  s.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.add != null) {
+      const f = found[Number(b.dataset.add)];
+      ingr.push({ food: f, grams: defaultServing(f).grams });
+      q.value = '';
+      drawRes();
+      drawItems();
+    } else if (b.dataset.rm != null) {
+      ingr.splice(Number(b.dataset.rm), 1);
+      drawItems();
+    } else if (b.dataset.sstep) {
+      servings = Math.max(1, servings + Number(b.dataset.sstep));
+      s.el.querySelector('#rc-serv').value = servings;
+      drawTot();
+    } else if (b.hasAttribute('data-del-recipe')) {
+      if (!(await confirmSheet({ title: 'Tarifi sil', text: `"${existing.name}" silinsin mi? Daha önceki kayıtların etkilenmez.`, okLabel: 'Sil', danger: true }))) return;
+      await db.remove('custom_foods', existing.id);
+      done = true;
+      s.close();
+      toast('Tarif silindi');
+      if (after) after();
     }
   });
 }

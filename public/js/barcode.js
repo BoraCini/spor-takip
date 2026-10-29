@@ -201,12 +201,14 @@ export function reviewFood(food, notFound = false) {
     const v = (x) => (x == null ? '' : String(x).replace('.', ','));
     const pl = food.portions && food.portions[0];
     const s = openSheet({
-      title: notFound ? 'Ürün bulunamadı' : food.source === 'Yapay zekâ tahmini' ? 'Tahmini değerler' : food.source === 'Etiketten okundu' ? 'Etiketten okunanlar' : 'Ürünü kontrol et',
+      title: notFound ? 'Ürün bulunamadı' : food.id ? 'Besini düzenle' : food.source === 'Yapay zekâ tahmini' ? 'Tahmini değerler' : food.source === 'Etiketten okundu' ? 'Etiketten okunanlar' : 'Ürünü kontrol et',
       leftLabel: 'Vazgeç',
       rightLabel: 'Kaydet',
       body: `
         ${
-          notFound
+          food.id && !notFound
+            ? ''
+            : notFound
             ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Bu barkod Open Food Facts'te yok. Paketin arkasındaki besin tablosunun fotoğrafını çekersen değerleri senin için okuyabilirim${food.barcode ? '' : ''}.</p>
                <label class="btn primary block" style="margin-bottom:14px;cursor:pointer">Etiketin fotoğrafını çek<input type="file" accept="image/*" capture="environment" class="sr-only" data-label-photo></label>`
             : food.source === 'Yapay zekâ tahmini'
@@ -245,7 +247,7 @@ export function reviewFood(food, notFound = false) {
           fb: g('#rf-fb') || 0,
           na: g('#rf-na') || 0,
           ka: food.ka || 0,
-          portions: pg > 0 ? [['porsiyon', pg]] : [],
+          portions: pg > 0 ? [[pl && pl[0] ? pl[0] : 'porsiyon', pg]] : [],
           source: food.source || 'manuel',
         });
         api.close();

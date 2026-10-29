@@ -102,6 +102,8 @@ export const icon = {
   trash: S('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
   chart: S('<path d="M4 19h16M7 16V10M12 16V6M17 16v-4"/>'),
   close: S('<path d="M6 6l12 12M18 6L6 18"/>'),
+  bolt: S('<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>'),
+  book: S('<path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h10"/>'),
   barcode: S('<path d="M4 6v12M7 6v12M10 6v12M14 6v12M17 6v12M20 6v12" stroke-width="1.6"/>'),
   drop: S('<path d="M12 3.5s6 6.4 6 10.5a6 6 0 0 1-12 0c0-4.1 6-10.5 6-10.5z"/>'),
   copy: S('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>'),

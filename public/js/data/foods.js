@@ -3,6 +3,7 @@
 // Alanlar: k=kcal, p=protein g, c=karbonhidrat g, f=yağ g, fb=lif g, na=sodyum mg, ka=potasyum mg
 // portions: [etiket, gram]
 import { FOODS_TR } from './foods_tr.js';
+import { FOODS_USDA } from './foods_usda.js';
 
 const BASE_FOODS = [
   // --- Yumurta, et, balık ---
@@ -114,7 +115,26 @@ const BASE_FOODS = [
   { id: 'f_tea', name: 'Çay (şekersiz)', alias: 'cay', k: 1, p: 0, c: 0.3, f: 0, fb: 0, na: 3, ka: 37, portions: [['ince belli', 100]] },
 ];
 
-export const FOODS = [...BASE_FOODS, ...FOODS_TR];
+export const FOODS = [...BASE_FOODS, ...FOODS_TR, ...FOODS_USDA];
+export const FOOD_ATTRIBUTION = 'Temel besin değerleri: USDA FoodData Central (SR Legacy), TempoLife (tempolife.app) derlemesi üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar SporCoach tarafından eklendi.';
+
+// Varsayılan porsiyon: son kullanılan miktar, yoksa ilk porsiyon, yoksa 100 g
+export function defaultServing(food, last = null) {
+  if (last && last.grams > 0) {
+    if (last.unit && last.unit !== 'gram' && (food.portions || []).some((p) => p[0] === last.unit)) return { unit: last.unit, qty: last.qty || 1, grams: last.grams };
+    return { unit: 'gram', qty: last.grams, grams: last.grams };
+  }
+  const p = food.portions && food.portions[0];
+  if (p) return { unit: p[0], qty: 1, grams: p[1] };
+  return { unit: 'gram', qty: 100, grams: 100 };
+}
+
+const trNum = (n) => String(Math.round(n * 100) / 100).replace('.', ',');
+// "1 orta boy (173 g)" gibi porsiyon metni
+export function servingText(unit, qty, grams) {
+  if (!unit || unit === 'gram') return `${trNum(grams)} g`;
+  return `${trNum(qty)} ${unit} (${trNum(Math.round(grams))} g)`;
+}
 
 // Besin değerini miktara göre hesapla
 export function nutrientsFor(food, grams) {
@@ -159,6 +179,8 @@ function lev(a, b) {
 }
 
 function wordScore(w, nameN, hayWords) {
+  if (nameN === w || nameN.startsWith(w + ' ')) return 4.5;
+  if (hayWords.includes(w)) return 4.2;
   if (nameN.startsWith(w)) return 4;
   if (hayWords.some((h) => h.startsWith(w))) return 3;
   if (hayWords.some((h) => h.includes(w))) return 2;
@@ -166,10 +188,10 @@ function wordScore(w, nameN, hayWords) {
   return -1;
 }
 
-export function searchFoods(query, custom = []) {
+export function searchFoods(query, custom = [], usage = null) {
   const all = [...custom.map((c) => ({ ...c, custom: true })), ...FOODS];
   const q = norm(query);
-  if (!q) return all.slice(0, 40);
+  if (!q) return all.slice(0, 60);
   const words = q.split(' ');
   const scored = [];
   const partial = [];
@@ -185,12 +207,17 @@ export function searchFoods(query, custom = []) {
       hits++;
     }
     if (f.custom) score += 0.5;
-    if (hits === words.length) scored.push([score, f]);
-    else if (hits > 0 && words.length > 1) partial.push([score, f]);
+    // Aranan kelimeyle başlayan sade besinler (örn. "Patates (çiğ)") yemeklerin önüne geçsin
+    if (norm(f.name.split(/[(,]/)[0]) === q) score += 1.5;
+    else if (nameN === q || nameN.startsWith(q + ' ')) score += 1;
+    if (usage && usage.get(f.id)) score += Math.min(2, 0.5 + usage.get(f.id) * 0.25);
+    if (hits === words.length) scored.push([score, f, nameN.length]);
+    else if (hits > 0 && words.length > 1) partial.push([score, f, nameN.length]);
   }
-  scored.sort((a, b) => b[0] - a[0]);
-  partial.sort((a, b) => b[0] - a[0]);
-  return [...scored, ...partial].map((x) => x[1]).slice(0, 40);
+  const by = (a, b) => b[0] - a[0] || a[2] - b[2];
+  scored.sort(by);
+  partial.sort(by);
+  return [...scored, ...partial].map((x) => x[1]).slice(0, 60);
 }
 
 export function bestMatch(name, custom = []) {

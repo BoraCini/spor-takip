@@ -9,6 +9,9 @@
   --ring: #8E8E93;
   --track: #C7C7CC;
   --accent: #2F6FED;
+  --m-c: #1E9E8F;
+  --m-f: #D98E04;
+  --m-p: #7A5AF8;
   --on-accent: #FFFFFF;
   --warn: #C2451A;
   --ok: #1B7A51;
@@ -31,6 +34,9 @@
     --ring: #8E8E93;
     --track: #48484A;
     --warn: #FF8A5C;
+    --m-c: #3CC7B5;
+    --m-f: #F2B33D;
+    --m-p: #9E85FF;
     --ok: #4CC38A;
     --tab-bg: rgba(28, 28, 30, 0.94);
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
@@ -447,6 +453,38 @@ body.locked .tabbar, body.locked #restbar { display: none; }
 @media (prefers-reduced-motion: reduce) { .sheet, .sheet-backdrop { animation: none; } }
 
 .search-res .row { min-height: 52px; }
+.frow { gap: 4px; }
+.frow .row-main { padding: 2px 0; }
+.tag {
+  display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 6px; vertical-align: 1px;
+  background: var(--fill); color: var(--sub); font-size: 11px; font-weight: 600; letter-spacing: .01em;
+}
+.qa-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.qa {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  min-height: 64px; padding: 8px 2px; border-radius: 12px; background: var(--card); color: var(--accent);
+  font-size: 12px; font-weight: 600; cursor: pointer; text-align: center;
+}
+.qa span { color: var(--text); }
+.qa svg { width: 22px; height: 22px; }
+.sheet-ft {
+  flex: none; padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--sep); background: var(--bg);
+}
+.sheet-ft[hidden], .qa-grid[hidden], .seg[hidden] { display: none; }
+.fs-head { display: flex; align-items: center; gap: 14px; }
+.fs-kcal { display: flex; flex-direction: column; flex: none; min-width: 84px; }
+.fs-macs { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.fs-mac { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.fs-mac .lbl { font-size: 12px; color: var(--sub); display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.fs-mac .val { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 4px; flex: none; display: inline-block; }
+.dot.c, .mbar3 .c { background: var(--m-c); }
+.dot.f, .mbar3 .f { background: var(--m-f); }
+.dot.p, .mbar3 .p { background: var(--m-p); }
+.mbar3 { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--fill); margin-top: 12px; gap: 2px; }
+.mbar3 span { display: block; height: 100%; }
+.tog.sm { min-height: 34px; min-width: 44px; padding: 0 10px; font-size: 14px; }
 
 /* ---------- Toast & banner ---------- */
 .toast {
