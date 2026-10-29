@@ -201,12 +201,14 @@ export function reviewFood(food, notFound = false) {
     const v = (x) => (x == null ? '' : String(x).replace('.', ','));
     const pl = food.portions && food.portions[0];
     const s = openSheet({
-      title: notFound ? 'Ürün bulunamadı' : food.id ? 'Besini düzenle' : food.source === 'Yapay zekâ tahmini' ? 'Tahmini değerler' : food.source === 'Etiketten okundu' ? 'Etiketten okunanlar' : 'Ürünü kontrol et',
+      title: notFound ? 'Ürün bulunamadı' : food.overrides && !food.id ? 'Değerleri düzelt' : food.id ? 'Besini düzenle' : food.source === 'Yapay zekâ tahmini' ? 'Tahmini değerler' : food.source === 'Etiketten okundu' ? 'Etiketten okunanlar' : 'Ürünü kontrol et',
       leftLabel: 'Vazgeç',
       rightLabel: 'Kaydet',
       body: `
         ${
-          food.id && !notFound
+          food.overrides && !food.id
+            ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">FatSecret'ta, paketin üzerinde ya da başka bir kaynakta gördüğün 100 g değerlerini gir. Kaydedince bu besin listende senin değerlerinle görünür; istediğinde orijinaline dönebilirsin.</p>`
+            : food.id && !notFound
             ? ''
             : notFound
             ? `<p class="small muted" style="margin:0 4px 12px;line-height:18px">Bu barkod Open Food Facts'te yok. Paketin arkasındaki besin tablosunun fotoğrafını çekersen değerleri senin için okuyabilirim${food.barcode ? '' : ''}.</p>
@@ -237,9 +239,10 @@ export function reviewFood(food, notFound = false) {
         const pg = g('#rf-pg');
         saved = await db.put('custom_foods', {
           ...(food.id ? { id: food.id } : {}),
+          ...(food.overrides ? { overrides: food.overrides } : {}),
           barcode: food.barcode || null,
           name,
-          alias: '',
+          alias: food.alias || '',
           k,
           p: g('#rf-p') || 0,
           c: g('#rf-c') || 0,
@@ -247,7 +250,7 @@ export function reviewFood(food, notFound = false) {
           fb: g('#rf-fb') || 0,
           na: g('#rf-na') || 0,
           ka: food.ka || 0,
-          portions: pg > 0 ? [[pl && pl[0] ? pl[0] : 'porsiyon', pg]] : [],
+          portions: [...(pg > 0 ? [[pl && pl[0] ? pl[0] : 'porsiyon', pg]] : []), ...(food.portions || []).slice(1)],
           source: food.source || 'manuel',
         });
         api.close();

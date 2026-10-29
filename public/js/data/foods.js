@@ -7,10 +7,10 @@ import { FOODS_USDA } from './foods_usda.js';
 
 const BASE_FOODS = [
   // --- Yumurta, et, balık ---
-  { id: 'f_egg', name: 'Yumurta', alias: 'yumurta haşlanmış haslanmis omlet', k: 143, p: 12.6, c: 0.7, f: 9.5, fb: 0, na: 142, ka: 138, portions: [['adet', 50]] },
+  { id: 'f_egg', name: 'Yumurta', alias: 'yumurta haşlanmış haslanmis omlet', k: 147, p: 12.6, c: 0.8, f: 9.9, fb: 0, na: 142, ka: 138, portions: [['adet', 50]] },
   { id: 'f_eggwhite', name: 'Yumurta beyazı', alias: 'yumurta aki', k: 52, p: 10.9, c: 0.7, f: 0.2, fb: 0, na: 166, ka: 163, portions: [['adet', 33]] },
   { id: 'f_chk_breast', name: 'Tavuk göğsü (pişmiş)', alias: 'tavuk gogus izgara haslama fileto', k: 165, p: 31, c: 0, f: 3.6, fb: 0, na: 74, ka: 256, portions: [] },
-  { id: 'f_chk_breast_raw', name: 'Tavuk göğsü (çiğ)', alias: 'tavuk gogus ciğ', k: 120, p: 22.5, c: 0, f: 2.6, fb: 0, na: 45, ka: 334, portions: [] },
+  { id: 'f_chk_breast_raw', name: 'Tavuk göğsü (çiğ)', alias: 'tavuk gogus ciğ', k: 110, p: 23.1, c: 0, f: 1.2, fb: 0, na: 45, ka: 334, portions: [] },
   { id: 'f_chk_thigh', name: 'Tavuk but (pişmiş, derisiz)', alias: 'tavuk but baget pirzola', k: 209, p: 26, c: 0, f: 10.9, fb: 0, na: 88, ka: 240, portions: [] },
   { id: 'f_turkey', name: 'Hindi göğsü (pişmiş)', alias: 'hindi', k: 147, p: 30, c: 0, f: 2, fb: 0, na: 52, ka: 250, portions: [] },
   { id: 'f_beef_mince10', name: 'Dana kıyma %10 yağ (pişmiş)', alias: 'kiyma dana yagsiz', k: 217, p: 26.1, c: 0, f: 11.8, fb: 0, na: 72, ka: 318, portions: [] },
@@ -188,8 +188,10 @@ function wordScore(w, nameN, hayWords) {
   return -1;
 }
 
+// Kullanıcının düzelttiği besinler (custom.overrides = orijinal id) orijinalin yerine geçer
 export function searchFoods(query, custom = [], usage = null) {
-  const all = [...custom.map((c) => ({ ...c, custom: true })), ...FOODS];
+  const replaced = new Set(custom.filter((c) => c.overrides).map((c) => c.overrides));
+  const all = [...custom.map((c) => ({ ...c, custom: true })), ...FOODS.filter((f) => !replaced.has(f.id))];
   const q = norm(query);
   if (!q) return all.slice(0, 60);
   const words = q.split(' ');
@@ -210,7 +212,7 @@ export function searchFoods(query, custom = [], usage = null) {
     // Aranan kelimeyle başlayan sade besinler (örn. "Patates (çiğ)") yemeklerin önüne geçsin
     if (norm(f.name.split(/[(,]/)[0]) === q) score += 1.5;
     else if (nameN === q || nameN.startsWith(q + ' ')) score += 1;
-    if (usage && usage.get(f.id)) score += Math.min(2, 0.5 + usage.get(f.id) * 0.25);
+    if (usage && (usage.get(f.id) || (f.overrides && usage.get(f.overrides)))) score += Math.min(2, 0.5 + (usage.get(f.id) || usage.get(f.overrides)) * 0.25);
     if (hits === words.length) scored.push([score, f, nameN.length]);
     else if (hits > 0 && words.length > 1) partial.push([score, f, nameN.length]);
   }
@@ -236,5 +238,5 @@ export function bestMatch(name, custom = []) {
 }
 
 export function findFood(id, custom = []) {
-  return custom.find((c) => c.id === id) || FOODS.find((f) => f.id === id) || null;
+  return custom.find((c) => c.id === id) || custom.find((c) => c.overrides === id) || FOODS.find((f) => f.id === id) || null;
 }

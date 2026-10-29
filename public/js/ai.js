@@ -75,7 +75,7 @@ ${foodList}`;
 }
 
 function dynamicPrompt(ctx, custom) {
-  const mine = custom.length ? `\n\nKULLANICININ KENDİ BESİNLERİ (food_id: ad — 100 g kcal):\n${custom.map((c) => `${c.id}: ${c.name} — ${c.k} kcal`).join('\n')}` : '';
+  const mine = custom.length ? `\n\nKULLANICININ KENDİ BESİNLERİ (food_id: ad — 100 g kcal):\n${custom.map((c) => `${c.id}: ${c.name} — ${c.k} kcal${c.overrides ? ` (kullanıcı ${c.overrides} değerlerini düzeltti; onun yerine bunu kullan)` : ''}`).join('\n')}` : '';
   return `KULLANICININ GÜNCEL VERİLERİ (uygulamadan otomatik eklenir, kullanıcı her seferinde anlatmak zorunda kalmasın diye kullan):\n${JSON.stringify(ctx)}${mine}`;
 }
 

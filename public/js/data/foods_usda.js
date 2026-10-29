@@ -2,7 +2,7 @@
 // Veri: USDA FoodData Central SR Legacy, TempoLife (tempolife.app) derlemesi üzerinden — CC-BY-4.0.
 // Sıra: id, ad, arama kelimeleri, kcal, protein, karbonhidrat, yağ, lif, sodyum mg, porsiyonlar
 const R = [
-["u_patates_cig", "Patates (çiğ)", "patates ham", 77, 2.1, 17.5, 0.1, 2.1, 6, [["orta boy", 213], ["küçük", 170], ["büyük", 369]]],
+["u_patates_cig", "Patates (çiğ)", "patates ham", 70, 1.7, 15.7, 0.1, 2.4, 6, [["orta boy", 213], ["küçük", 170], ["büyük", 369]]],
 ["u_patates_haslanmis_kabuksuz", "Patates (haşlanmış, kabuksuz)", "patates haslama", 86, 1.7, 20, 0.1, 1.8, 5, [["orta boy", 167], ["küçük", 135]]],
 ["u_patates_haslanmis_kabuguyla", "Patates (haşlanmış, kabuğuyla)", "patates haslama kabuklu", 87, 1.9, 20.1, 0.1, 1.8, 4, [["orta boy", 136]]],
 ["u_patates_firinda_kabuguyla", "Patates (fırında, kabuğuyla)", "patates firin", 93, 2.5, 21.2, 0.1, 2.2, 10, [["orta boy", 173], ["büyük", 299]]],
@@ -148,7 +148,7 @@ const R = [
 ["u_nar_suyu", "Nar suyu", "nar suyu", 54, 0.2, 13.1, 0.3, 0.1, 9, [["su bardağı", 249]]],
 ["u_tavuk_gogsu_izgara_derisiz", "Tavuk göğsü (ızgara, derisiz)", "tavuk gogus izgara", 165, 31, 0, 3.6, 0, 74, [["adet (yarım göğüs)", 172], ["porsiyon", 150]]],
 ["u_tavuk_gogsu_haslanmis", "Tavuk göğsü (haşlanmış)", "tavuk gogus haslama", 151, 29, 0, 3, 0, 63, [["porsiyon", 150]]],
-["u_tavuk_but_cig_derisiz", "Tavuk but (çiğ, derisiz)", "tavuk but cig", 121, 19.7, 0, 4.1, 0, 95, [["adet", 69]]],
+["u_tavuk_but_cig_derisiz", "Tavuk but (çiğ, derisiz)", "tavuk but cig", 120, 20.1, 0, 3.8, 0, 95, [["adet", 69]]],
 ["u_tavuk_but_firinda_derisiz", "Tavuk but (fırında, derisiz)", "tavuk but firin", 179, 24.8, 0, 8.2, 0, 106, [["adet", 52]]],
 ["u_tavuk_but_firinda_derili", "Tavuk but (fırında, derili)", "tavuk but derili", 232, 23.3, 0, 14.7, 0, 102, [["adet", 62]]],
 ["u_tavuk_baget_cig_derisiz", "Tavuk baget (çiğ, derisiz)", "baget cig", 116, 19.4, 0, 3.7, 0, 114, [["adet", 70]]],
@@ -295,6 +295,8 @@ const R = [
 ["u_viski_votka_cin_40", "Viski / votka / cin (40°)", "viski votka cin", 231, 0, 0, 0, 0, 1, [["tek", 40]]],
 ["u_hindistan_cevizi_suyu", "Hindistan cevizi suyu", "hindistan cevizi suyu", 18, 0.2, 4.2, 0, 0, 26, [["kutu", 330]]],
 ["u_pirinc_sutu", "Pirinç sütü", "pirinc sutu", 47, 0.3, 9.2, 1, 0.3, 39, [["su bardağı", 240]]],
-["u_soya_sutu", "Soya sütü", "soya sutu", 54, 3.3, 6.3, 1.8, 0.6, 51, [["su bardağı", 243]]]
+["u_soya_sutu", "Soya sütü", "soya sutu", 54, 3.3, 6.3, 1.8, 0.6, 51, [["su bardağı", 243]]],
+["u_basmati_pilavi", "Basmati pilavı", "basmati pilav pirinc", 139, 3.2, 30, 0.3, 0.4, null, [["su bardağı", 160], ["porsiyon", 150]]],
+["u_somon_cig", "Somon (çiğ)", "somon cig yabani", 146, 21.6, 0, 5.9, 0, null, [["fileto", 198], ["porsiyon", 150]]]
 ];
 export const FOODS_USDA = R.map(([id, name, alias, k, p, c, f, fb, na, portions]) => ({ id, name, alias, k, p, c, f, fb, na, ka: null, portions, src: 'usda' }));

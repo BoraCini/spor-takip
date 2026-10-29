@@ -282,6 +282,7 @@ async function foodHistory(custom) {
 }
 
 function srcTag(f) {
+  if (f.overrides) return 'düzeltildi';
   if (f.recipe) return 'tarif';
   if (f.custom) return 'benim';
   if (f.approx || /~$/.test(f.name)) return 'yaklaşık';
@@ -289,6 +290,7 @@ function srcTag(f) {
 }
 
 function srcLine(f) {
+  if (f.overrides) return 'Senin düzelttiğin değerler';
   if (f.recipe) return `Tarifin · ${fmt(f.recipe.servings)} porsiyon`;
   if (f.custom) {
     if (f.source === 'Yapay zekâ tahmini') return 'Kendi besinin · yapay zekâ tahmini';
@@ -632,7 +634,8 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       <div class="sec" style="padding:4px 14px 6px"><h2>Besin değerleri</h2></div>
       <div class="card" id="fs-tbl">${tblHTML()}</div>
       ${food.recipe ? `<button type="button" class="btn block" data-edit-recipe style="margin-top:4px">Tarifi düzenle</button>` : food.custom && !existing ? `<button type="button" class="btn block" data-edit-food style="margin-top:4px">Besini düzenle</button>` : ''}
-      ${food.custom && !existing ? `<button type="button" class="btn danger block" data-del-food style="margin-top:4px">Listemden sil</button>` : ''}
+      ${!food.custom && !existing ? `<button type="button" class="btn block" data-fix style="margin-top:4px">Değerleri düzelt</button>` : ''}
+      ${food.custom && !existing ? `<button type="button" class="btn danger block" data-del-food style="margin-top:4px">${food.overrides ? 'Orijinal değerlere dön' : 'Listemden sil'}</button>` : ''}
       ${existing ? `<button type="button" class="btn danger block" data-del style="margin-top:12px">Kaydı sil</button>` : ''}`);
     const q = s.el.querySelector('#qty');
     q.addEventListener('input', () => {
@@ -680,11 +683,19 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       const saved = await reviewFood(raw);
       if (saved) toast('Besin güncellendi');
       opts.onChanged && opts.onChanged();
+    } else if (b.hasAttribute('data-fix')) {
+      s.close();
+      const { custom: _c, id: origId, ...raw } = food;
+      const saved = await reviewFood({ ...raw, name: cleanName(food.name), overrides: origId, source: 'düzeltme' });
+      if (saved) toast('Değerler kaydedildi');
+      if (opts.onChanged) opts.onChanged();
+      else if (saved) refresh();
     } else if (b.hasAttribute('data-del-food')) {
-      if (!(await confirmSheet({ title: 'Listemden sil', text: `"${cleanName(food.name)}" listenden silinsin mi? Daha önceki kayıtların etkilenmez.`, okLabel: 'Sil', danger: true }))) return;
+      const ov = !!food.overrides;
+      if (!(await confirmSheet({ title: ov ? 'Orijinal değerlere dön' : 'Listemden sil', text: ov ? `"${cleanName(food.name)}" için girdiğin değerler silinsin ve uygulamanın değerleri kullanılsın mı? Daha önceki kayıtların etkilenmez.` : `"${cleanName(food.name)}" listenden silinsin mi? Daha önceki kayıtların etkilenmez.`, okLabel: ov ? 'Geri dön' : 'Sil', danger: true }))) return;
       await db.remove('custom_foods', food.id);
       s.close();
-      toast('Silindi');
+      toast(ov ? 'Orijinal değerlere dönüldü' : 'Silindi');
       opts.onChanged && opts.onChanged();
     }
   });
