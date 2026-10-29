@@ -173,14 +173,22 @@ export function parseLabLines(rawLines) {
 
 // PDF → satırlar (konumlara göre birleştirir; sütun aralarına tab koyar)
 export async function pdfLines(data) {
+  await import('../vendor/pdfjs/rs-polyfill.mjs');
   const pdfjs = await import('../vendor/pdfjs/pdf.min.mjs');
-  if (typeof window !== 'undefined') pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+  if (typeof window !== 'undefined') pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdfjs/pdf.worker.shim.mjs', import.meta.url).href;
   const task = pdfjs.getDocument({ data, isEvalSupported: false, useSystemFonts: false });
   const doc = await task.promise;
   const out = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
-    const tc = await page.getTextContent();
+    // getTextContent yerine akışı elle oku (Safari'de "for await" desteklenmiyor)
+    const tc = { items: [] };
+    const reader = page.streamTextContent({}).getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value && value.items) tc.items.push(...value.items);
+    }
     const rows = [];
     for (const it of tc.items) {
       if (!it.str || !it.str.trim()) continue;
