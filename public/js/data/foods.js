@@ -4,6 +4,7 @@
 // portions: [etiket, gram]
 import { FOODS_TR } from './foods_tr.js';
 import { FOODS_USDA } from './foods_usda.js';
+import { FOODS_BRANDS } from './foods_brands.js';
 
 const BASE_FOODS = [
   // --- Yumurta, et, balık ---
@@ -115,7 +116,7 @@ const BASE_FOODS = [
   { id: 'f_tea', name: 'Çay (şekersiz)', alias: 'cay', k: 1, p: 0, c: 0.3, f: 0, fb: 0, na: 3, ka: 37, portions: [['ince belli', 100]] },
 ];
 
-export const FOODS = [...BASE_FOODS, ...FOODS_TR, ...FOODS_USDA];
+export const FOODS = [...BASE_FOODS, ...FOODS_TR, ...FOODS_USDA, ...FOODS_BRANDS];
 export const FOOD_ATTRIBUTION = 'Temel besin değerleri: USDA FoodData Central (SR Legacy), TempoLife (tempolife.app) derlemesi üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar SporCoach tarafından eklendi.';
 
 // Varsayılan porsiyon: son kullanılan miktar, yoksa ilk porsiyon, yoksa 100 g

@@ -329,25 +329,74 @@ export async function searchProducts(q) {
       source: 'Open Food Facts',
     };
   };
-  const tries = [
-    async () => {
-      const r = await fetch(`https://search.openfoodfacts.org/search?q=${encodeURIComponent(q)}&page_size=24&langs=tr,en&fields=${fields}`);
-      if (!r.ok) throw new Error(String(r.status));
-      const d = await r.json();
-      return d.hits || [];
-    },
-    async () => {
-      const r = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=24&fields=${fields}`);
-      if (!r.ok) throw new Error(String(r.status));
-      const d = await r.json();
-      return d.products || [];
-    },
-  ];
-  for (const t of tries) {
+  const enc = encodeURIComponent(q);
+  const get = async (url, ms = 12000) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
     try {
-      const list = (await t()).map(parse).filter((x) => x && x.name);
-      return list;
+      const r = await fetch(url, { signal: ctl.signal, headers: { Accept: 'application/json' } });
+      if (!r.ok) throw new Error(String(r.status));
+      return await r.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  // Üç kaynağı aynı anda dene; Türkiye'de satılanlar (tr) önce gelsin
+  const sources = [
+    () => get(`https://tr.openfoodfacts.org/cgi/search.pl?search_terms=${enc}&search_simple=1&action=process&json=1&page_size=30&fields=${fields}`).then((d) => d.products || []),
+    () => get(`https://search.openfoodfacts.org/search?q=${enc}&page_size=30&langs=tr,en&fields=${fields}`).then((d) => d.hits || []),
+    () => get(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${enc}&search_simple=1&action=process&json=1&page_size=30&fields=${fields}`).then((d) => d.products || []),
+  ];
+  const runAll = () =>
+    new Promise((resolve, reject) => {
+      const results = sources.map(() => null);
+      let settled = 0;
+      let okCount = 0;
+      let done = false;
+      let grace = null;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(grace);
+        const seen = new Set();
+        const out = [];
+        for (const list of results) {
+          for (const pr of list || []) {
+            const x = parse(pr);
+            if (!x || !x.name) continue;
+            const key = x.barcode || x.name.toLocaleLowerCase('tr-TR');
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(x);
+          }
+        }
+        resolve(out);
+      };
+      sources.forEach((fn, i) =>
+        fn()
+          .then((list) => {
+            results[i] = list;
+            okCount++;
+            // ilk dolu cevaptan sonra diğerlerine kısa bir süre daha tanı
+            if (list.length && !grace) grace = setTimeout(finish, 1500);
+          })
+          .catch(() => {})
+          .finally(() => {
+            settled++;
+            if (settled === sources.length) {
+              if (okCount) finish();
+              else if (!done) {
+                done = true;
+                reject(new Error('fail'));
+              }
+            }
+          })
+      );
+    });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await runAll();
     } catch {}
   }
-  throw new Error('Open Food Facts\'e ulaşılamadı. Biraz sonra yeniden dene.');
+  throw new Error('Open Food Facts\'e ulaşılamadı. İnternet bağlantını kontrol edip yeniden dene.');
 }

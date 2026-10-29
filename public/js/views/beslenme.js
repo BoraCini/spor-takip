@@ -285,6 +285,7 @@ function srcTag(f) {
   if (f.overrides) return 'düzeltildi';
   if (f.recipe) return 'tarif';
   if (f.custom) return 'benim';
+  if (f.src === 'marka') return 'marka';
   if (f.approx || /~$/.test(f.name)) return 'yaklaşık';
   return '';
 }
@@ -299,6 +300,7 @@ function srcLine(f) {
     return 'Kendi besinin';
   }
   if (f.src === 'usda') return 'Kaynak: USDA FoodData Central';
+  if (f.src === 'marka') return 'Etiket değerleri (marketteki ürün sayfasından)';
   if (f.approx || /~$/.test(f.name)) return 'Yaklaşık değer: tarife ve markaya göre değişir';
   return 'Kaynak: USDA ortalamaları';
 }
@@ -1059,20 +1061,37 @@ async function openProductSearch(meal, q = '') {
   });
   const res = s.el.querySelector('#ps-res');
   let items = [];
+  let local = [];
+  let seq = 0;
+  const localHTML = () =>
+    local.length
+      ? `<div class="sec" style="padding:0 14px 6px"><h2>Uygulamadaki markalı ürünler</h2></div>
+         <div class="card flush" style="margin-bottom:12px">${local
+           .map((f) => `<button type="button" class="row" data-local="${esc(f.id)}"><span class="row-main"><span class="row-title normal">${esc(f.name)}</span>
+             <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`)
+           .join('')}</div>`
+      : '';
   const run = async () => {
     const v = s.el.querySelector('#ps-q').value.trim();
     if (v.length < 2) return;
-    res.innerHTML = '<div class="empty">Aranıyor…</div>';
+    const my = ++seq;
+    local = searchFoods(v).filter((f) => f.src === 'marka').slice(0, 8);
+    res.innerHTML = `${localHTML()}<div class="empty"><div class="typing" style="margin:0 auto 8px;display:inline-flex"><i></i><i></i><i></i></div><br>Open Food Facts'te aranıyor…</div>`;
     try {
-      items = await searchProducts(v);
-      res.innerHTML = items.length
-        ? `<div class="card flush">${items
-            .map((f, i) => `<button type="button" class="row" data-i="${i}"><span class="row-main"><span class="row-title normal">${esc(f.name)}</span>
+      const found = await searchProducts(v);
+      if (my !== seq) return;
+      items = found;
+      res.innerHTML =
+        localHTML() +
+        (items.length
+          ? `<div class="sec" style="padding:0 14px 6px"><h2>Open Food Facts</h2><span class="meta">${items.length} ürün</span></div><div class="card flush">${items
+              .map((f, i) => `<button type="button" class="row" data-i="${i}"><span class="row-main"><span class="row-title normal">${esc(f.name)}</span>
               <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`)
-            .join('')}</div>`
-        : `<div class="empty">Sonuç yok. Yapay zekâyla hesaplatmayı ya da etiketin fotoğrafını çekmeyi deneyebilirsin.</div>`;
+              .join('')}</div>`
+          : `<div class="empty">Open Food Facts'te sonuç yok. Barkodu okutmayı, etiketin fotoğrafını çekmeyi ya da yapay zekâyla hesaplatmayı deneyebilirsin.</div>`);
     } catch (e) {
-      res.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      if (my !== seq) return;
+      res.innerHTML = `${localHTML()}<div class="empty">${esc(e.message)}<br><button type="button" class="btn" data-retry style="margin-top:10px">Tekrar dene</button></div>`;
     }
   };
   s.el.querySelector('[data-f]').addEventListener('submit', (e) => {
@@ -1080,6 +1099,13 @@ async function openProductSearch(meal, q = '') {
     run();
   });
   res.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-retry]')) return run();
+    const lb = e.target.closest('[data-local]');
+    if (lb) {
+      const f = findFood(lb.dataset.local);
+      s.close();
+      return openAmount(f, meal);
+    }
     const b = e.target.closest('[data-i]');
     if (!b) return;
     const f = items[Number(b.dataset.i)];
