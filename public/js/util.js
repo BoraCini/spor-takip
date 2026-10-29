@@ -144,8 +144,6 @@ export function toast(msg, ms = 2200) {
   const sync = () => {
     r.style.setProperty('--vvh', (vv ? vv.height : window.innerHeight) + 'px');
     r.style.setProperty('--vvt', (vv ? vv.offsetTop : 0) + 'px');
-    // Uygulama yüksekliği: klavye kapalıyken gerçek ekran yüksekliği (iOS ana ekran uygulamasında 100dvh bazen yanlış)
-    if (!typing()) r.style.setProperty('--app-h', window.innerHeight + 'px');
   };
   sync();
   if (vv) {
