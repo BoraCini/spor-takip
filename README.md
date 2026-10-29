@@ -35,3 +35,5 @@ Yeni sürüm yayınlarken `public/sw.js` içindeki `CACHE` adını artır.
 ## Veri kaynakları
 
 Temel besin değerleri: USDA FoodData Central (SR Legacy), [TempoLife](https://tempolife.app) derlemesi (`tempo-food-db`) üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar bu projede eklendi. Paketli ürünler: Open Food Facts (ODbL).
+
+Tahlil PDF'leri telefonda [pdf.js](https://mozilla.github.io/pdf.js/) (Apache-2.0, `public/vendor/pdfjs`) ile okunur; yapay zekâ kullanılmaz.

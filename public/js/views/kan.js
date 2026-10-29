@@ -44,10 +44,10 @@ export async function render(root) {
         <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Test ekle" data-act="add">${icon.plus}</button></div></header>
       <section class="card" style="text-align:center;padding:24px 16px">
         <p style="margin:0 0 6px;font-size:17px;font-weight:600">Henüz test eklemedin</p>
-        <p class="small muted" style="margin:0 0 16px;line-height:18px">Laboratuvarın ya da e-Nabız'ın verdiği PDF'i seç; değerler, birimler ve referans aralıkları otomatik okunur. İstersen raporun fotoğrafını çekebilir ya da elle girebilirsin.</p>
+        <p class="small muted" style="margin:0 0 16px;line-height:18px">Laboratuvarın ya da e-Nabız'ın verdiği PDF'i seç; değerler, birimler ve referans aralıkları telefonda okunur, internete ya da yapay zekâya gönderilmez. Yorum istediğinde "Danışmana yorumlat"ı kullanırsın.</p>
         <label class="btn primary block" style="cursor:pointer;margin-bottom:8px">PDF'ten ekle<input type="file" accept="application/pdf,.pdf" class="sr-only" data-file="pdf"></label>
         <div class="btn-row">
-          <label class="btn" style="cursor:pointer">Fotoğraftan<input type="file" accept="image/*" class="sr-only" data-file="img"></label>
+          <label class="btn" style="cursor:pointer">Fotoğraftan (YZ)<input type="file" accept="image/*" class="sr-only" data-file="img"></label>
           <button type="button" class="btn" data-act="manual">Elle ekle</button>
         </div>
       </section>`;
@@ -178,6 +178,26 @@ function readFile(file) {
 async function importReport(file, kind) {
   if (!file) return;
   if (file.size > 25 * 1024 * 1024) return toast('Dosya çok büyük (en fazla 25 MB)', 4000);
+  if (kind === 'pdf') {
+    // Yapay zekâ yok: PDF'teki metin telefonda okunur
+    toast('PDF okunuyor…', 2000);
+    try {
+      const { readLabPdf } = await import('../labpdf.js');
+      const res = await readLabPdf(file);
+      if (!res.values.length) {
+        openTest(null, { test: { date: res.date || today(), lab_name: res.lab_name }, values: [], note: 'PDF açıldı ama içinde tahlil satırı bulunamadı (rapor düzeni tanınmadı). Değerleri "+ Değer ekle" ile elle girebilirsin.' });
+        return;
+      }
+      openTest(null, {
+        test: { date: res.date || today(), lab_name: res.lab_name },
+        values: res.values,
+        note: `PDF'ten ${res.values.length} değer okundu${res.date ? '' : '; tarih bulunamadı, kontrol et'}. Raporla karşılaştırıp kaydet; eksik değer varsa "+ Değer ekle" ile ekle.`,
+      });
+    } catch (e) {
+      toast(e.message || 'PDF okunamadı', 6000);
+    }
+    return;
+  }
   const wait = openSheet({
     title: 'Rapor okunuyor',
     size: 'auto',
@@ -222,14 +242,14 @@ function openAddChooser() {
     body: `
       <div class="card flush">
         <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">PDF'ten ekle</span>
-          <span class="row-sub">Laboratuvar veya e-Nabız raporu; tüm değerler otomatik okunur</span></span>${icon.chev}
+          <span class="row-sub">Laboratuvar veya e-Nabız raporu. Telefonda okunur; yapay zekâ kullanılmaz, ücretsiz.</span></span>${icon.chev}
           <input type="file" accept="application/pdf,.pdf" class="sr-only" data-file="pdf"></label>
-        <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">Fotoğraftan ekle</span>
-          <span class="row-sub">Raporun fotoğrafını çek ya da ekran görüntüsü seç</span></span>${icon.chev}
+        <label class="row" style="cursor:pointer"><span class="row-main"><span class="row-title">Fotoğraftan ekle (yapay zekâ ile)</span>
+          <span class="row-sub">Kâğıt rapor ya da taranmış PDF için. Fotoğraf yapay zekâya gönderilir.</span></span>${icon.chev}
           <input type="file" accept="image/*" class="sr-only" data-file="img"></label>
         <button type="button" class="row" data-manual><span class="row-main"><span class="row-title">Elle ekle</span></span>${icon.chev}</button>
       </div>
-      <p class="small muted" style="margin:10px 4px 0;line-height:18px">PDF ve fotoğraf okuma Danışman'ın API anahtarını kullanır (bir rapor yaklaşık 1–3 sent). Okunan değerleri kaydetmeden önce görüp düzeltebilirsin.</p>`,
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Okunan değerleri kaydetmeden önce görüp düzeltebilirsin. Yapay zekâ yalnızca fotoğraftan okurken ve "Danışmana yorumlat" dediğinde devreye girer.</p>`,
   });
   s.el.querySelectorAll('input[data-file]').forEach((inp) =>
     inp.addEventListener('change', () => {
