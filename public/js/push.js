@@ -166,7 +166,7 @@ export async function enable() {
   try {
     await api('register', { token: await token(), subscription: sub.toJSON(), ...p });
   } catch (e) {
-    if (e.status === 403) throw new Error('En fazla 5 cihaz kaydedilebilir.');
+    if (e.status === 403) throw new Error('Sunucudaki cihaz sınırı dolu. Biraz sonra yeniden dene.');
     throw new Error('Kayıt başarısız: ' + e.message);
   }
   await db.setSetting('push_enabled', true);

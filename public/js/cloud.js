@@ -10,15 +10,41 @@ const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart
 
 export const cloudSupported = () => !!(window.crypto && crypto.subtle && window.CompressionStream && window.DecompressionStream);
 
-async function idFor(pass) {
+// v2: yedeğin sunucudaki adresi, şifreleme anahtarı ve yazma anahtarı tek bir yavaş türetmeden (PBKDF2, 310 bin tur) çıkar.
+// Adres artık hızlı bir özet olmadığı için, sunucudaki liste ele geçse bile şifre hızlıca denenemez.
+// Yazma anahtarı olmadan kimse yedeğin üzerine yazamaz ya da silemez.
+const secretCache = new Map();
+async function secretsFor(pass) {
+  if (secretCache.has(pass)) return secretCache.get(pass);
+  const base = await crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveBits']);
+  const master = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode('procoach:yedek:v2'), iterations: 310000, hash: 'SHA-256' }, base, 256);
+  const hk = await crypto.subtle.importKey('raw', master, 'HKDF', false, ['deriveBits', 'deriveKey']);
+  const part = (info) => crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode(info) }, hk, 256);
+  const out = {
+    id: hex(await part('procoach:kimlik')),
+    write: hex(await part('procoach:yazma')),
+    key: await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode('procoach:anahtar') }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']),
+  };
+  secretCache.clear();
+  secretCache.set(pass, out);
+  return out;
+}
+
+// Eski biçim (2.0.0): yalnızca okumak ve taşıdıktan sonra silmek için
+async function legacyId(pass) {
   return hex(await crypto.subtle.digest('SHA-256', enc.encode('procoach:yedek:' + pass)));
 }
-async function keyFor(pass, id) {
+async function legacyKey(pass, id) {
   const base = await crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode('procoach:anahtar:' + id), iterations: 310000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 async function pipe(bytes, stream) {
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+async function dropLegacy(pass) {
+  try {
+    await fetch('/api/backup/' + (await legacyId(pass)), { method: 'DELETE' });
+  } catch {}
 }
 
 export function passIssue(p) {
@@ -28,46 +54,65 @@ export function passIssue(p) {
 }
 
 export async function cloudUpload(pass) {
-  const id = await idFor(pass);
-  const key = await keyFor(pass, id);
+  const { id, key, write } = await secretsFor(pass);
   const withPhotos = await db.getSetting('backup_photos', true);
   const data = await db.exportAll({ photos: withPhotos });
   const zipped = await pipe(enc.encode(JSON.stringify(data)), new CompressionStream('gzip'));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, zipped));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('PC02') }, key, zipped));
   const out = new Uint8Array(4 + 12 + ct.length);
-  out.set(enc.encode('PC01'), 0);
+  out.set(enc.encode('PC02'), 0);
   out.set(iv, 4);
   out.set(ct, 16);
-  const res = await fetch('/api/backup/' + id, { method: 'PUT', body: out, headers: { 'content-type': 'application/octet-stream' } });
+  const res = await fetch('/api/backup/' + id, { method: 'PUT', body: out, headers: { 'content-type': 'application/octet-stream', 'x-write-key': write } });
   if (res.status === 429) return { ok: false, reason: 'sik' };
-  if (!res.ok) throw new Error(res.status === 413 ? 'Yedek çok büyük (fotoğrafları yedekten çıkarmayı dene).' : 'Sunucuya ulaşılamadı.');
+  if (!res.ok) {
+    if (res.status === 413) throw new Error('Yedek çok büyük (fotoğrafları yedekten çıkarmayı dene).');
+    if (res.status === 507) throw new Error('Sunucudaki yedek alanı dolu. Uygulamayı kuran kişiye haber ver.');
+    if (res.status === 403) throw new Error('Bu yedeğin üzerine yazılamadı.');
+    throw new Error('Sunucuya ulaşılamadı.');
+  }
   const at = new Date().toISOString();
   await db.setSetting('cloud_last', at);
+  // eski biçimdeki yedek varsa yeni biçime geçtikten sonra sil
+  if (!(await db.getSetting('cloud_v2'))) {
+    await dropLegacy(pass);
+    await db.setSetting('cloud_v2', true);
+  }
   return { ok: true, at, size: out.length };
 }
 
-export async function cloudDownload(pass) {
-  const id = await idFor(pass);
-  const res = await fetch('/api/backup/' + id, { cache: 'no-store' });
-  if (res.status === 404) throw new Error('Bu şifreyle bir yedek bulunamadı.');
-  if (!res.ok) throw new Error('Sunucuya ulaşılamadı.');
-  const buf = new Uint8Array(await res.arrayBuffer());
-  if (new TextDecoder().decode(buf.slice(0, 4)) !== 'PC01') throw new Error('Yedek biçimi tanınmadı.');
-  const key = await keyFor(pass, id);
+async function decode(buf, key, tag) {
   let plain;
   try {
-    plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(4, 16) }, key, buf.slice(16));
+    plain = await crypto.subtle.decrypt(tag === 'PC02' ? { name: 'AES-GCM', iv: buf.slice(4, 16), additionalData: enc.encode('PC02') } : { name: 'AES-GCM', iv: buf.slice(4, 16) }, key, buf.slice(16));
   } catch {
     throw new Error('Şifre yanlış ya da yedek bozuk.');
   }
-  const json = new TextDecoder().decode(await pipe(new Uint8Array(plain), new DecompressionStream('gzip')));
-  return { data: JSON.parse(json), at: res.headers.get('x-backup-at') || null };
+  return JSON.parse(new TextDecoder().decode(await pipe(new Uint8Array(plain), new DecompressionStream('gzip'))));
+}
+
+export async function cloudDownload(pass) {
+  const { id, key } = await secretsFor(pass);
+  let res = await fetch('/api/backup/' + id, { cache: 'no-store' });
+  let legacy = false;
+  if (res.status === 404) {
+    res = await fetch('/api/backup/' + (await legacyId(pass)), { cache: 'no-store' });
+    legacy = true;
+  }
+  if (res.status === 404) throw new Error('Bu şifreyle bir yedek bulunamadı.');
+  if (!res.ok) throw new Error('Sunucuya ulaşılamadı.');
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const tag = new TextDecoder().decode(buf.slice(0, 4));
+  if (tag !== (legacy ? 'PC01' : 'PC02')) throw new Error('Yedek biçimi tanınmadı.');
+  const data = await decode(buf, legacy ? await legacyKey(pass, await legacyId(pass)) : key, tag);
+  return { data, at: res.headers.get('x-backup-at') || null };
 }
 
 export async function cloudDelete(pass) {
-  const id = await idFor(pass);
-  await fetch('/api/backup/' + id, { method: 'DELETE' });
+  const { id, write } = await secretsFor(pass);
+  await fetch('/api/backup/' + id, { method: 'DELETE', headers: { 'x-write-key': write } });
+  await dropLegacy(pass);
 }
 
 // Uygulama açıldığında: son yedekten 24 saat geçtiyse arka planda yedekle
@@ -93,6 +138,15 @@ export async function inboxToken(create = false) {
   return t;
 }
 export const inboxUrl = (t) => `${location.origin}/api/inbox/${t}`;
+export async function closeInbox() {
+  const t = await inboxToken();
+  if (t) {
+    try {
+      await fetch(inboxUrl(t), { method: 'DELETE' });
+    } catch {}
+  }
+  await db.setSetting('inbox_token', null);
+}
 
 // Kutudaki adım/kilo verisini al, kaydet ve kutuyu boşalt
 export async function pullInbox({ quiet = true } = {}) {

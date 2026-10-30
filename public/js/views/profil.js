@@ -5,7 +5,7 @@ import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, e
 import { monthUsage } from '../ai.js';
 import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate } from '../context.js';
 import * as push from '../push.js';
-import { cloudSupported, cloudUpload, cloudDownload, cloudDelete, passIssue, inboxToken, inboxUrl, pullInbox } from '../cloud.js';
+import { cloudSupported, cloudUpload, cloudDownload, cloudDelete, passIssue, inboxToken, inboxUrl, pullInbox, closeInbox } from '../cloud.js';
 
 
 function suggestTargets(p) {
@@ -589,6 +589,7 @@ export async function renderPage(root, params, mode = 'profile') {
       refresh();
     } else if (act === 'health-on') {
       await inboxToken(true);
+      await pullInbox(); // sunucuda kutuyu açar
       await refresh();
       openHealthGuide(await inboxToken());
     } else if (act === 'health-guide') {
@@ -598,7 +599,7 @@ export async function renderPage(root, params, mode = 'profile') {
       if (!n) toast('Yeni veri yok');
       refresh();
     } else if (act === 'health-off') {
-      await db.setSetting('inbox_token', null);
+      await closeInbox();
       toast('Apple Sağlık bağlantısı kapatıldı');
       refresh();
     } else if (act === 'csv') {

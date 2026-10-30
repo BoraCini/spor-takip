@@ -34,7 +34,7 @@ export const STORES = [
 ];
 
 // Dışa aktarmaya girmeyecek gizli ayarlar
-const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last'];
+const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last', 'cloud_v2'];
 
 let dbp = null;
 let memory = null; // IndexedDB yoksa geçici bellek

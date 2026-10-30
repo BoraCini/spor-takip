@@ -12,6 +12,16 @@ iPhone'da ana ekrana eklenip uygulama gibi çalışan kişisel spor takip uygula
 Tüm kişisel veriler yalnızca cihazda (IndexedDB) saklanır. Bildirim sunucusunda yalnızca push aboneliği,
 hatırlatma saatleri ve (varsayılan olarak genel) başlıklar tutulur.
 
+İsteğe bağlı iki istisna:
+- **Şifreli bulut yedeği:** Telefonda kullanıcının şifresinden PBKDF2 (310 bin tur) + HKDF ile sunucu adresi,
+  AES-GCM anahtarı ve yazma anahtarı türetilir. Sunucu yalnızca okunamaz veriyi ve yazma anahtarının özetini tutar;
+  yazma anahtarı olmadan yedeğin üzerine yazılamaz ve silinemez.
+- **Apple Sağlık kutusu:** Kestirmeler'den gelen adım/kilo verisi, uygulama alana kadar en fazla 45 gün tutulur.
+  Kutu yalnızca uygulama açtıysa veri kabul eder.
+
+Sunucu uçlarında IP başına hız sınırı, toplam yedek/kutu/cihaz sayısı sınırı ve yalnızca bilinen push servislerine
+(Apple, Google, Mozilla, Microsoft) bildirim gönderme kuralı vardır.
+
 ## Yapı
 
 ```
