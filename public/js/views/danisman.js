@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr, avatarHTML } from '../util.js';
 import { go, refresh } from '../app.js';
-import { dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
+import { cycleInfo, dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
 import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
 import { weekday } from '../util.js';
 import { runTurn, commitCard, cardNutrition, AIError, undoNote } from '../ai.js';
@@ -40,6 +40,7 @@ export async function render(root, params) {
   if (!day) ({ day, items } = await programDay(weekday(t)));
   const doneSets = (await db.list('workout_sets', (x) => x.date === t && x.done)).length;
   const due = await dueOn(t);
+  const cyc = await cycleInfo(t);
   const hasKey = !!(await db.getSetting('api_key'));
   voiceReply = !!(await db.getSetting('voice_reply', false));
   const left = tg.kcal ? tg.kcal - totals.kcal : null;
@@ -54,7 +55,7 @@ export async function render(root, params) {
           </div>
           <div class="hdr-actions">
             ${ttsSupported() ? `<button type="button" class="icon-btn" id="voicetog" aria-pressed="${voiceReply}" aria-label="Cevapları sesli oku">${voiceReply ? icon.speaker : icon.speakerOff}</button>` : ''}
-            <a href="#/profil" class="icon-btn avatar" aria-label="Profil ve ayarlar">${avatarHTML(p.name)}</a>
+            <a href="#/profil" class="icon-btn avatar" aria-label="Profil">${avatarHTML(p.name)}</a>
           </div>
         </header>
         <nav class="chips" aria-label="Bugünün özeti">
@@ -70,7 +71,7 @@ export async function render(root, params) {
             <span class="sub">${esc(doneSets ? `${doneSets} set yapıldı` : day && !day.rest ? `${items.length} hareket` : day ? 'toparlanma' : 'rutin seç')}</span>
           </a>
           <a href="#/kur" class="chipcard">
-            <span class="lbl">Kür</span>
+            <span class="lbl">Kür${cyc.status === 'devam' ? ` · ${cyc.week}. hf` : ''}</span>
             <span class="val">${due.total ? `${due.done} / ${due.total}` : '—'}</span>
             <span class="sub">${due.total ? 'tamamlandı' : 'bugün plan yok'}</span>
           </a>
@@ -309,8 +310,8 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
   }
   if (!hasKey) {
     html += `<div class="act-card"><div class="ac-head"><span class="ac-title">Kurulum</span></div>
-      <p style="margin:0 0 10px;font-size:15px;line-height:21px">Coach'un çalışması için bir Claude API anahtarı gerekiyor. Anahtarı Profil ve ayarlar sayfasından ekleyebilirsin.</p>
-      <a href="#/profil" class="btn primary">Anahtarı ekle</a></div>`;
+      <p style="margin:0 0 10px;font-size:15px;line-height:21px">Coach'un çalışması için bir Claude API anahtarı gerekiyor. Anahtarı Ayarlar sayfasından ekleyebilirsin.</p>
+      <a href="#/ayarlar" class="btn primary">Anahtarı ekle</a></div>`;
   }
   if (params.photo === '1') {
     html += `<div class="bubble ai"><p>Sol alttaki + düğmesine dokunup tahlil raporunun fotoğrafını ya da PDF'ini ekle. Değerleri okuyup Kan testleri sayfasına kaydetmen için onay kartı hazırlarım.</p></div>`;

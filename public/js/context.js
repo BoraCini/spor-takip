@@ -249,10 +249,27 @@ export async function cycleInfo(date = today()) {
   const cycles = await db.list('cycles');
   const c = cycles[cycles.length - 1] || null;
   if (!c || !c.start_date) return { cycle: c, week: null };
-  const d = daysBetween(c.start_date, date);
+  const d = daysBetween(c.start_date, date); // 0 = ilk gün
+  const end = c.end_date || (c.weeks ? addDays(c.start_date, c.weeks * 7 - 1) : null);
+  const totalDays = end ? daysBetween(c.start_date, end) + 1 : null;
+  const totalWeeks = totalDays ? Math.ceil(totalDays / 7) : c.weeks || null;
   const week = d >= 0 ? Math.floor(d / 7) + 1 : null;
-  const end = c.weeks ? addDays(c.start_date, c.weeks * 7 - 1) : null;
-  return { cycle: c, week, end, active: d >= 0 && (!c.weeks || week <= c.weeks) };
+  const dayNo = d >= 0 ? d + 1 : null;
+  const left = end ? daysBetween(date, end) : null; // bugünden bitişe kalan gün (bugün hariç)
+  const status = d < 0 ? 'baslamadi' : end && left < 0 ? 'bitti' : 'devam';
+  return {
+    cycle: c,
+    week,
+    dayNo,
+    end,
+    totalDays,
+    totalWeeks,
+    left,
+    startsIn: d < 0 ? -d : 0,
+    status,
+    pct: totalDays && d >= 0 ? Math.min(100, Math.round((Math.min(dayNo, totalDays) / totalDays) * 100)) : 0,
+    active: status === 'devam',
+  };
 }
 
 // Bugün yapılması gerekenler: hap dozları (slot bazında) + enjeksiyonlar
@@ -357,6 +374,10 @@ export async function buildContext() {
       kilo_kg: p.weight_kg || null,
       donem: p.phase || 'koruma',
       aktivite_katsayisi: p.activity || null,
+      gunluk_harcama_tahmini: (() => {
+        const e = energyBreakdown(p);
+        return e ? { toplam_kcal: e.tdee, bazal: e.bmr, gunluk_yasam: e.life, adim: e.steps, antrenman: e.train, kardiyo: e.cardio, seviye: e.label, detay: e.act } : null;
+      })(),
       hedef: p.goal || null,
       sakatliklar: p.injuries || null,
       notlar: p.notes || null,
@@ -381,7 +402,11 @@ export async function buildContext() {
       .map((d) => ({ tarih: d, egzersizler: byDate[d] })),
     kur: {
       baslangic: cyc.cycle?.start_date || null,
-      toplam_hafta: cyc.cycle?.weeks || null,
+      toplam_hafta: cyc.totalWeeks || null,
+      bitis: cyc.end || null,
+      bugun_kacinci_gun: cyc.dayNo || null,
+      kalan_gun: cyc.left != null && cyc.left >= 0 ? cyc.left : null,
+      durum: cyc.status || null,
       su_anki_hafta: cyc.week,
       notlar: cyc.cycle?.notes || null,
       maddeler: comps
@@ -431,4 +456,45 @@ export async function buildContext() {
     gecen_hafta_ozet: lastWeek,
     danisman_notlari: notes.map((n) => ({ id: n.id, not: n.text })),
   };
+}
+
+// ---------- Enerji harcaması (detaylı aktivite) ----------
+// Bazal metabolizma (Mifflin-St Jeor) × gün içi yaşam katsayısı + adım + antrenman + kardiyo (MET ile, net)
+export const JOBS = [
+  ['masa', 'Masa başı', 'Ofis, ders, uzun süre oturarak', 1.2, 3000],
+  ['ayakta', 'Ayakta', 'Satış, öğretmenlik, laboratuvar; gün boyu ayakta', 1.3, 5000],
+  ['hareketli', 'Hareketli', 'Garson, kurye, depo; sürekli yürüyerek', 1.42, 8000],
+  ['agir', 'Ağır iş', 'İnşaat, taşımacılık, tarım; ağır fiziksel iş', 1.55, 9000],
+];
+export const INTENSITY = {
+  agirlik: [['hafif', 'Hafif', 3.5], ['orta', 'Orta', 5], ['yogun', 'Yoğun', 6]],
+  kardiyo: [['hafif', 'Yürüyüş', 3.8], ['orta', 'Orta tempo', 7], ['yogun', 'Yüksek / interval', 10]],
+};
+const OLD_TO_DAYS = { '1.2': 0, '1.375': 2, '1.55': 4, '1.725': 6, '1.9': 6 };
+
+// Kayıtlı detay yoksa eski "aktivite seviyesi"nden makul bir başlangıç çıkar
+export function activityOf(p) {
+  if (p.act) return { job: 'masa', steps: null, train_days: 0, train_min: 60, train_int: 'orta', cardio_min: 0, cardio_int: 'orta', ...p.act };
+  const a = String(p.activity || '1.55');
+  return { job: a === '1.9' ? 'agir' : 'masa', steps: null, train_days: OLD_TO_DAYS[a] ?? 4, train_min: 60, train_int: 'orta', cardio_min: 0, cardio_int: 'orta' };
+}
+
+export function energyBreakdown(p) {
+  const w = Number(p.weight_kg);
+  const h = Number(p.height_cm);
+  const age = p.birth_year ? new Date().getFullYear() - Number(p.birth_year) : null;
+  if (!w || !h || !age) return null;
+  const a = activityOf(p);
+  const bmr = 10 * w + 6.25 * h - 5 * age + (p.sex === 'kadin' ? -161 : 5);
+  const job = JOBS.find((j) => j[0] === a.job) || JOBS[0];
+  const life = bmr * job[3];
+  // işin içerdiği adımların üstündeki her adım ≈ 0,0005 kcal/kg
+  const steps = a.steps ? Math.max(0, Number(a.steps) - job[4]) * 0.0005 * w : 0;
+  const met = (list, k) => (list.find((x) => x[0] === k) || list[1])[2];
+  const train = ((Number(a.train_days) || 0) * (Number(a.train_min) || 0) * (met(INTENSITY.agirlik, a.train_int) - 1) * w) / 60 / 7;
+  const cardio = ((Number(a.cardio_min) || 0) * (met(INTENSITY.kardiyo, a.cardio_int) - 1) * w) / 60 / 7;
+  const tdee = life + steps + train + cardio;
+  const factor = tdee / bmr;
+  const label = factor < 1.3 ? 'Hareketsiz' : factor < 1.45 ? 'Hafif aktif' : factor < 1.62 ? 'Orta aktif' : factor < 1.8 ? 'Çok aktif' : 'Aşırı aktif';
+  return { bmr: Math.round(bmr), life: Math.round(life - bmr), steps: Math.round(steps), train: Math.round(train), cardio: Math.round(cardio), tdee: Math.round(tdee), factor: Math.round(factor * 1000) / 1000, label, act: a };
 }

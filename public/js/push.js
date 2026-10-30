@@ -102,7 +102,7 @@ export async function buildReminders(prefs) {
       out.push({ id: `workout-${wd}`, title: 'Antrenman zamanı', body: `Bugün: ${w.day.title || 'antrenman'}`, url: '/#/antrenman', time: prefs.workout_time, days: [wd] });
     });
   }
-  if (prefs.backup) out.push({ id: 'backup', title: 'Yedek alma zamanı', body: 'Verilerini yedeklemek için dokun.', url: '/#/profil', time: '20:00', days: [6] });
+  if (prefs.backup) out.push({ id: 'backup', title: 'Yedek alma zamanı', body: 'Verilerini yedeklemek için dokun.', url: '/#/ayarlar', time: '20:00', days: [6] });
   return out;
 }
 

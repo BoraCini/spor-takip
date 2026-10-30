@@ -8,7 +8,8 @@
   --fill2: #F2F2F7;
   --ring: #8E8E93;
   --track: #C7C7CC;
-  --accent: #2F6FED;
+  --accent: #7A1F2E;
+  --gold: #B8893A;
   --m-c: #1E9E8F;
   --m-f: #D98E04;
   --m-p: #7A5AF8;
@@ -32,6 +33,9 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #000000;
+    --accent: #D4AA5E;
+    --on-accent: #1E1408;
+    --gold: #D4AA5E;
     --card: #1C1C1E;
     --text: #F2F2F7;
     --sub: #98989F;
@@ -690,14 +694,14 @@ body.locked .wprompt-back { display: none; }
 
 /* Profil simgesi: renkli halka ya da fotoğraf */
 .icon-btn.avatar {
-  padding: 0; overflow: hidden; border: 0; color: #fff;
+  padding: 0; overflow: hidden; border: 0; color: var(--on-accent);
   background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 55%, #fff) 0%, var(--accent) 48%, color-mix(in srgb, var(--accent) 65%, #000) 100%);
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 .icon-btn.avatar svg { stroke-width: 2; }
 .avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .avatar-ch { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
-.avatar-lg { width: 88px; height: 88px; border-radius: 44px; flex: none; overflow: hidden; display: flex; align-items: center; justify-content: center; color: #fff;
+.avatar-lg { width: 88px; height: 88px; border-radius: 44px; flex: none; overflow: hidden; display: flex; align-items: center; justify-content: center; color: var(--on-accent);
   background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 55%, #fff) 0%, var(--accent) 48%, color-mix(in srgb, var(--accent) 65%, #000) 100%); }
 .avatar-lg svg { width: 44px; height: 44px; stroke-width: 1.6; }
 .avatar-lg .avatar-ch { font-size: 36px; }
@@ -720,7 +724,7 @@ body.locked .wprompt-back { display: none; }
 }
 .orb-swirl {
   position: absolute; inset: -35%; border-radius: 50%;
-  background: conic-gradient(from 0deg, transparent 0deg, color-mix(in srgb, var(--accent) 35%, #fff) 70deg, transparent 150deg, color-mix(in srgb, var(--accent) 60%, #7fe7ff) 230deg, transparent 300deg);
+  background: conic-gradient(from 0deg, transparent 0deg, color-mix(in srgb, var(--accent) 35%, #fff) 70deg, transparent 150deg, color-mix(in srgb, var(--accent) 45%, var(--gold, #7fe7ff)) 230deg, transparent 300deg);
   -webkit-mask-image: radial-gradient(closest-side, #000 55%, transparent 100%); mask-image: radial-gradient(closest-side, #000 55%, transparent 100%);
   filter: blur(10px); opacity: .9; mix-blend-mode: screen; animation: orbSpin 9s linear infinite;
 }
@@ -864,3 +868,60 @@ button.meal-empty { min-height: 48px; align-items: center; }
 .meal-list .meal-row:first-child { border-top: 1px solid var(--sep); }
 .toast { left: 16px; right: 16px; transform: none; margin: 0 auto; width: fit-content; max-width: min(calc(100% - 32px), 460px); }
 .sw-del.tall > span { justify-content: flex-start; padding-top: 22px; }
+
+/* ---------- Kür takvimi kartı ---------- */
+.cyc-card { display: flex; flex-direction: column; gap: 12px; width: calc(100% - 32px); text-align: left; }
+.cyc-empty-t { font-size: 17px; font-weight: 600; }
+.cyc-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.cyc-week { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cyc-lbl { font-size: 12px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .03em; }
+.cyc-big { font-size: 34px; line-height: 38px; font-weight: 700; letter-spacing: -.02em; }
+.cyc-big small { font-size: 17px; font-weight: 600; letter-spacing: 0; }
+.cyc-dates { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; text-align: right; flex: none; }
+.cyc-dates span { display: flex; flex-direction: column; }
+.cyc-dates small { font-size: 11px; color: var(--sub); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.cyc-dates b { font-size: 15px; font-weight: 600; }
+.cyc-ticks { display: grid; gap: 3px; width: 100%; }
+.cyc-ticks span { height: 8px; border-radius: 4px; background: var(--fill); }
+.cyc-ticks span.done { background: var(--accent); }
+.cyc-ticks span.cur { background: color-mix(in srgb, var(--accent) 45%, var(--fill)); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.cyc-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; }
+
+/* Pro Coach teması (inline renk yokken): geri al düğmesi okunaklı kalsın */
+:root:not([style*="--accent"]) .toast-act { color: var(--gold); }
+@media (prefers-color-scheme: dark) { :root:not([style*="--accent"]) .toast-act { color: #7A1F2E; } }
+.lock .logo { width: 96px; height: 96px; border-radius: 22px; }
+.app-foot { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 18px 0 14px; }
+.app-foot img { width: 52px; height: 52px; border-radius: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.app-foot span { font-size: 13px; color: var(--sub); }
+
+/* ---------- Profil: detaylı aktivite ---------- */
+.act-jobs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.act-job {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 10px 12px; min-height: 64px;
+  border-radius: 12px; background: var(--fill2); box-shadow: inset 0 0 0 1px var(--sep);
+}
+.act-job b { font-size: 15px; font-weight: 600; }
+.act-job small { font-size: 12px; line-height: 15px; color: var(--sub); }
+.act-job[aria-checked="true"] { background: color-mix(in srgb, var(--accent) 12%, var(--card)); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.act-job[aria-checked="true"] b { color: var(--accent); }
+.act-grp { border-top: 1px solid var(--sep); padding: 12px 0 14px; }
+.act-grp > .lbl { display: block; font-size: 13px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: .02em; margin-bottom: 8px; }
+.act-grp .field { margin-bottom: 10px; }
+.seg.sm { margin: 0; }
+.seg.sm button { height: 34px; font-size: 14px; }
+.act-res { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.act-total { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; margin-bottom: 4px; }
+.act-total b { font-size: 20px; font-weight: 700; color: var(--accent); }
+.act-row { display: flex; justify-content: space-between; font-size: 14px; }
+.act-row span:last-child { color: var(--sub); }
+.list-row-link { color: var(--text); }
+.list-row-link .chev { width: 16px; height: 16px; fill: none; stroke: var(--sub); stroke-width: 2.2; }
+/* Kısa ekranlarda (iPhone SE vb.) kilit/PIN ekranı sığsın */
+.lock { overflow-y: auto; justify-content: safe center; }
+@media (max-height: 760px) {
+  .lock { gap: 14px; }
+  .lock .logo { width: 64px; height: 64px; border-radius: 15px; }
+  .keypad { gap: 12px 22px; grid-template-columns: repeat(3, 70px); }
+  .keypad button { width: 70px; height: 70px; border-radius: 35px; font-size: 28px; }
+}

@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.7.1';
+export const APP_VERSION = '1.8.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -14,13 +14,16 @@ const views = {
   kur: () => import('./views/kur.js'),
   kan: () => import('./views/kan.js'),
   profil: () => import('./views/profil.js'),
+  ayarlar: () => import('./views/ayarlar.js'),
 };
 
 let current = null; // { name, mod }
 let renderSeq = 0;
 let locking = false;
 
+// 'pro': logodaki renkler — açık temada bordo, koyu temada altın (CSS'te tanımlı)
 export const ACCENTS = [
+  { id: 'pro', label: 'Pro Coach (bordo / altın)', value: 'pro', swatch: 'linear-gradient(135deg, #7A1F2E 0 50%, #D4AA5E 50% 100%)' },
   { id: 'mavi', label: 'Mavi', value: '#2F6FED' },
   { id: 'yesil', label: 'Yeşil', value: '#1B7A51' },
   { id: 'turuncu', label: 'Turuncu', value: '#C2451A' },
@@ -28,7 +31,14 @@ export const ACCENTS = [
 ];
 
 export function applyAccent(value) {
-  document.documentElement.style.setProperty('--accent', value || ACCENTS[0].value);
+  const r = document.documentElement.style;
+  if (!value || value === 'pro') {
+    r.removeProperty('--accent');
+    r.removeProperty('--on-accent');
+  } else {
+    r.setProperty('--accent', value);
+    r.setProperty('--on-accent', '#FFFFFF');
+  }
 }
 
 function parseHash() {
@@ -46,7 +56,7 @@ export async function refresh() {
   await route(true);
 }
 
-const TAB_ORDER = ['danisman', 'beslenme', 'antrenman', 'kur', 'kan', 'profil'];
+const TAB_ORDER = ['danisman', 'beslenme', 'antrenman', 'kur', 'kan', 'profil', 'ayarlar'];
 let sliding = null;
 function finishSlide() {
   const v = document.getElementById('view');
@@ -217,7 +227,7 @@ async function dailyWeight() {
           <button type="button" data-d="0.1" aria-label="0,1 kg artır">+</button>
         </div>
         <button type="button" class="btn primary block" data-save>Kaydet</button>
-        <p class="small muted" style="margin:10px 0 0">${last ? `Son tartı: ${String(last.weight_kg).replace('.', ',')} kg · ` : ''}Bu soruyu Profil › Ayarlar'dan kapatabilirsin.</p>
+        <p class="small muted" style="margin:10px 0 0">${last ? `Son tartı: ${String(last.weight_kg).replace('.', ',')} kg · ` : ''}Bu soruyu Ayarlar'dan kapatabilirsin.</p>
       </div>`;
     document.body.appendChild(el);
     const inp = el.querySelector('#wp-in');
@@ -251,7 +261,7 @@ function welcome() {
     const el = document.createElement('div');
     el.className = 'lock';
     el.innerHTML = `
-      <img class="logo" src="icons/icon-180.png" alt="">
+      <img class="logo" src="icons/logo.png" alt="SporCoach">
       <h1>SporCoach'a hoş geldin</h1>
       <p>Antrenmanın, beslenmen, kürün ve kan testlerin tek yerde. Verilerin yalnızca bu telefonda saklanır.</p>
       <button type="button" class="btn primary" style="min-width:220px" data-go>Başla</button>`;

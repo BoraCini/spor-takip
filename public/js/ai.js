@@ -393,7 +393,7 @@ export async function undoNote(card) {
 export class AIError extends Error {}
 
 function httpError(status, msg) {
-  if (status === 401) return new AIError('API anahtarı geçersiz. Profil ve ayarlar sayfasından kontrol et.');
+  if (status === 401) return new AIError('API anahtarı geçersiz. Ayarlar sayfasından kontrol et.');
   if (status === 403) return new AIError('Bu API anahtarının bu işleme izni yok.');
   if (status === 429) return new AIError('Çok sık istek gönderildi ya da harcama limitine ulaşıldı. Biraz bekleyip yeniden dene.');
   if (status === 529 || status >= 500) return new AIError('Claude şu anda yoğun. Biraz sonra yeniden dene.');
@@ -525,7 +525,7 @@ async function historyMessages() {
 // onModel(model): hangi model çalışıyor; onText(fullText): cevap yazıldıkça
 export async function runTurn({ text, image, attachments = [], onModel, onText }) {
   const apiKey = await db.getSetting('api_key');
-  if (!apiKey) throw new AIError("Coach'u kullanmak için önce Profil ve ayarlar sayfasından API anahtarını ekle.");
+  if (!apiKey) throw new AIError("Coach'u kullanmak için önce Ayarlar sayfasından API anahtarını ekle.");
   if (image) attachments = [{ kind: 'image', ...image }, ...attachments];
   const model = chooseModel(text, attachments.length > 0);
   onModel && onModel(model);
@@ -610,7 +610,7 @@ const ESTIMATE_TOOL = {
 // mode: 'dish' (ad + açıklama) | 'label' (besin tablosu fotoğrafı) | 'photo' (tabak fotoğrafı)
 export async function estimateFood({ name = '', details = '', image = null, mode = 'dish' }) {
   const apiKey = await db.getSetting('api_key');
-  if (!apiKey) throw new AIError('Bu özellik için Profil ve ayarlar sayfasından API anahtarını eklemelisin.');
+  if (!apiKey) throw new AIError('Bu özellik için Ayarlar sayfasından API anahtarını eklemelisin.');
   const model = image ? MODELS.smart : MODELS.fast;
   const instr =
     mode === 'label'
@@ -683,7 +683,7 @@ const LAB_TOOL = {
 
 export async function extractLabs(file) {
   const apiKey = await db.getSetting('api_key');
-  if (!apiKey) throw new AIError('Bu özellik için Profil ve ayarlar sayfasından API anahtarını eklemelisin.');
+  if (!apiKey) throw new AIError('Bu özellik için Ayarlar sayfasından API anahtarını eklemelisin.');
   const model = MODELS.smart;
   const isPdf = file.media_type === 'application/pdf';
   const content = [

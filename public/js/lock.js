@@ -108,7 +108,7 @@ function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabe
   let pin = '';
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
   el.innerHTML = `
-    <img class="logo" src="icons/icon-180.png" alt="">
+    <img class="logo" src="icons/logo.png" alt="SporCoach">
     <h1>${esc(title)}</h1>
     ${text ? `<p>${esc(text)}</p>` : ''}
     <div class="pin-dots" aria-live="polite" aria-label="Girilen hane sayısı">${'<i></i>'.repeat(PIN_LEN)}</div>

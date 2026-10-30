@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate, swipeDelete } from '../util.js';
+import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate, swipeDelete, daysBetween } from '../util.js';
 import { refresh } from '../app.js';
 import { removeWithUndo } from '../undo.js';
 import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel } from '../context.js';
@@ -40,7 +40,6 @@ export async function render(root, params = {}) {
     return { d, i, has, done };
   });
 
-  const pct = ci.cycle?.weeks && ci.week ? Math.min(100, Math.round((ci.week / ci.cycle.weeks) * 100)) : 0;
 
   root.innerHTML = `
     <header class="hdr">
@@ -55,18 +54,7 @@ export async function render(root, params = {}) {
     </header>
     ${segHTML()}
 
-    <button type="button" class="card" style="display:flex;flex-direction:column;gap:8px;width:calc(100% - 32px);text-align:left" data-act="cycle" aria-label="Kür bilgilerini düzenle">
-      ${
-        ci.cycle?.start_date
-          ? `<div style="display:flex;justify-content:space-between;align-items:baseline;width:100%;gap:8px">
-              <span style="font-size:17px;font-weight:600">${ci.week == null ? 'Başlamadı' : `Hafta ${ci.week}${ci.cycle.weeks ? ' / ' + ci.cycle.weeks : ''}`}</span>
-              <span class="small muted">${esc(trDate(ci.cycle.start_date))}${ci.end ? ' → ' + esc(trDate(ci.end)) : ''}</span>
-            </div>
-            ${ci.cycle.weeks ? `<span class="bar thick" style="width:100%"><span style="width:${pct}%"></span></span>` : ''}
-            ${ci.cycle.weeks && ci.week > ci.cycle.weeks ? '<span class="small muted">Planlanan süre doldu.</span>' : ''}`
-          : `<span style="font-size:17px;font-weight:600">Kür bilgisi</span><span class="small muted">Başlangıç tarihini ve süresini gir; hafta takibi ve tahlil yorumları buna göre yapılır.</span>`
-      }
-    </button>
+    ${cycleCard(ci)}
 
     <div class="sec"><h2>Bugün</h2>${due.total ? `<span class="meta">${due.done} / ${due.total} tamamlandı</span>` : ''}</div>
     ${
@@ -619,32 +607,109 @@ function openCompound(c, preset = null, typedName = '') {
   });
 }
 
+// Kür kartı: başlangıç, bitiş, kaçıncı hafta/gün, kalan süre
+function cycleCard(ci) {
+  if (!ci.cycle?.start_date)
+    return `<button type="button" class="card cyc-card" data-act="cycle" aria-label="Kür bilgisi ekle">
+      <span class="cyc-empty-t">Kür takvimi</span>
+      <span class="small muted" style="line-height:18px">Başlangıç ve bitiş tarihini gir; kaçıncı haftada olduğun, kalan süre ve tahlil yorumları buna göre hesaplanır.</span>
+      <span class="pill" style="align-self:flex-start;margin-top:4px">Tarihleri gir</span></button>`;
+  const left = ci.left;
+  const leftTxt =
+    ci.status === 'baslamadi'
+      ? `${ci.startsIn} gün sonra başlıyor`
+      : ci.status === 'bitti'
+      ? `Planlanan süre ${-left} gün önce doldu`
+      : left == null
+      ? 'Bitiş tarihi girilmedi'
+      : left === 0
+      ? 'Bugün son gün'
+      : `${Math.floor(left / 7) ? Math.floor(left / 7) + ' hafta ' : ''}${left % 7 ? (left % 7) + ' gün ' : ''}kaldı`;
+  const ticks = ci.totalWeeks && ci.totalWeeks <= 30 ? Array.from({ length: ci.totalWeeks }, (_, i) => i + 1) : [];
+  return `<button type="button" class="card cyc-card" data-act="cycle" aria-label="Kür bilgilerini düzenle">
+    <div class="cyc-top">
+      <div class="cyc-week">
+        <span class="cyc-lbl">${ci.status === 'baslamadi' ? 'Başlamadı' : ci.status === 'bitti' ? 'Tamamlandı' : 'Şu an'}</span>
+        <span class="cyc-big num">${ci.status === 'devam' ? `${ci.week}.<small> hafta</small>` : ci.status === 'bitti' ? `${ci.totalWeeks || ci.week}<small> hafta</small>` : `${ci.startsIn}<small> gün</small>`}</span>
+        <span class="small muted num">${ci.status === 'devam' ? `${ci.dayNo}. gün${ci.totalWeeks ? ` · ${ci.totalWeeks} haftalık kür` : ''}` : ci.status === 'baslamadi' ? 'sonra başlıyor' : `${ci.totalDays || ''}${ci.totalDays ? ' gün sürdü' : ''}`}</span>
+      </div>
+      <div class="cyc-dates">
+        <span><small>Başlangıç</small><b>${esc(trDateYear(ci.cycle.start_date))}</b></span>
+        <span><small>Bitiş</small><b>${ci.end ? esc(trDateYear(ci.end)) : '—'}</b></span>
+      </div>
+    </div>
+    ${
+      ticks.length
+        ? `<div class="cyc-ticks" style="grid-template-columns:repeat(${ticks.length}, minmax(0, 1fr))" aria-hidden="true">${ticks
+            .map((w) => `<span class="${ci.status === 'bitti' || (ci.week && w < ci.week) ? 'done' : ci.week === w && ci.status === 'devam' ? 'cur' : ''}"></span>`)
+            .join('')}</div>`
+        : ci.end
+        ? `<span class="bar thick" style="width:100%"><span style="width:${ci.pct}%"></span></span>`
+        : ''
+    }
+    <div class="cyc-foot"><span class="small ${ci.status === 'bitti' ? '' : 'muted'}">${esc(leftTxt)}</span>${ci.end && ci.status === 'devam' ? `<span class="small muted num">%${ci.pct}</span>` : ''}</div>
+  </button>`;
+}
+
 function openCycle(cy) {
   const s = openSheet({
-    title: 'Kür bilgisi',
+    title: 'Kür takvimi',
     leftLabel: 'Vazgeç',
     rightLabel: 'Kaydet',
     body: `
-      <div class="grid2">
-        <div class="field"><label for="cy-start">Başlangıç</label><input id="cy-start" class="input" type="date" value="${esc(cy?.start_date || today())}"></div>
-        <div class="field"><label for="cy-weeks">Süre (hafta)</label><input id="cy-weeks" class="input" inputmode="numeric" value="${esc(cy?.weeks || '')}" placeholder="Örn. 12"></div>
-      </div>
+      <section class="card">
+        <div class="field"><label for="cy-start">Başlangıç tarihi</label><input id="cy-start" class="input" type="date" value="${esc(cy?.start_date || today())}"></div>
+        <div class="grid2">
+          <div class="field" style="margin-bottom:0"><label for="cy-weeks">Süre (hafta)</label><input id="cy-weeks" class="input" inputmode="numeric" value="${esc(cy?.weeks || '')}" placeholder="Örn. 12"></div>
+          <div class="field" style="margin-bottom:0"><label for="cy-end">Bitiş tarihi</label><input id="cy-end" class="input" type="date" value="${esc(cy?.end_date || (cy?.start_date && cy?.weeks ? addDays(cy.start_date, cy.weeks * 7 - 1) : ''))}"></div>
+        </div>
+        <p class="small muted" id="cy-sum" style="margin:10px 0 0;line-height:18px"></p>
+      </section>
       <div class="field"><label for="cy-notes">Notlar</label><textarea id="cy-notes" class="input" placeholder="Hedef, dikkat ettiğin yan etkiler, kontrol tahlili tarihleri…">${esc(cy?.notes || '')}</textarea></div>
       ${cy ? '<button type="button" class="btn danger block" data-new style="background:var(--card)">Yeni kür başlat</button><p class="small muted" style="margin:8px 4px 0">Yeni kür başlatınca mevcut kür bilgisi geçmişte kalır; maddelerin ve kayıtların silinmez.</p>' : ''}`,
     onRight: async (api) => {
-      const start = s.el.querySelector('#cy-start').value;
-      const w = parseNum(s.el.querySelector('#cy-weeks').value);
+      const start = st.value;
       if (!start) return toast('Başlangıç tarihi gerekli');
-      await db.put('cycles', { ...(cy || {}), start_date: start, weeks: isNaN(w) ? null : Math.round(w), notes: s.el.querySelector('#cy-notes').value.trim() });
+      const end = en.value || null;
+      if (end && end < start) return toast('Bitiş tarihi başlangıçtan önce olamaz');
+      const w = parseNum(wk.value);
+      const weeks = end ? Math.ceil((daysBetween(start, end) + 1) / 7) : isNaN(w) ? null : Math.round(w);
+      await db.put('cycles', { ...(cy || {}), start_date: start, end_date: end || (weeks ? addDays(start, weeks * 7 - 1) : null), weeks, notes: s.el.querySelector('#cy-notes').value.trim() });
       api.close();
       toast('Kaydedildi');
       refresh();
     },
   });
+  const st = s.el.querySelector('#cy-start');
+  const wk = s.el.querySelector('#cy-weeks');
+  const en = s.el.querySelector('#cy-end');
+  const sum = s.el.querySelector('#cy-sum');
+  const showSum = () => {
+    if (!st.value || !en.value || en.value < st.value) {
+      sum.textContent = 'Süreyi hafta olarak ya da bitiş tarihini gir; biri diğerini doldurur.';
+      return;
+    }
+    const days = daysBetween(st.value, en.value) + 1;
+    const d = daysBetween(st.value, today());
+    sum.textContent = `${days} gün (${Math.floor(days / 7)} hafta${days % 7 ? ' ' + (days % 7) + ' gün' : ''}). ${d < 0 ? `${-d} gün sonra başlıyor.` : d >= days ? 'Bu kürün süresi dolmuş.' : `Bugün ${Math.floor(d / 7) + 1}. haftadasın (${d + 1}. gün).`}`;
+  };
+  // hafta ↔ bitiş tarihi birbirini doldurur
+  const fromWeeks = () => {
+    const w = parseNum(wk.value);
+    if (st.value && !isNaN(w) && w > 0) en.value = addDays(st.value, Math.round(w) * 7 - 1);
+    showSum();
+  };
+  wk.addEventListener('input', fromWeeks);
+  st.addEventListener('change', fromWeeks);
+  en.addEventListener('change', () => {
+    if (st.value && en.value && en.value >= st.value) wk.value = Math.ceil((daysBetween(st.value, en.value) + 1) / 7);
+    showSum();
+  });
+  showSum();
   const nb = s.el.querySelector('[data-new]');
   if (nb)
     nb.addEventListener('click', async () => {
-      await db.put('cycles', { start_date: today(), weeks: null, notes: '' });
+      await db.put('cycles', { start_date: today(), weeks: null, end_date: null, notes: '' });
       s.close();
       openCycle((await db.list('cycles')).pop());
     });
