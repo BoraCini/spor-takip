@@ -195,7 +195,8 @@ export function swipeDelete(container, selector, onDelete, label = 'Sil') {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'sw-del';
-    btn.textContent = label;
+    btn.innerHTML = `<span>${icon.trash}<span>${esc(label)}</span></span>`;
+    btn.setAttribute('aria-label', label);
     btn.style.top = row.offsetTop + 'px';
     btn.style.height = row.offsetHeight + 'px';
     btn.style.right = Math.max(0, host.clientWidth - row.offsetLeft - row.offsetWidth) + 'px';

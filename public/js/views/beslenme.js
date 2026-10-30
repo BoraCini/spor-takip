@@ -118,29 +118,31 @@ export async function render(root, params) {
             <button type="button" class="meal-add" data-act="add" data-meal="${mk}" aria-label="${ml} öğününe ekle">${icon.plus}</button>
           </div>
           ${
-            open
-              ? `${
-                  items.length
-                    ? `<div class="meal-mac" aria-label="${ml} makroları">
-                        <span><small>Yağ</small><b class="num">${fmt(sum('fat_g'), 1)}</b></span>
-                        <span><small>Karb</small><b class="num">${fmt(sum('carb_g'), 1)}</b></span>
-                        <span><small>Prot</small><b class="num">${fmt(sum('protein_g'), 1)}</b></span>
-                        <span><small>TGD</small><b class="num">${tg.kcal ? `%${fmt((kcal / tg.kcal) * 100)}` : '—'}</b></span>
-                        <span><small>Kalori</small><b class="num">${fmt(kcal)}</b></span>
-                      </div>
-                      <div class="meal-list">${items
-                        .map(
-                          (e) => `<button type="button" class="row meal-row" data-act="edit-entry" data-id="${e.id}">
-                            <span class="row-main"><span class="row-title normal">${esc(e.name)}${e.estimated ? '<span class="est">tahmini</span>' : ''}</span>
-                            <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams)) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
-                            <span class="row-end">${fmt(e.kcal)}</span></button>`
-                        )
-                        .join('')}</div>`
-                    : y.length
-                    ? `<div class="meal-empty"><button type="button" class="pill" data-act="copy-meal" data-meal="${mk}" style="display:flex;align-items:center;gap:6px">${icon.copy}<span>Dünkü ${({ kahvalti: 'kahvaltıyı', ogle: 'öğle yemeğini', aksam: 'akşam yemeğini', ara: 'ara öğünü' })[mk]} ekle (${y.length})</span></button></div>`
-                    : `<button type="button" class="meal-empty muted" data-act="add" data-meal="${mk}">Henüz bir şey yok · eklemek için dokun</button>`
-                }`
+            items.length
+              ? `<div class="meal-mac" aria-label="${ml} makroları">
+                  <span><small>Yağ</small><b class="num">${fmt(sum('fat_g'), 1)}</b></span>
+                  <span><small>Karb</small><b class="num">${fmt(sum('carb_g'), 1)}</b></span>
+                  <span><small>Prot</small><b class="num">${fmt(sum('protein_g'), 1)}</b></span>
+                  <span><small>TGD</small><b class="num">${tg.kcal ? `%${fmt((kcal / tg.kcal) * 100)}` : '—'}</b></span>
+                  <span><small>Kalori</small><b class="num">${fmt(kcal)}</b></span>
+                </div>`
               : ''
+          }
+          ${
+            !open
+              ? ''
+              : items.length
+              ? `<div class="meal-list">${items
+                  .map(
+                    (e) => `<button type="button" class="row meal-row" data-act="edit-entry" data-id="${e.id}">
+                      <span class="row-main"><span class="row-title normal">${esc(e.name)}${e.estimated ? '<span class="est">tahmini</span>' : ''}</span>
+                      <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams)) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
+                      <span class="row-end">${fmt(e.kcal)}</span></button>`
+                  )
+                  .join('')}</div>`
+              : y.length
+              ? `<div class="meal-empty"><button type="button" class="pill" data-act="copy-meal" data-meal="${mk}" style="display:flex;align-items:center;gap:6px">${icon.copy}<span>Dünkü ${({ kahvalti: 'kahvaltıyı', ogle: 'öğle yemeğini', aksam: 'akşam yemeğini', ara: 'ara öğünü' })[mk]} ekle (${y.length})</span></button></div>`
+              : `<button type="button" class="meal-empty muted" data-act="add" data-meal="${mk}">Henüz bir şey yok · eklemek için dokun</button>`
           }
         </section>`;
     }

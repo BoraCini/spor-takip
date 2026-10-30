@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.7.0';
+export const APP_VERSION = '1.7.1';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -47,6 +47,23 @@ export async function refresh() {
 }
 
 const TAB_ORDER = ['danisman', 'beslenme', 'antrenman', 'kur', 'kan', 'profil'];
+let sliding = null;
+function finishSlide() {
+  const v = document.getElementById('view');
+  if (sliding) {
+    sliding.anims.forEach((a) => {
+      try {
+        a.cancel();
+      } catch {}
+    });
+    sliding.ghost.remove();
+    sliding = null;
+  }
+  document.querySelectorAll('.view-ghost').forEach((g) => g.remove());
+  v.classList.remove('slide-new', 'fwd', 'back');
+  v.style.transform = '';
+  document.documentElement.classList.remove('sliding');
+}
 
 function markTabs(name) {
   const bar = document.getElementById('tabbar');
@@ -95,34 +112,49 @@ async function route(keepScroll = false) {
     window.scrollTo(0, scroll);
   };
 
-  // Sekme değişince sayfa, sekme sırasına göre sağdan ya da soldan kayarak gelir
+  // Sekme değişince sayfa, sekme sırasına göre sağdan ya da soldan kayarak gelir (iOS'taki gibi itme geçişi).
+  // Eski sayfanın görüntüsü sabitlenir, yeni sayfa üstünden kayar; sadece transform kullanıldığı için akıcıdır.
   const slide =
     !keepScroll && prev && prev !== name && !document.querySelector('.sheet-backdrop') && !matchMedia('(prefers-reduced-motion: reduce)').matches
       ? TAB_ORDER.indexOf(name) > TAB_ORDER.indexOf(prev)
         ? 'fwd'
         : 'back'
       : null;
-  if (slide && document.startViewTransition) {
-    const root = document.documentElement;
-    root.dataset.vt = slide;
-    try {
-      const vt = document.startViewTransition(update);
-      await vt.updateCallbackDone;
-      vt.finished.finally(() => {
-        if (root.dataset.vt === slide) delete root.dataset.vt;
-      });
-    } catch (e) {
-      delete root.dataset.vt;
-      if (current?.name !== name) await update();
-    }
-  } else {
+  finishSlide();
+  if (!slide) {
     await update();
-    if (slide) {
-      viewEl.classList.remove('slide-fwd', 'slide-back');
-      void viewEl.offsetWidth;
-      viewEl.classList.add('slide-' + slide);
-      setTimeout(() => viewEl.classList.remove('slide-' + slide), 400);
-    }
+  } else {
+    const r = viewEl.getBoundingClientRect();
+    const ghost = viewEl.cloneNode(true);
+    ghost.removeAttribute('id');
+    ghost.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+    ghost.className = 'view-ghost';
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.inert = true;
+    Object.assign(ghost.style, { top: r.top + 'px', left: r.left + 'px', width: r.width + 'px' });
+    if (slide === 'back') ghost.classList.add('top');
+    document.body.appendChild(ghost);
+    document.documentElement.classList.add('sliding');
+    viewEl.classList.add('slide-new', slide);
+    // yeni sayfa hazırlanırken ekranın dışında beklesin
+    viewEl.style.transform = slide === 'fwd' ? 'translate3d(100%,0,0)' : 'translate3d(-30%,0,0)';
+    await update();
+    if (seq !== renderSeq) return;
+    const D = 420;
+    const E = 'cubic-bezier(.2, .9, .25, 1)';
+    const anims =
+      slide === 'fwd'
+        ? [
+            viewEl.animate([{ transform: 'translate3d(100%,0,0)' }, { transform: 'translate3d(0,0,0)' }], { duration: D, easing: E }),
+            ghost.animate([{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(-30%,0,0)' }], { duration: D, easing: E }),
+          ]
+        : [
+            viewEl.animate([{ transform: 'translate3d(-30%,0,0)' }, { transform: 'translate3d(0,0,0)' }], { duration: D, easing: E }),
+            ghost.animate([{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(100%,0,0)' }], { duration: D, easing: E }),
+          ];
+    viewEl.style.transform = '';
+    sliding = { ghost, anims };
+    Promise.all(anims.map((x) => x.finished)).then(finishSlide, finishSlide);
   }
   if (seq !== renderSeq) return;
   syncSoon();
