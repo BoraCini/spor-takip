@@ -1,5 +1,8 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, trDate, trDateYear, icon, openSheet, confirmSheet, lineChartSVG, parseDate, MONTHS_SHORT, daysBetween } from '../util.js';
+import { esc, fmt, parseNum, toast, today, trDate, trDateYear, icon, openSheet, confirmSheet, lineChartSVG, parseDate, MONTHS_SHORT, daysBetween, addDays, swipeDelete, timeStr } from '../util.js';
+import { bpCategory, cycleInfo } from '../context.js';
+import { removeWithUndo } from '../undo.js';
+import { syncSoon } from '../push.js';
 import { refresh, go } from '../app.js';
 import { labTests } from '../context.js';
 import { LABS, LAB_CATEGORIES, labByKey, classify, status } from '../data/labs.js';
@@ -50,14 +53,17 @@ export async function render(root) {
           <label class="btn" style="cursor:pointer">Fotoğraftan (YZ)<input type="file" accept="image/*" class="sr-only" data-file="img"></label>
           <button type="button" class="btn" data-act="manual">Elle ekle</button>
         </div>
-      </section>`;
+      </section>
+      ${await healthExtras()}`;
     root.onclick = (e) => {
       const b = e.target.closest('[data-act]');
       if (!b) return;
       if (b.dataset.act === 'manual') openTest(null);
       else if (b.dataset.act === 'add') openAddChooser();
+      else extrasClick(b);
     };
     bindFileInputs(root);
+    bindExtras(root);
     return;
   }
 
@@ -146,6 +152,7 @@ export async function render(root) {
            ${state.showNormal ? `<section class="card flush">${groups.normal.map((x) => valueRow(x, 'normal')).join('')}</section>` : ''}`
         : ''
     }
+    ${await healthExtras()}
     <p class="note">Gruplama uygulamanın kurallarına göre otomatik yapılır ve tıbbi değerlendirme yerine geçmez. Detaylı yorum için "Yorumlat"ı kullan; müdahale gerektiren değerleri doktorunla paylaş. Bir değere dokunursan geçmiş testlerdeki gidişatını görürsün.</p>
   `;
 
@@ -165,7 +172,163 @@ export async function render(root) {
       refresh();
     } else if (act === 'edit') openTest(cur);
     else if (act === 'ask') go(`danisman?ask=lab&test=${encodeURIComponent(cur.test.id)}`);
+    else extrasClick(b);
   };
+  bindExtras(root);
+}
+
+// ---------- Sonraki tahlil + tansiyon/nabız ----------
+async function healthExtras() {
+  const t = today();
+  const next = await db.getSetting('next_lab_date');
+  const vit = (await db.list('vitals')).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
+  const last = vit[vit.length - 1];
+  const cat = last ? bpCategory(last.sys, last.dia) : null;
+  const bpPts = vit.filter((v) => v.sys && v.dia).slice(-14);
+  const hrPts = vit.filter((v) => v.hr).slice(-14);
+  const lbl = (d) => {
+    const x = parseDate(d);
+    return `${x.getDate()} ${MONTHS_SHORT[x.getMonth()]}`;
+  };
+  const days = next ? daysBetween(t, next) : null;
+  return `
+    <div class="sec"><h2>Sonraki tahlil</h2><button type="button" class="link" data-act="next-lab">${next ? 'Değiştir' : 'Tarih belirle'}</button></div>
+    <section class="card next-lab">
+      ${
+        next
+          ? `<div><b>${esc(trDateYear(next))}</b><span class="small ${days < 0 ? 'warn' : 'muted'}">${days > 0 ? `${days} gün sonra` : days === 0 ? 'Bugün' : `${-days} gün geçti — sonucu eklediysen yeni tarih belirle`}</span></div>
+             <span class="small muted">Bildirimler açıksa o sabah hatırlatırım.</span>`
+          : '<span class="small muted" style="line-height:18px">Kür boyunca düzenli tahlil (ör. başlangıç, 6. hafta ve bitiş sonrası) değişimleri erken görmeni sağlar. Bir tarih belirlersen hatırlatırım.</span>'
+      }
+    </section>
+
+    <div class="sec"><h2>Tansiyon ve nabız</h2><button type="button" class="link" data-act="vital-add">+ Ölçüm ekle</button></div>
+    <section class="card" id="vitals">
+      ${
+        last
+          ? `<div class="vit-top">
+              <div><span class="small muted">Son ölçüm · ${esc(trDate(last.date))}${last.time ? ' ' + esc(last.time) : ''}</span>
+                <b class="num">${last.sys && last.dia ? `${last.sys}/${last.dia} <small>mmHg</small>` : '–'}</b>${last.hr ? `<span class="num">Nabız ${last.hr} <small>atım/dk</small></span>` : ''}</div>
+              ${cat ? `<span class="vit-cat ${cat.warn ? 'warn' : ''}">${esc(cat.label)}</span>` : ''}
+            </div>
+            ${cat && cat.k === 'kriz' ? '<p class="vit-alert">Bu değer çok yüksek. Baş ağrısı, göğüs ağrısı, nefes darlığı, görme bozukluğu gibi belirtiler varsa hemen 112\'yi ara; yoksa birkaç dakika dinlenip yeniden ölç ve doktoruna danış.</p>' : ''}
+            ${bpPts.length >= 2 ? `<span class="small muted">Büyük tansiyon (sistolik)</span>${lineChartSVG(bpPts.map((v) => ({ label: lbl(v.date), value: v.sys })), { band: [90, 130], unit: 'mmHg' })}` : ''}
+            ${hrPts.length >= 2 ? `<span class="small muted">Nabız</span>${lineChartSVG(hrPts.map((v) => ({ label: lbl(v.date), value: v.hr })), { band: [50, 90], unit: 'atım/dk' })}` : ''}
+            <div class="vit-list">${vit
+              .slice(-8)
+              .reverse()
+              .map(
+                (v) => `<div class="row vit-row" data-vid="${v.id}"><span class="row-main"><span class="row-title normal num">${v.sys && v.dia ? `${v.sys}/${v.dia}` : '–'}${v.hr ? ` · ${v.hr} atım` : ''}</span>
+                  <span class="row-sub">${esc(trDate(v.date))}${v.time ? ' ' + esc(v.time) : ''}${v.note ? ' · ' + esc(v.note) : ''}</span></span>
+                  <span class="small ${bpCategory(v.sys, v.dia)?.warn ? 'warn' : 'muted'}">${esc(bpCategory(v.sys, v.dia)?.label || '')}</span></div>`
+              )
+              .join('')}</div>`
+          : '<span class="small muted" style="line-height:18px">Kür ve yoğun antrenman tansiyonu ve nabzı yükseltebilir. Haftada birkaç kez, sabah oturarak 5 dakika dinlendikten sonra ölçüp kaydetmen değişimi görmeni sağlar.</span>'
+      }
+    </section>
+    ${last ? '<p class="note">Sınıflama ACC/AHA 2017 kılavuzuna göredir, bilgi amaçlıdır. Silmek için ölçümü sola kaydır.</p>' : ''}`;
+}
+
+function bindExtras(root) {
+  const v = root.querySelector('.vit-list');
+  if (v) swipeDelete(v, '.vit-row', (row) => removeWithUndo('vitals', row.dataset.vid, 'Ölçüm silindi'));
+}
+
+function extrasClick(b) {
+  const act = b.dataset.act;
+  if (act === 'vital-add') openVital();
+  else if (act === 'next-lab') openNextLab();
+}
+
+function openVital() {
+  const now = new Date();
+  const s = openSheet({
+    title: 'Tansiyon / nabız',
+    size: 'auto',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Kaydet',
+    body: `
+      <section class="card">
+        <div class="grid3">
+          <div class="field"><label for="v-sys">Büyük</label><input id="v-sys" class="input" inputmode="numeric" placeholder="120"></div>
+          <div class="field"><label for="v-dia">Küçük</label><input id="v-dia" class="input" inputmode="numeric" placeholder="80"></div>
+          <div class="field"><label for="v-hr">Nabız</label><input id="v-hr" class="input" inputmode="numeric" placeholder="65"></div>
+        </div>
+        <div class="grid2">
+          <div class="field" style="margin-bottom:0"><label for="v-date">Tarih</label><input id="v-date" class="input" type="date" value="${today()}"></div>
+          <div class="field" style="margin-bottom:0"><label for="v-time">Saat</label><input id="v-time" class="input" type="time" value="${timeStr(now.toISOString())}"></div>
+        </div>
+      </section>
+      <div class="field"><label for="v-note">Not (isteğe bağlı)</label><input id="v-note" class="input" placeholder="Örn. antrenman sonrası, kahveden sonra"></div>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Büyük ve küçük tansiyonu mmHg olarak gir (ör. 12/8 yerine 120/80). Sadece nabız da kaydedebilirsin.</p>`,
+    onRight: async (api) => {
+      const n = (id) => {
+        const x = parseNum(s.el.querySelector(id).value);
+        return isNaN(x) ? null : Math.round(x);
+      };
+      let sys = n('#v-sys');
+      let dia = n('#v-dia');
+      const hr = n('#v-hr');
+      // 12/8 gibi cmHg yazıldıysa çevir
+      if (sys && sys < 30) sys *= 10;
+      if (dia && dia < 20) dia *= 10;
+      if (!sys && !dia && !hr) return toast('Tansiyon ya da nabız gir');
+      if ((sys && !dia) || (!sys && dia)) return toast('Büyük ve küçük tansiyonu birlikte gir');
+      if (sys && (sys < 70 || sys > 260 || dia < 40 || dia > 160 || dia >= sys)) return toast('Tansiyon değerlerini kontrol et');
+      if (hr && (hr < 30 || hr > 220)) return toast('Nabız değerini kontrol et');
+      await db.put('vitals', { date: s.el.querySelector('#v-date').value || today(), time: s.el.querySelector('#v-time').value || null, sys, dia, hr, note: s.el.querySelector('#v-note').value.trim() || null });
+      api.close();
+      const c = bpCategory(sys, dia);
+      toast(c ? `Kaydedildi · ${c.label}` : 'Kaydedildi');
+      refresh();
+    },
+  });
+  setTimeout(() => s.el.querySelector('#v-sys')?.focus(), 250);
+}
+
+async function openNextLab() {
+  const cur = await db.getSetting('next_lab_date');
+  const ci = await cycleInfo();
+  const opts = [
+    ['4 hafta sonra', addDays(today(), 28)],
+    ['6 hafta sonra', addDays(today(), 42)],
+    ['8 hafta sonra', addDays(today(), 56)],
+  ];
+  if (ci.cycle && ci.cycle.start_date) {
+    const w6 = addDays(ci.cycle.start_date, 35);
+    if (w6 > today()) opts.push(['Kürün 6. haftası', w6]);
+    if (ci.end) opts.push(['Kür bitiminden 4 hafta sonra', addDays(ci.end, 28)]);
+  }
+  const s = openSheet({
+    title: 'Sonraki tahlil',
+    size: 'auto',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Kaydet',
+    body: `
+      <div class="toggle-row" style="margin-bottom:12px">${opts.map(([l, d]) => `<button type="button" class="tog sm" data-d="${d}">${esc(l)}</button>`).join('')}</div>
+      <div class="field"><label for="nl-date">Tarih</label><input id="nl-date" class="input" type="date" value="${esc(cur || '')}"></div>
+      ${cur ? '<button type="button" class="btn danger block" data-clear style="background:var(--card)">Tarihi kaldır</button>' : ''}`,
+    onRight: async (api) => {
+      const v = s.el.querySelector('#nl-date').value;
+      if (!v) return toast('Tarih seç');
+      await db.setSetting('next_lab_date', v);
+      syncSoon();
+      api.close();
+      toast('Tahlil tarihi kaydedildi');
+      refresh();
+    },
+  });
+  s.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-d],[data-clear]');
+    if (!b) return;
+    if (b.dataset.d) s.el.querySelector('#nl-date').value = b.dataset.d;
+    else {
+      await db.setSetting('next_lab_date', null);
+      syncSoon();
+      s.close();
+      refresh();
+    }
+  });
 }
 
 // ---------- PDF / fotoğraftan ekle ----------

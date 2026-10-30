@@ -1,7 +1,7 @@
 // Bildirimler (Web Push): abonelik, hatırlatma programının sunucuya gönderilmesi
 import * as db from './db.js';
 import { today, weekday, debounce } from './util.js';
-import { dueOn, weekProgram, slotLabel } from './context.js';
+import { dueOn, weekProgram, slotLabel, stockInfo } from './context.js';
 
 export const DEFAULT_PREFS = {
   doses: true,
@@ -102,6 +102,18 @@ export async function buildReminders(prefs) {
       out.push({ id: `workout-${wd}`, title: 'Antrenman zamanı', body: `Bugün: ${w.day.title || 'antrenman'}`, url: '/#/antrenman', time: prefs.workout_time, days: [wd] });
     });
   }
+  // Stok azalıyorsa (≤7 gün) o gün 10:00'da bir kez hatırlat
+  if (prefs.doses) {
+    const low = [];
+    for (const c of await db.list('compounds', (x) => x.active !== false && x.stock)) {
+      const si = await stockInfo(c);
+      if (si && si.low) low.push(c.name);
+    }
+    if (low.length) out.push({ id: 'stock', title: 'Stok azalıyor', body: prefs.show_names ? `Bitmek üzere: ${low.join(', ')}`.slice(0, 150) : 'Bazı ilaç / takviyelerin bitmek üzere.', url: '/#/kur', time: '10:00', days: [0, 1, 2, 3, 4, 5, 6], date: today() });
+  }
+  // Tek seferlik: sonraki kan tahlili günü sabahı
+  const lab = await db.getSetting('next_lab_date');
+  if (lab && lab >= today()) out.push({ id: 'lab', title: 'Kan tahlili günü', body: 'Bugün tahlil günün. Sonuçlar gelince PDF olarak ekleyebilirsin.', url: '/#/kan', time: '08:30', days: [0, 1, 2, 3, 4, 5, 6], date: lab });
   if (prefs.backup) out.push({ id: 'backup', title: 'Yedek alma zamanı', body: 'Verilerini yedeklemek için dokun.', url: '/#/ayarlar', time: '20:00', days: [6] });
   return out;
 }

@@ -2,7 +2,7 @@ import * as db from '../db.js';
 import { esc, parseNum, toast, today, addDays, weekStart, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate, swipeDelete, daysBetween } from '../util.js';
 import { refresh } from '../app.js';
 import { removeWithUndo } from '../undo.js';
-import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel } from '../context.js';
+import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel, stockInfo } from '../context.js';
 import { COMPOUND_GROUPS, searchCompounds, compoundInfo, findCompound } from '../data/compounds.js';
 import { SUPP_GROUPS, searchSupplements, findSupplement, unitForForm } from '../data/supplements.js';
 
@@ -27,6 +27,7 @@ export async function render(root, params = {}) {
   due.total = due.pills.length + due.injections.length;
   due.done = due.pills.filter((x) => x.done).length + due.injections.filter((x) => x.done).length;
   const comps = (await db.list('compounds')).filter((c) => !isSupp(c));
+  const stock = await stockMap(comps);
   const sug = await suggestSite();
   const ws = weekStart(t);
   const weekInj = await db.list('injection_logs', (l) => l.date >= ws && l.date <= addDays(ws, 6));
@@ -136,7 +137,7 @@ export async function render(root, params = {}) {
             const timeTxt = c.kind === 'enjeksiyon' ? 'Enjeksiyon' : (c.times && c.times.length ? c.times : ['sabah']).map(slotLabel).join(', ').toLocaleLowerCase('tr-TR');
             return `<button type="button" class="row" data-act="edit" data-id="${c.id}">
               <span class="row-main"><span class="row-title normal">${esc(c.name)}${c.active === false ? ' <span class="muted small">(pasif)</span>' : ''}</span>
-              <span class="row-sub">${esc(c.kind === 'enjeksiyon' ? `Enjeksiyon · ${dayTxt}` : `${dayTxt} · ${timeTxt}`)}${doseText(c) ? ' · ' + esc(doseText(c)) : ''}</span></span>${icon.chev}</button>`;
+              <span class="row-sub">${esc(c.kind === 'enjeksiyon' ? `Enjeksiyon · ${dayTxt}` : `${dayTxt} · ${timeTxt}`)}${doseText(c) ? ' · ' + esc(doseText(c)) : ''}</span>${stockLine(stock[c.id])}</span>${icon.chev}</button>`;
           })
           .join('')}
       </section>
@@ -187,6 +188,7 @@ async function renderSupp(root) {
   const pills = dueAll.pills.filter((x) => isSupp(x.compound));
   const inj = dueAll.injections.filter((x) => isSupp(x.compound));
   const items = (await db.list('compounds')).filter(isSupp).sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name, 'tr'));
+  const stock = await stockMap(items);
   const total = pills.length + inj.length;
   const done = pills.filter((x) => x.done).length + inj.filter((x) => x.done).length;
   root.innerHTML = `
@@ -238,7 +240,7 @@ async function renderSupp(root) {
                 const timeTxt = c.kind === 'enjeksiyon' ? 'iğne' : (c.times && c.times.length ? c.times : ['sabah']).map(slotLabel).join(', ').toLocaleLowerCase('tr-TR');
                 return `<button type="button" class="row" data-act="edit" data-id="${c.id}">
                   <span class="row-main"><span class="row-title normal">${esc(c.name)}${c.active === false ? ' <span class="muted small">(bırakıldı)</span>' : ''}</span>
-                  <span class="row-sub">${esc([c.group, `${dayTxt} · ${timeTxt}`, doseText(c)].filter(Boolean).join(' · '))}</span></span>${icon.chev}</button>`;
+                  <span class="row-sub">${esc([c.group, `${dayTxt} · ${timeTxt}`, doseText(c)].filter(Boolean).join(' · '))}</span>${stockLine(stock[c.id])}</span>${icon.chev}</button>`;
               })
               .join('')}
           </section>`
@@ -313,6 +315,41 @@ function openSuppPicker() {
 }
 
 // Koruyucu / vitamin düzenleyici: marka, ürün, içerik, biçim, günlük kullanım
+async function stockMap(list) {
+  const m = {};
+  for (const c of list) if (c.active !== false) m[c.id] = await stockInfo(c);
+  return m;
+}
+function stockLine(si) {
+  if (!si) return '';
+  const fmtN = (v) => String(Math.round(v * 100) / 100).replace('.', ',');
+  return `<span class="stock-line ${si.low ? 'low' : ''}">${si.low ? 'Azalıyor · ' : 'Stok: '}${fmtN(si.left)} ${esc(si.unit)}${si.daysLeft != null ? ` · ~${si.daysLeft} gün` : ''}</span>`;
+}
+
+// Stok alanı: elde kalan miktar (doz birimiyle). İşaretlenen her doz düşer.
+function stockFieldHTML(prefix, st) {
+  return `<div class="field"><label for="${prefix}-stock">Elimde kalan (${esc(st.dose_unit || 'doz birimi')}) – isteğe bağlı</label>
+    <input id="${prefix}-stock" class="input" inputmode="decimal" value="${esc(String(st.stock ?? '').replace('.', ','))}" placeholder="${st.kind === 'enjeksiyon' || st.form === 'enjeksiyon' ? 'Örn. 10 ml × 250 mg/ml = 2500' : 'Örn. 60'}">
+    <span class="small muted" style="line-height:17px">Her işaretlediğin dozda düşer; bitmesine 7 gün kala uyarırım. Yeni kutu alınca buraya yeni miktarı yaz.</span></div>`;
+}
+async function loadStock(c, st, s, prefix) {
+  if (!c) return;
+  const si = await stockInfo(c);
+  if (!si) return;
+  st.stock = si.left;
+  st.stock0 = si.left;
+  const el = s.el.querySelector(`#${prefix}-stock`);
+  if (el && !el.value) el.value = String(si.left).replace('.', ',');
+}
+function stockPatch(c, st) {
+  const raw = String(st.stock ?? '').trim();
+  if (raw === '') return c && c.stock ? { stock: null } : {};
+  const v = parseNum(raw);
+  if (isNaN(v) || v < 0) return {};
+  if (st.stock0 != null && Math.abs(v - st.stock0) < 1e-9) return {}; // değişmediyse sayım tarihini koru
+  return { stock: { amount: v, at: new Date().toISOString(), date: today() } };
+}
+
 function openSupp(c, preset = null, typed = '') {
   const cat = preset || (c && c.catalog_id ? findSupplement(c.catalog_id) : null);
   const form0 = c?.form || (cat ? cat.forms[0] : 'kapsül');
@@ -328,6 +365,8 @@ function openSupp(c, preset = null, typed = '') {
     times: c?.times ? [...c.times] : [],
     active: c?.active !== false,
     notes: c?.notes || '',
+    stock: '',
+    stock0: null,
   };
   const s = openSheet({
     title: c ? 'Düzenle' : 'Vitamin / ilaç ekle',
@@ -357,6 +396,7 @@ function openSupp(c, preset = null, typed = '') {
         times: inj ? [] : st.times.length ? st.times : ['sabah'],
         active: st.active,
         notes: st.notes.trim(),
+        ...stockPatch(c, st),
       });
       api.close();
       toast('Kaydedildi');
@@ -365,6 +405,7 @@ function openSupp(c, preset = null, typed = '') {
   });
   const sync = () => {
     const g = (id) => s.el.querySelector(id);
+    if (g('#sp-stock')) st.stock = g('#sp-stock').value;
     if (g('#sp-brand')) st.brand = g('#sp-brand').value;
     if (g('#sp-product')) st.product = g('#sp-product').value;
     if (g('#sp-strength')) st.strength = g('#sp-strength').value;
@@ -402,6 +443,7 @@ function openSupp(c, preset = null, typed = '') {
           : `<div class="field"><span class="lbl">Ne zaman</span>
         <div class="toggle-row">${SLOTS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${st.times.includes(k)}" data-time="${k}">${l}</button>`).join('')}</div></div>`
       }
+      ${stockFieldHTML('sp', st)}
       <div class="field"><label for="sp-notes">Not</label><textarea id="sp-notes" class="input" placeholder="Örn. yağlı öğünle, akşam yemeğinden sonra">${esc(st.notes)}</textarea></div>
       <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <label for="sp-active" style="font-size:16px">Şu an kullanıyorum</label>
@@ -410,6 +452,7 @@ function openSupp(c, preset = null, typed = '') {
       ${c ? '<button type="button" class="btn danger block" data-del style="background:var(--card)">Sil</button>' : ''}`);
   };
   draw();
+  loadStock(c, st, s, 'sp');
   s.el.addEventListener('click', async (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -515,6 +558,8 @@ function openCompound(c, preset = null, typedName = '') {
     times: c?.times ? [...c.times] : [],
     active: c?.active !== false,
     notes: c?.notes || '',
+    stock: '',
+    stock0: null,
   };
   const s = openSheet({
     title: c ? 'Maddeyi düzenle' : 'Madde ekle',
@@ -536,6 +581,7 @@ function openCompound(c, preset = null, typedName = '') {
         times: st.kind === 'hap' ? (st.times.length ? st.times : ['sabah']) : [],
         active: st.active,
         notes: st.notes.trim(),
+        ...stockPatch(c, st),
       });
       api.close();
       toast('Kaydedildi');
@@ -545,6 +591,7 @@ function openCompound(c, preset = null, typedName = '') {
   const sync = () => {
     const g = (id) => s.el.querySelector(id);
     if (g('#c-name')) st.name = g('#c-name').value;
+    if (g('#c-stock')) st.stock = g('#c-stock').value;
     if (g('#c-dose')) st.dose_amount = g('#c-dose').value;
     if (g('#c-unit')) st.dose_unit = g('#c-unit').value;
     if (g('#c-notes')) st.notes = g('#c-notes').value;
@@ -573,6 +620,7 @@ function openCompound(c, preset = null, typedName = '') {
           : `<div class="field"><span class="lbl">Ne zaman</span>
         <div class="toggle-row">${SLOTS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${st.times.includes(k)}" data-time="${k}">${l}</button>`).join('')}</div></div>`
       }
+      ${stockFieldHTML('c', st)}
       <div class="field"><label for="c-notes">Not</label><textarea id="c-notes" class="input" placeholder="Örn. yemekle birlikte, aç karnına">${esc(st.notes)}</textarea></div>
       <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <label for="c-active" style="font-size:16px">Şu an kullanıyorum</label>
@@ -581,6 +629,7 @@ function openCompound(c, preset = null, typedName = '') {
       ${c ? '<button type="button" class="btn danger block" data-del style="background:var(--card)">Maddeyi sil</button>' : ''}`);
   };
   draw();
+  loadStock(c, st, s, 'c');
   s.el.addEventListener('click', async (e) => {
     const b = e.target.closest('button');
     if (!b) return;

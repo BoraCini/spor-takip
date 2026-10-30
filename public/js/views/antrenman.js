@@ -1,8 +1,10 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, round1, lineChartSVG, parseDate, MONTHS_SHORT, swipeDelete } from '../util.js';
 import { refresh } from '../app.js';
-import { dropsOf, setVolume, programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES, MUSCLE_GROUP, routineList, routineDay, sessionFor } from '../context.js';
+import { dropsOf, setVolume, isWarmup, prsFor, e1rmOf, programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES, MUSCLE_GROUP, routineList, routineDay, sessionFor } from '../context.js';
 import { EXERCISE_PRESETS } from '../data/exercises.js';
+import { musclesOf, regionLabel, REGIONS } from '../data/muscles.js';
+import { bodyMapSVG } from '../bodymap.js';
 import * as rest from '../rest.js';
 import { renderProgress } from './ilerleme.js';
 
@@ -110,14 +112,21 @@ export async function render(root, params = {}) {
     const prev = await previousSession(ex.id, date);
     const sug = suggestNext(ex, it.pe, prev);
     const target = Number(it.pe.target_sets) || 0;
-    const count = Math.max(1, Math.max(target, mySets.reduce((m, s) => Math.max(m, s.set_no), 0)) + (state.extra[`${ex.id}|${date}`] || 0));
+    const warmN = mySets.filter(isWarmup).length;
+    const count = Math.max(1, Math.max(target + warmN, mySets.reduce((m, s) => Math.max(m, s.set_no), 0)) + (state.extra[`${ex.id}|${date}`] || 0));
     const rows = [];
     let lastVals = null;
+    // Önceki seansla eşleştirme: ısınmalar ısınmalarla, çalışma setleri çalışma setleriyle sırayla
+    const prevWork = prev ? prev.sets.filter((x) => !isWarmup(x)) : [];
+    const prevWarm = prev ? prev.sets.filter(isWarmup) : [];
+    let wi = 0;
+    let wa = 0;
     for (let n = 1; n <= count; n++) {
       const rec = mySets.find((s) => s.set_no === n) || null;
-      const p = prev ? prev.sets.find((s) => s.set_no === n) || prev.sets[prev.sets.length - 1] : null;
       const key = `${ex.id}|${date}|${n}`;
       const d = state.drafts[key];
+      const isW = (rec ? rec.type : d && d.type) === 'warmup';
+      const p = isW ? prevWarm[wa++] || null : prevWork[wi++] || prevWork[prevWork.length - 1] || null;
       const done = !!(rec && rec.done);
       let row;
       if (cardio) {
@@ -138,11 +147,12 @@ export async function render(root, params = {}) {
         const phKg = lastVals ? lastVals.kg : sugKg ?? (p ? p.weight_kg : null);
         const phReps = lastVals ? lastVals.reps : sugReps ?? (p ? p.reps : parseInt(it.pe.target_reps, 10) || null);
         const rpe = rec ? rec.rpe ?? null : d ? d.rpe ?? null : null;
-        if (done) {
+        const type = rec ? rec.type || null : d ? d.type || null : null;
+        if (done && type !== 'warmup') {
           totalVol += setVolume(rec);
           doneSets++;
         }
-        lastVals = { kg: kg ?? phKg, reps: reps ?? phReps };
+        if (type !== 'warmup') lastVals = { kg: kg ?? phKg, reps: reps ?? phReps };
         // Drop set devamları: kayıttan, yoksa taslaktan
         const drops = rec && rec.drops ? rec.drops : d && d.drops ? d.drops : [];
         let pw = kg ?? phKg;
@@ -153,12 +163,26 @@ export async function render(root, params = {}) {
           pr = r2.reps ?? r2.phReps;
           return r2;
         });
-        row = { n, rec, prevTxt: p ? `${kgTxt(p.weight_kg)} × ${p.reps}${dropsOf(p).length ? ' ↓' : ''}` : '–', kg, reps, phKg, phReps, rpe, done, key, drops: dropRows };
+        row = { n, rec, prevTxt: p ? `${kgTxt(p.weight_kg)} × ${p.reps}${dropsOf(p).length ? ' ↓' : ''}` : '–', kg, reps, phKg, phReps, rpe, done, key, drops: dropRows, type, pr: rec && rec.pr ? rec.pr : null };
       }
       rows.push(row);
     }
     const activeN = state.active[`${ex.id}|${date}`] ?? (rows.find((r) => !r.done) || {}).n;
     cards.push({ it, ex, cardio, rows, activeN, prev, sug, target });
+  }
+  // Süperset grupları: rutinde "sonrakiyle süperset" işaretli hareketler art arda bağlanır
+  {
+    let g = null;
+    let letter = 0;
+    cards.forEach((c, i) => {
+      const linkedPrev = i > 0 && cards[i - 1].it.pe && cards[i - 1].it.pe.superset;
+      if (linkedPrev && g) g.push(c);
+      else g = [c];
+      c.ssGroup = g;
+      if (c.it.pe && c.it.pe.superset && !linkedPrev) c.ssLetter = String.fromCharCode(65 + letter++);
+      else if (linkedPrev) c.ssLetter = cards[i - 1].ssLetter;
+    });
+    for (const c of cards) if (c.ssGroup.length < 2) c.ssGroup = null;
   }
   // Düzenleme kutuları yalnızca üzerinde çalışılan harekette açık olsun (ilk yarım kalan hareket)
   state.focus = state.focus || {};
@@ -170,13 +194,15 @@ export async function render(root, params = {}) {
   const title = day ? (day.rest ? 'Dinlenme' : day.title || WD_LONG[state.wd]) : 'Antrenman';
   const summary = [doneSets ? `${doneSets} set · ${fmt(totalVol)} kg hacim` : '', cardioMin ? `${fmt(cardioMin)} dk kardiyo` : ''].filter(Boolean).join(' · ');
 
-  const weightRows = (c) =>
-    c.rows
+  const weightRows = (c) => {
+    let wn = 0;
+    return c.rows
       .map((r) => {
+        const lbl = r.type === 'warmup' ? '<span class="st-w">Is</span>' : ++wn;
         const active = r.n === c.activeN && !r.done;
         return `
       <div class="set-grid set-row ${r.done ? 'done' : ''} ${active ? 'active' : ''} ${r.drops.length ? 'has-drop' : ''}" data-act="pick" data-ex="${c.ex.id}" data-n="${r.n}" role="group" aria-label="Set ${r.n}${r.drops.length ? ', drop set' : ''}">
-        <span class="n">${r.n}${r.drops.length ? '<small class="ds-tag">DS</small>' : ''}</span>
+        <span class="n">${lbl}${r.drops.length ? '<small class="ds-tag">DS</small>' : r.type === 'failure' ? '<small class="ds-tag">T</small>' : ''}${r.pr ? '<small class="pr-tag">PR</small>' : ''}</span>
         <span class="prev">${esc(r.prevTxt)}</span>
         <span class="v ${r.kg == null ? 'ph' : ''}">${kgTxt(r.kg ?? r.phKg)}</span>
         <span class="v ${r.reps == null ? 'ph' : ''}">${r.reps ?? r.phReps ?? '–'}${r.rpe ? `<small class="rpe-tag">@${r.rpe}</small>` : ''}</span>
@@ -204,6 +230,11 @@ export async function render(root, params = {}) {
             <div class="stepper"><button type="button" aria-label="Tekrarı azalt" data-act="reps" data-d="-1" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
             <input id="rp-${c.ex.id}" inputmode="numeric" value="${r.reps ?? ''}" data-in="reps" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phReps ?? '0'}">
             <button type="button" aria-label="Tekrarı artır" data-act="reps" data-d="1" data-ex="${c.ex.id}" data-n="${r.n}">+</button></div></div>
+          <div class="stype-row" role="radiogroup" aria-label="Set türü">
+            ${[['normal', 'Normal'], ['warmup', 'Isınma'], ['failure', 'Tükeniş']]
+              .map(([v, l]) => `<button type="button" class="tog sm" role="radio" aria-checked="${(r.type || 'normal') === v}" aria-pressed="${(r.type || 'normal') === v}" data-act="stype" data-v="${v}" data-ex="${c.ex.id}" data-n="${r.n}">${l}</button>`)
+              .join('')}
+          </div>
           <div class="rpe-row" role="group" aria-label="RPE (zorluk, isteğe bağlı)">
             <span class="rpe-lbl">RPE</span>
             ${[6, 7, 8, 9, 10]
@@ -236,6 +267,7 @@ export async function render(root, params = {}) {
       }`;
       })
       .join('');
+  };
 
   const cardioRows = (c) =>
     c.rows
@@ -337,12 +369,15 @@ export async function render(root, params = {}) {
     ${cards
       .map(
         (c) => `
-      <section class="card ex-card" data-ex="${c.ex.id}" aria-label="${esc(c.ex.name)}" style="padding:10px 12px 12px">
+      <section class="card ex-card${c.ssGroup ? ' ss' : ''}${c.ssGroup && c.ssGroup[0] !== c ? ' ss-cont' : ''}${c.ssGroup && c.ssGroup[c.ssGroup.length - 1] !== c ? ' ss-next' : ''}" data-ex="${c.ex.id}" aria-label="${esc(c.ex.name)}" style="padding:10px 12px 12px">
+        ${c.ssGroup ? `<span class="ss-tag">Süperset ${c.ssLetter || ''}${c.ssGroup.indexOf(c) + 1}</span>` : ''}
         <div class="ex-head">
           <button type="button" style="display:flex;flex-direction:column;align-items:flex-start;min-height:44px;justify-content:center;text-align:left" data-act="history" data-ex="${c.ex.id}">
             <span class="ex-name">${esc(c.ex.name)}</span>
             <span class="ex-meta">${c.target ? `Hedef ${c.target} × ${esc(c.it.pe.target_reps || '?')}` : c.it.extra ? 'Program dışı' : ''}${c.prev ? ` · son: ${esc(trDate(c.prev.date))}` : ''}</span>
+            ${c.cardio ? '' : musclesShort(c.ex)}
           </button>
+          ${c.cardio ? '' : `<button type="button" class="warm-btn" data-act="warmup" data-ex="${c.ex.id}" aria-label="${esc(c.ex.name)} ısınma setleri">Isınma</button>`}
           <button type="button" class="icon-btn" style="background:transparent;color:var(--sub)" aria-label="${esc(c.ex.name)} geçmişi ve ilerleme" data-act="history" data-ex="${c.ex.id}">${icon.chart}</button>
         </div>
         ${
@@ -376,9 +411,9 @@ export async function render(root, params = {}) {
       state.drafts[row.key] = vals;
       if (row.rec) await db.put('workout_sets', { ...row.rec, duration_min: vals.min, distance_km: vals.km });
     } else {
-      const vals = { kg: row.kg, reps: row.reps, rpe: row.rpe, drops: row.drops.map((x) => ({ weight_kg: x.kg, reps: x.reps })), ...patch };
+      const vals = { kg: row.kg, reps: row.reps, rpe: row.rpe, type: row.type, drops: row.drops.map((x) => ({ weight_kg: x.kg, reps: x.reps })), ...patch };
       state.drafts[row.key] = vals;
-      if (row.rec) await db.put('workout_sets', { ...row.rec, weight_kg: vals.kg, reps: vals.reps, rpe: vals.rpe ?? null, drops: vals.drops && vals.drops.length ? vals.drops : null });
+      if (row.rec) await db.put('workout_sets', { ...row.rec, weight_kg: vals.kg, reps: vals.reps, rpe: vals.rpe ?? null, type: vals.type || null, drops: vals.drops && vals.drops.length ? vals.drops : null });
     }
   };
 
@@ -550,15 +585,50 @@ export async function render(root, params = {}) {
         if (kg == null || reps == null) return toast('Önce kilo ve tekrarı gir');
         // boş bırakılan drop kutularında gri öneri kaydedilir
         const drops = row.drops.map((x) => ({ weight_kg: x.kg ?? x.phKg, reps: x.reps ?? x.phReps })).filter((x) => x.weight_kg != null && x.reps);
-        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, weight_kg: kg, reps, rpe: row.rpe ?? null, drops: drops.length ? drops : null, done: true });
+        let saved = await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, weight_kg: kg, reps, rpe: row.rpe ?? null, type: row.type || null, drops: drops.length ? drops : null, done: true });
         delete state.active[`${exId}|${date}`];
-        if (isToday) {
+        // Rekor mu?
+        const prs = await prsFor(saved || { date, set_no: row.n, weight_kg: kg, reps, type: row.type }, exId);
+        if (prs.length && saved) {
+          saved = await db.put('workout_sets', { ...saved, pr: prs.map((x) => x.k) });
+          toast('Yeni rekor! ' + prs.map((x) => x.label).join(' · '), 4000);
+        }
+        // Süperset: sıradaki harekete geç; dinlenme grubun son hareketinden sonra başlar
+        let restNow = true;
+        if (c.ssGroup) {
+          const gi = c.ssGroup.indexOf(c);
+          const nextC = c.ssGroup[gi + 1];
+          const workN = c.rows.filter((x) => x.type !== 'warmup' && x.n <= row.n).length;
+          if (nextC && row.type !== 'warmup') {
+            const tgt = nextC.rows.filter((x) => x.type !== 'warmup')[workN - 1];
+            if (tgt && !tgt.done) {
+              state.focus[date] = nextC.ex.id;
+              state.active[`${nextC.ex.id}|${date}`] = tgt.n;
+              restNow = false;
+            }
+          } else if (gi > 0 && row.type !== 'warmup') {
+            const first = c.ssGroup[0];
+            const tgt = first.rows.filter((x) => x.type !== 'warmup' && !x.done)[0];
+            if (tgt) {
+              state.focus[date] = first.ex.id;
+              state.active[`${first.ex.id}|${date}`] = tgt.n;
+            }
+          }
+        }
+        if (isToday && restNow && row.type !== 'warmup') {
           rest.start(await db.getSetting('rest_seconds', 90));
           state.wakeWanted = true;
           requestWake();
         }
       }
       refresh();
+    } else if (act === 'stype') {
+      const row = rowOf(exId, b.dataset.n);
+      await saveRow(row, exId, { type: b.dataset.v === 'normal' ? null : b.dataset.v });
+      refresh();
+    } else if (act === 'warmup') {
+      const c = cardOf(exId);
+      openWarmup(c, date);
     } else if (act === 'drop-add' || act === 'drop-rm') {
       const row = rowOf(exId, b.dataset.n);
       const list = row.drops.map((x) => ({ weight_kg: x.kg, reps: x.reps }));
@@ -739,7 +809,7 @@ async function openProgramEditor(wd, routine = null, after = null) {
   let title = day?.title || '';
   let subtitle = day?.subtitle || '';
   let isRest = !!day?.rest;
-  let list = items.map((x) => ({ id: x.pe.id, exercise_id: x.exercise.id, name: x.exercise.name, sets: x.pe.target_sets ?? '', reps: x.pe.target_reps ?? '' }));
+  let list = items.map((x) => ({ id: x.pe.id, exercise_id: x.exercise.id, name: x.exercise.name, sets: x.pe.target_sets ?? '', reps: x.pe.target_reps ?? '', superset: !!x.pe.superset }));
   const removed = [];
   let saved = null;
 
@@ -760,7 +830,8 @@ async function openProgramEditor(wd, routine = null, after = null) {
         let ex = x.exercise_id ? { id: x.exercise_id } : await findOrCreateExercise(x.name, { cardio: x.muscle === 'Kardiyo' });
         if (!x.exercise_id && x.muscle && !ex.muscle) ex = await db.put('exercises', { ...ex, muscle: x.muscle, kind: x.muscle === 'Kardiyo' ? 'kardiyo' : 'agirlik' });
         const cardio = x.muscle === 'Kardiyo' || /dk/.test(String(x.reps));
-        await db.put('program_exercises', { ...(x.id ? { id: x.id } : {}), day_id: d.id, exercise_id: ex.id, order: order++, target_sets: Number(x.sets) || (cardio ? 1 : 3), target_reps: String(x.reps || '').trim() || (cardio ? '20 dk' : '8-12') });
+        const isLast = order === list.length - 1;
+        await db.put('program_exercises', { ...(x.id ? { id: x.id } : {}), day_id: d.id, exercise_id: ex.id, order: order++, target_sets: Number(x.sets) || (cardio ? 1 : 3), target_reps: String(x.reps || '').trim() || (cardio ? '20 dk' : '8-12'), superset: !isLast && !!x.superset });
       }
       saved = d;
       toast(isRoutine ? 'Rutin kaydedildi' : 'Program kaydedildi');
@@ -812,14 +883,19 @@ async function openProgramEditor(wd, routine = null, after = null) {
               <button type="button" class="icon-btn ed-ic" aria-label="Yukarı taşı" data-mv="-1" data-i="${i}" ${i === 0 ? 'disabled' : ''}>${icon.up}</button>
               <button type="button" class="icon-btn ed-ic" aria-label="Aşağı taşı" data-mv="1" data-i="${i}" ${i === list.length - 1 ? 'disabled' : ''}>${icon.down}</button>
               <button type="button" class="icon-btn ed-ic" style="color:var(--warn)" aria-label="${esc(x.name)} çıkar" data-rm="${i}">${icon.trash}</button>
-            </div>`
+            </div>
+            ${
+              i < list.length - 1
+                ? `<button type="button" class="ss-link${x.superset ? ' on' : ''}" data-ss="${i}" aria-pressed="${!!x.superset}">${x.superset ? '⛓ Süperset: bu iki hareket art arda, arada dinlenme yok' : '+ Sonrakiyle süperset yap'}</button>`
+                : ''
+            }`
                 )
                 .join('')
             : '<div class="empty">Henüz egzersiz yok</div>'
         }
       </div>
       <button type="button" class="btn primary block" data-add>+ Hareket ekle</button>
-      <p class="small muted" style="margin:10px 4px 0">Set × tekrar boş kalırsa 3 × 8-12 kabul edilir. Örnekler: 4 × 8, 5 × 5. Kardiyo için tekrar yerine süre yazabilirsin (örn. 20 dk).</p>
+      <p class="small muted" style="margin:10px 4px 0">Süperset yaptığın hareketlerde biri bitince sıradakine geçilir; dinlenme sayacı grubun son hareketinden sonra başlar. Set × tekrar boş kalırsa 3 × 8-12 kabul edilir. Örnekler: 4 × 8, 5 × 5. Kardiyo için tekrar yerine süre yazabilirsin (örn. 20 dk).</p>
       ${isRoutine && day ? '<button type="button" class="btn danger block" data-del-routine style="margin-top:12px;background:var(--card)">Rutini sil</button>' : ''}`
       }`);
     const restSw = s.el.querySelector('#pd-rest');
@@ -840,6 +916,11 @@ async function openProgramEditor(wd, routine = null, after = null) {
       const j = i + Number(b.dataset.mv);
       if (j < 0 || j >= list.length) return;
       [list[i], list[j]] = [list[j], list[i]];
+      draw();
+    } else if (b.dataset.ss) {
+      syncInputs();
+      const i = Number(b.dataset.ss);
+      list[i].superset = !list[i].superset;
       draw();
     } else if (b.dataset.rm) {
       syncInputs();
@@ -912,7 +993,7 @@ function pickExercises() {
           ? hits
               .map(
                 (x) => `<button type="button" class="row" data-name="${esc(x.name)}" aria-pressed="${picked.has(x.name)}">
-                  <span class="row-main"><span class="row-title normal">${esc(x.name)}</span><span class="row-sub">${esc(x.muscle || 'Kas grubu yok')}${x.mine ? ' · senin' : ''}</span></span>
+                  <span class="row-main"><span class="row-title normal">${esc(x.name)}</span><span class="row-sub">${esc(musclesText(x) || x.muscle || 'Kas grubu yok')}${x.mine ? ' · senin' : ''}</span></span>
                   <span class="check" aria-hidden="true">${icon.check}</span></button>`
               )
               .join('')
@@ -954,6 +1035,91 @@ function pickExercises() {
 }
 
 // ---------- Egzersiz geçmişi ----------
+// Hareketin çalıştırdığı kaslar (kısa yazı)
+function musclesText(ex) {
+  const m = musclesOf(ex);
+  if (!m.primary.length) return '';
+  return m.primary.map(regionLabel).join(', ') + (m.secondary.length ? ' · ' + m.secondary.map(regionLabel).join(', ').toLocaleLowerCase('tr-TR') : '');
+}
+function musclesShort(ex) {
+  const m = musclesOf(ex);
+  if (!m.primary.length) return '';
+  return `<span class="mus-line"><b>${esc(m.primary.map(regionLabel).join(', '))}</b>${m.secondary.length ? ' + ' + esc(m.secondary.slice(0, 3).map(regionLabel).join(', ').toLocaleLowerCase('tr-TR')) : ''}</span>`;
+}
+
+// Isınma setleri: çalışma ağırlığının %40-60-80'i (barla başlayarak)
+function warmupPlan(w, barbell) {
+  if (!(w > 0)) return [];
+  const r = (x) => Math.round(x / 2.5) * 2.5;
+  const out = [];
+  if (barbell && w > 30) out.push({ weight_kg: 20, reps: 10 });
+  for (const [p, reps] of [[0.4, 8], [0.6, 5], [0.8, 3]]) {
+    const x = r(w * p);
+    if (x > 0 && x < w && !out.some((o) => o.weight_kg === x) && (!barbell || x > 20)) out.push({ weight_kg: x, reps });
+  }
+  return out;
+}
+function openWarmup(c, date) {
+  const working = c.rows.find((r) => r.type !== 'warmup');
+  let w = (c.sug && c.sug.weight_kg) || (working && (working.kg ?? working.phKg)) || null;
+  let bar = /barbell|bench press|squat|deadlift|overhead press|row|ez-bar|skull|good morning|hip thrust|rack pull|push press|front squat|clean/i.test(c.ex.name) && !/dumbbell|dambıl|makine|machine|cable|smith|hammer strength/i.test(c.ex.name);
+  const existing = c.rows.filter((r) => r.type === 'warmup').length;
+  const s = openSheet({ title: 'Isınma setleri', size: 'auto', body: '' });
+  const draw = () => {
+    const plan = warmupPlan(w, bar);
+    s.setBody(`
+      <section class="card">
+        <div class="field"><label for="wu-w">Çalışma ağırlığın (kg)</label>
+          <input id="wu-w" class="input" inputmode="decimal" value="${w ? kgTxt(w) : ''}" placeholder="Örn. 80"></div>
+        <div class="kv" style="border-top:0"><label class="k" for="wu-bar">Olimpik bar (20 kg) ile</label><span class="switch"><input id="wu-bar" type="checkbox" ${bar ? 'checked' : ''}><span></span></span></div>
+      </section>
+      ${
+        plan.length
+          ? `<section class="card flush">${plan
+              .map((x, i) => `<div class="row"><span class="st-w" style="width:28px">Is</span><span class="row-main"><span class="row-title normal">${i + 1}. ısınma</span></span><span class="row-end">${kgTxt(x.weight_kg)} kg × ${x.reps}</span></div>`)
+              .join('')}</section>
+             <button type="button" class="btn primary block" data-wu-add>${plan.length} ısınma setini ekle</button>`
+          : '<p class="small muted" style="margin:4px">Çalışma ağırlığını girince ısınma setleri hesaplanır.</p>'
+      }
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Isınma setleri hacme, rekorlara ve kas haritasına sayılmaz. Ağır setten önce eklemleri ve kasları hazırlamak içindir; yorulana kadar yapma.${existing ? ` Bu harekette zaten ${existing} ısınma seti var.` : ''}</p>`);
+    s.el.querySelector('#wu-w').addEventListener('change', (e) => {
+      const v = parseNum(e.target.value);
+      w = isNaN(v) ? null : v;
+      draw();
+    });
+    s.el.querySelector('#wu-bar').addEventListener('change', (e) => {
+      bar = e.target.checked;
+      draw();
+    });
+    const add = s.el.querySelector('[data-wu-add]');
+    if (add)
+      add.addEventListener('click', async () => {
+        if (add.disabled) return;
+        add.disabled = true;
+        const plan2 = warmupPlan(w, bar);
+        const k = plan2.length;
+        // mevcut setleri aşağı kaydır, ısınmaları başa ekle
+        const sets = (await db.list('workout_sets', (x) => x.date === date && x.exercise_id === c.ex.id)).sort((a, b) => b.set_no - a.set_no);
+        for (const x of sets) await db.put('workout_sets', { ...x, set_no: x.set_no + k });
+        const pre = `${c.ex.id}|${date}|`;
+        const moved = {};
+        for (const [key, v] of Object.entries(state.drafts)) {
+          if (!key.startsWith(pre)) continue;
+          moved[pre + (Number(key.slice(pre.length)) + k)] = v;
+          delete state.drafts[key];
+        }
+        Object.assign(state.drafts, moved);
+        for (let i = 0; i < k; i++) await db.put('workout_sets', { date, exercise_id: c.ex.id, set_no: i + 1, weight_kg: plan2[i].weight_kg, reps: plan2[i].reps, type: 'warmup', done: false });
+        state.focus[date] = c.ex.id;
+        state.active[`${c.ex.id}|${date}`] = 1;
+        s.close();
+        toast(`${k} ısınma seti eklendi`);
+        refresh();
+      });
+  };
+  draw();
+}
+
 async function openHistory(ex) {
   if (!ex) return;
   const sets = (await db.list('workout_sets', (s) => s.exercise_id === ex.id && s.done)).sort((a, b) => a.date.localeCompare(b.date) || a.set_no - b.set_no);
@@ -962,7 +1128,43 @@ async function openHistory(ex) {
   const dates = Object.keys(byDate).sort();
   const muscleField = `<div class="field" style="margin-top:12px"><label for="ex-muscle">Kas grubu</label>
     <select id="ex-muscle" class="input">${['', ...MUSCLES].map((m) => `<option value="${esc(m)}" ${(ex.muscle || '') === m ? 'selected' : ''}>${m ? esc(m) : 'Seçilmedi'}</option>`).join('')}</select></div>`;
+  // Çalıştırdığı kaslar: harita + düzenlenebilir bölge listesi (dokun: birincil → ikincil → yok)
+  let mus = musclesOf(ex);
+  const musVals = () => Object.fromEntries([...mus.primary.map((k) => [k, 2]), ...mus.secondary.map((k) => [k, 1])]);
+  const musCard = () => `<div class="card" id="mus-card">
+      <span class="small muted">Çalıştırdığı kaslar</span>
+      ${bodyMapSVG(musVals(), { mode: 'exercise' })}
+      <p class="mus-line" style="margin:8px 0 0">${mus.primary.length ? `<b>Birincil:</b> ${esc(mus.primary.map(regionLabel).join(', '))}` : 'Kas bilgisi yok'}${mus.secondary.length ? `<br><b>Yardımcı:</b> ${esc(mus.secondary.map(regionLabel).join(', '))}` : ''}</p>
+      <details class="mus-edit"><summary>Kasları düzenle</summary>
+        <p class="small muted" style="margin:6px 0 8px">Dokundukça değişir: birincil → yardımcı → yok. Kendi makinen farklı çalışıyorsa buradan ayarla.</p>
+        <div class="toggle-row">${Object.entries(REGIONS)
+          .map(([k, r]) => {
+            const v = mus.primary.includes(k) ? 2 : mus.secondary.includes(k) ? 1 : 0;
+            return `<button type="button" class="tog sm mus-t mus-v${v}" data-mus="${k}">${esc(r.label)}</button>`;
+          })
+          .join('')}</div>
+      </details></div>`;
+  const bindMus = (sh) => {
+    sh.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-mus]');
+      if (!b) return;
+      const k = b.dataset.mus;
+      const v = mus.primary.includes(k) ? 2 : mus.secondary.includes(k) ? 1 : 0;
+      const nv = v === 0 ? 2 : v === 2 ? 1 : 0;
+      mus = { primary: mus.primary.filter((x) => x !== k), secondary: mus.secondary.filter((x) => x !== k) };
+      if (nv === 2) mus.primary.push(k);
+      if (nv === 1) mus.secondary.push(k);
+      const cur = await db.get('exercises', ex.id);
+      if (cur) await db.put('exercises', { ...cur, muscles: mus });
+      ex.muscles = mus;
+      const box = sh.el.querySelector('#mus-card');
+      const open = box.querySelector('details').open;
+      box.outerHTML = musCard();
+      sh.el.querySelector('#mus-card details').open = open;
+    });
+  };
   const bindMuscle = (sh) => {
+    bindMus(sh);
     const sel = sh.el.querySelector('#ex-muscle');
     if (sel)
       sel.addEventListener('change', async () => {
@@ -995,19 +1197,21 @@ async function openHistory(ex) {
     bindMuscle(sh);
     return;
   }
-  const e1rm = (s) => (s.reps > 0 ? s.weight_kg * (1 + Math.min(s.reps, 12) / 30) : 0);
+  const e1rm = (s) => (isWarmup(s) ? 0 : e1rmOf(s));
   const points = dates.slice(-10).map((d) => {
     const best = Math.max(...byDate[d].map(e1rm));
     const dt = parseDate(d);
     return { label: `${dt.getDate()} ${MONTHS_SHORT[dt.getMonth()]}`, value: round1(best) };
   });
-  const maxW = sets.reduce((m, s) => Math.max(m, s.weight_kg || 0), 0);
-  const prSet = sets.filter((s) => s.weight_kg === maxW).sort((a, b) => b.reps - a.reps)[0];
+  const work = sets.filter((s) => !isWarmup(s));
+  const maxW = work.reduce((m, s) => Math.max(m, s.weight_kg || 0), 0);
+  const prSet = work.filter((s) => s.weight_kg === maxW).sort((a, b) => b.reps - a.reps)[0];
   const bestE = sets.reduce((m, s) => Math.max(m, e1rm(s)), 0);
   const sh = openSheet({
     title: ex.name,
     body: dates.length
       ? `
+      ${musCard()}
       <div class="card stat3" style="display:grid">
         <div><b>${prSet ? kgTxt(prSet.weight_kg) : '–'}</b><span>en ağır (kg)${prSet ? ` × ${prSet.reps}` : ''}</span></div>
         <div><b>${kgTxt(round1(bestE))}</b><span>tahmini 1RM</span></div>
@@ -1021,11 +1225,11 @@ async function openHistory(ex) {
           .reverse()
           .slice(0, 20)
           .map((d) => `<div class="row"><span class="row-main"><span class="row-title normal">${esc(trDate(d, true))}</span>
-            <span class="row-sub num">${byDate[d].map((s) => `${kgTxt(s.weight_kg)}×${s.reps}${s.rpe ? ' @' + s.rpe : ''}${dropsOf(s).map((x) => ` ↓${kgTxt(x.weight_kg)}×${x.reps}`).join('')}`).join(' · ')}</span></span></div>`)
+            <span class="row-sub num">${byDate[d].map((s) => `${isWarmup(s) ? 'ısınma ' : ''}${kgTxt(s.weight_kg)}×${s.reps}${s.rpe ? ' @' + s.rpe : ''}${s.type === 'failure' ? ' (T)' : ''}${dropsOf(s).map((x) => ` ↓${kgTxt(x.weight_kg)}×${x.reps}`).join('')}${s.pr ? ' PR' : ''}`).join(' · ')}</span></span></div>`)
           .join('')}
       </div>
       <p class="small muted" style="margin:8px 4px 0">Tahmini 1RM, Epley formülüyle en iyi setinden hesaplanır; drop devamları (↓) hesaba katılmaz ama hacme eklenir.</p>${muscleField}`
-      : `<div class="empty">Bu egzersiz için henüz kayıtlı set yok.</div>${muscleField}`,
+      : `${musCard()}<div class="empty">Bu egzersiz için henüz kayıtlı set yok.</div>${muscleField}`,
   });
   bindMuscle(sh);
 }

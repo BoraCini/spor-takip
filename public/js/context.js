@@ -3,6 +3,7 @@ import * as db from './db.js';
 import { today, weekday, addDays, daysBetween, WD_LONG, round1, weekStart as weekStartOf } from './util.js';
 import { classify } from './data/labs.js';
 import { EXERCISE_PRESETS } from './data/exercises.js';
+import { musclesOf, REGIONS } from './data/muscles.js';
 
 export const MEALS = [
   ['kahvalti', 'Kahvaltı'],
@@ -42,13 +43,15 @@ export function targetsOf(p) {
 
 // ---------- Antrenman ----------
 // Drop set: ana setin ardından dinlenmeden yapılan düşük ağırlıklı devamlar → set.drops = [{ weight_kg, reps }]
+export const isWarmup = (s) => !!s && s.type === 'warmup';
+export const SET_TYPES = { warmup: 'Isınma', failure: 'Tükeniş' };
 export const dropsOf = (s) => (Array.isArray(s && s.drops) ? s.drops.filter((d) => d && (d.weight_kg != null || d.reps != null)) : []);
 export function setVolume(s) {
   return (Number(s.weight_kg) || 0) * (Number(s.reps) || 0) + dropsOf(s).reduce((a, d) => a + (Number(d.weight_kg) || 0) * (Number(d.reps) || 0), 0);
 }
 export function dropText(s) {
   const d = dropsOf(s);
-  return d.length ? ' → ' + d.map((x) => `${x.weight_kg}kg×${x.reps}`).join(' → ') + ' (drop set)' : '';
+  return (d.length ? ' → ' + d.map((x) => `${x.weight_kg}kg×${x.reps}`).join(' → ') + ' (drop set)' : '') + (s.type === 'warmup' ? ' (ısınma)' : s.type === 'failure' ? ' (tükenişe kadar)' : '');
 }
 export async function programDay(wd) {
   const days = await db.list('program_days', (d) => d.weekday === wd);
@@ -149,7 +152,7 @@ export function parseRepRange(txt) {
 export function suggestNext(ex, pe, prev) {
   if (!prev || !prev.sets.length || isCardio(ex)) return null;
   const range = parseRepRange(pe?.target_reps);
-  const work = prev.sets.filter((s) => s.weight_kg > 0 && s.reps > 0);
+  const work = prev.sets.filter((s) => s.weight_kg > 0 && s.reps > 0 && !isWarmup(s));
   if (!work.length) return null;
   const topW = Math.max(...work.map((s) => s.weight_kg));
   const top = work.filter((s) => s.weight_kg === topW);
@@ -202,7 +205,7 @@ export async function weeklySummary(ws) {
   }
   const dlist = Object.values(days);
   const avg = (k) => (dlist.length ? Math.round(dlist.reduce((s, d) => s + d[k], 0) / dlist.length) : 0);
-  const sets = await db.list('workout_sets', (s) => s.done && inWeek(s.date));
+  const sets = await db.list('workout_sets', (s) => s.done && inWeek(s.date) && !isWarmup(s));
   const exs = await db.list('exercises');
   const byMuscle = {};
   let volume = 0;
@@ -372,6 +375,22 @@ export async function buildContext() {
   const notes = await db.list('coach_notes');
   const thisWeek = await weeklySummary(weekStartOf(t));
   const lastWeek = await weeklySummary(addDays(weekStartOf(t), -7));
+  // Yeni özetler: kilo eğilimi, gerçek harcama, kas bölgeleri, tansiyon, aylık rapor, stok, sonraki tahlil
+  const trAll = weightTrend(await db.list('body_logs'));
+  const trLast = trAll[trAll.length - 1];
+  const adapt = await adaptiveExpenditure(21, t);
+  const regWeek = await regionSets(weekStartOf(t), addDays(weekStartOf(t), 6));
+  const vitals = (await db.list('vitals')).sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || ''))).slice(0, 10);
+  const mThis = await monthlyReport(t.slice(0, 7));
+  const pm = Number(t.slice(5, 7));
+  const mPrev = await monthlyReport(pm === 1 ? `${Number(t.slice(0, 4)) - 1}-12` : `${t.slice(0, 4)}-${String(pm - 1).padStart(2, '0')}`);
+  const compactMonth = (r) => ({ ay: r.ym, antrenman: r.training.sessions, calisma_seti: r.training.sets, hacim_kg: r.training.volume_kg, rekorlar: r.training.prs.map((x) => `${x.ex}: ${x.labels.join(', ')}`).slice(-10), kilo_egilimi: r.weight, beslenme: r.nutrition, doz_uyumu: r.doses, tansiyon_ort: r.vitals });
+  const stocks = [];
+  for (const c of allComps.filter((x) => x.active !== false)) {
+    const si = await stockInfo(c);
+    if (si) stocks.push(`${c.name}: ${si.left} ${si.unit} kaldı${si.daysLeft != null ? `, yaklaşık ${si.daysLeft} gün` : ''}`);
+  }
+  const nextLab = await db.getSetting('next_lab_date');
 
   return {
     bugun: `${t} (${WD_LONG[weekday(t)]})`,
@@ -463,8 +482,26 @@ export async function buildContext() {
     vucut_olculeri: measures.map((m) => ({ tarih: m.date, ...Object.fromEntries(MEASURES.filter(([k]) => m[k] != null).map(([k, l, u]) => [l, `${m[k]} ${u}`])) })),
     bu_hafta_ozet: thisWeek,
     gecen_hafta_ozet: lastWeek,
+    kilo_egilimi: trLast ? { egilim_kg: trLast.trend, son_tarti: trLast.weight, haftalik_degisim_kg: trendRate(trAll, 14) } : null,
+    gercek_harcama_tahmini: adapt.ready ? { kcal: adapt.tdee, ort_alinan_kcal: adapt.avg_intake, haftalik_kilo_degisimi: adapt.rate_kg_week, guven: adapt.confidence, gun: adapt.days } : `yetersiz veri (${adapt.logged_days} kayıtlı gün, ${adapt.weigh_ins} tartı)`,
+    bu_hafta_kas_bolgesi_setleri: Object.fromEntries(Object.entries(regWeek).filter(([, v]) => v > 0).map(([k, v]) => [REGIONS[k].label, v])),
+    tansiyon_nabiz_son: vitals.map((v) => `${v.date}${v.time ? ' ' + v.time : ''}: ${v.sys && v.dia ? v.sys + '/' + v.dia + ' mmHg' : ''}${v.hr ? ' nabız ' + v.hr : ''}`),
+    aylik_ozet: { bu_ay: compactMonth(mThis), gecen_ay: compactMonth(mPrev) },
+    stok_durumu: stocks,
+    sonraki_tahlil: nextLab || null,
     danisman_notlari: notes.map((n) => ({ id: n.id, not: n.text })),
   };
+}
+
+// Harcamadan dönem hedefine göre kalori ve makrolar
+export function macrosFor(p, tdee) {
+  const w = Number(p.weight_kg) || 75;
+  const phase = p.phase || 'koruma';
+  const kcal = Math.round((tdee + (phase === 'bulk' ? 300 : phase === 'cut' ? -500 : 0)) / 10) * 10;
+  const protein = Math.round(w * (phase === 'cut' ? 2.2 : 2.0));
+  const fat = Math.round(Math.max(w * 0.9, (kcal * 0.25) / 9));
+  const carb = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
+  return { kcal, protein, carb, fat, tdee: Math.round(tdee) };
 }
 
 // ---------- Enerji harcaması (detaylı aktivite) ----------
@@ -508,4 +545,184 @@ export function energyBreakdown(p) {
   const factor = tdee / bmr;
   const label = factor < 1.3 ? 'Hareketsiz' : factor < 1.45 ? 'Hafif aktif' : factor < 1.62 ? 'Orta aktif' : factor < 1.8 ? 'Çok aktif' : 'Aşırı aktif';
   return { bmr: Math.round(bmr), life: Math.round(life - bmr), steps: Math.round(steps), train: Math.round(train), cardio: Math.round(cardio), tdee: Math.round(tdee), factor: Math.round(factor * 1000) / 1000, label, act: a };
+}
+
+
+// ---------- Rekorlar ----------
+const trNum = (v) => String(round1(v)).replace('.', ',');
+export const e1rmOf = (s) => (s && s.reps > 0 && s.weight_kg > 0 ? s.weight_kg * (1 + Math.min(s.reps, 12) / 30) : 0);
+// Bir set, daha önceki tüm setlere göre rekor mu? (ısınmalar ve ilk kayıt sayılmaz)
+export async function prsFor(set, exerciseId) {
+  if (!set || isWarmup(set) || !(set.weight_kg > 0) || !(set.reps > 0)) return [];
+  const hist = await db.list('workout_sets', (x) => x.exercise_id === exerciseId && x.done && !isWarmup(x) && x.id !== set.id && (x.date < set.date || (x.date === set.date && x.set_no < set.set_no)));
+  if (!hist.length) return [];
+  const out = [];
+  const maxW = Math.max(...hist.map((x) => x.weight_kg || 0));
+  const maxE = Math.max(...hist.map(e1rmOf));
+  const maxV = Math.max(...hist.map((x) => (x.weight_kg || 0) * (x.reps || 0)));
+  if (set.weight_kg > maxW) out.push({ k: 'agir', label: `En ağır: ${trNum(set.weight_kg)} kg` });
+  if (e1rmOf(set) > maxE + 0.05) out.push({ k: '1rm', label: `Tahmini 1RM: ${trNum(e1rmOf(set))} kg` });
+  if (set.weight_kg * set.reps > maxV && !out.length) out.push({ k: 'hacim', label: `En yüksek set hacmi: ${Math.round(set.weight_kg * set.reps)} kg` });
+  return out;
+}
+
+// ---------- Kas bölgeleri ----------
+// Tarih aralığında bölge başına set: birincil 1, ikincil 0,5 (ısınma ve kardiyo hariç)
+export async function regionSets(from, to) {
+  const sets = await db.list('workout_sets', (s) => s.done && s.date >= from && s.date <= to && !isWarmup(s));
+  const exs = await db.list('exercises');
+  const out = {};
+  for (const k of Object.keys(REGIONS)) out[k] = 0;
+  for (const s of sets) {
+    const ex = exs.find((e) => e.id === s.exercise_id);
+    if (!ex || isCardio(ex)) continue;
+    const m = musclesOf(ex);
+    for (const r of m.primary) out[r] = (out[r] || 0) + 1;
+    for (const r of m.secondary) out[r] = (out[r] || 0) + 0.5;
+  }
+  return out;
+}
+
+// ---------- Kilo trendi ----------
+// Günlük tartılar suyla, tuzla dalgalanır; üstel ortalama (günde ~%10 ağırlık) gerçek eğilimi gösterir
+export function weightTrend(logs) {
+  const ws = logs.filter((w) => w.weight_kg > 0).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const out = [];
+  let tr = null;
+  let last = null;
+  for (const w of ws) {
+    if (tr == null) tr = w.weight_kg;
+    else {
+      const gap = Math.max(1, daysBetween(last, w.date));
+      const a = 1 - Math.pow(0.9, gap);
+      tr = tr + a * (w.weight_kg - tr);
+    }
+    last = w.date;
+    out.push({ date: w.date, weight: w.weight_kg, trend: Math.round(tr * 100) / 100 });
+  }
+  return out;
+}
+// Son N gündeki trend değişimi (kg/hafta)
+export function trendRate(trend, days = 14) {
+  if (trend.length < 2) return null;
+  const end = trend[trend.length - 1];
+  const startDate = addDays(end.date, -days);
+  const start = trend.filter((x) => x.date <= startDate).pop() || trend[0];
+  const span = daysBetween(start.date, end.date);
+  if (span < 6) return null;
+  return Math.round(((end.trend - start.trend) / span) * 7 * 100) / 100;
+}
+
+// ---------- Gerçek harcama (yediklerin + kilo trendinden) ----------
+// harcama ≈ ortalama alınan kcal − (trend kilo değişimi × 7700 / gün)
+export async function adaptiveExpenditure(days = 21, end = today()) {
+  const start = addDays(end, -(days - 1));
+  const food = await db.list('food_logs', (f) => f.date >= start && f.date <= end);
+  const byDay = {};
+  for (const f of food) byDay[f.date] = (byDay[f.date] || 0) + (Number(f.kcal) || 0);
+  // çok düşük kayıtlı günler (ör. sadece bir kahve) eksik kayıt sayılır
+  const logged = Object.entries(byDay).filter(([, k]) => k >= 800);
+  const weights = await db.list('body_logs', (b) => b.date >= addDays(start, -10) && b.date <= end);
+  const tr = weightTrend(weights);
+  const inWin = tr.filter((x) => x.date >= start);
+  const res = { days, logged_days: logged.length, weigh_ins: inWin.length, ready: false };
+  if (logged.length < 10 || inWin.length < 5) return res;
+  const avgIn = logged.reduce((a, [, k]) => a + k, 0) / logged.length;
+  const first = tr.filter((x) => x.date <= start).pop() || inWin[0];
+  const last = inWin[inWin.length - 1];
+  const span = Math.max(7, daysBetween(first.date, last.date));
+  const dKg = last.trend - first.trend;
+  const tdee = avgIn - (dKg * 7700) / span;
+  const conf = logged.length >= days * 0.85 && inWin.length >= days * 0.5 ? 'yüksek' : logged.length >= days * 0.6 ? 'orta' : 'düşük';
+  return { ...res, ready: true, avg_intake: Math.round(avgIn), trend_change_kg: Math.round(dKg * 100) / 100, rate_kg_week: Math.round((dKg / span) * 7 * 100) / 100, tdee: Math.round(tdee / 10) * 10, confidence: conf };
+}
+
+// ---------- Tansiyon / nabız ----------
+// ACC/AHA 2017 sınıflaması (bilgi amaçlı)
+export function bpCategory(sys, dia) {
+  if (!sys || !dia) return null;
+  if (sys > 180 || dia > 120) return { k: 'kriz', label: 'Çok yüksek', warn: true };
+  if (sys >= 140 || dia >= 90) return { k: 'evre2', label: 'Yüksek (evre 2)', warn: true };
+  if (sys >= 130 || dia >= 80) return { k: 'evre1', label: 'Yüksek (evre 1)', warn: true };
+  if (sys >= 120) return { k: 'yuksek', label: 'Normalin üstü', warn: false };
+  return { k: 'normal', label: 'Normal', warn: false };
+}
+
+// ---------- Stok ----------
+// compound.stock = { amount, date } (doz birimiyle). Tarihten bu yana işaretlenen dozlar düşülür.
+export async function stockInfo(c) {
+  const st = c && c.stock;
+  if (!st || !(Number(st.amount) >= 0) || !st.date) return null;
+  const per = Number(c.dose_amount) || 1;
+  const store = c.kind === 'enjeksiyon' ? 'injection_logs' : 'dose_logs';
+  const used = (await db.list(store, (l) => l.compound_id === c.id && (st.at ? (l.created_at || '') > st.at : l.date >= st.date))).length * per;
+  const left = Math.max(0, Number(st.amount) - used);
+  const days = Array.isArray(c.days) && c.days.length ? c.days.length : 7;
+  const slots = c.kind === 'enjeksiyon' ? 1 : (Array.isArray(c.times) && c.times.length ? c.times.length : 1);
+  const perDay = (days / 7) * slots * per;
+  const daysLeft = perDay > 0 ? Math.floor(left / perDay) : null;
+  return { left: Math.round(left * 100) / 100, unit: c.dose_unit || '', daysLeft, low: daysLeft != null && daysLeft <= 7 };
+}
+
+// ---------- Aylık rapor ----------
+export async function monthlyReport(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const start = `${ym}-01`;
+  const endD = m === 12 ? `${y}-12-31` : addDays(`${y}-${String(m + 1).padStart(2, '0')}-01`, -1);
+  const inM = (d) => d >= start && d <= endD;
+  const sets = await db.list('workout_sets', (s) => s.done && inM(s.date));
+  const exs = await db.list('exercises');
+  const work = sets.filter((s) => !isWarmup(s) && !isCardio(exs.find((e) => e.id === s.exercise_id)));
+  const cardio = sets.filter((s) => isCardio(exs.find((e) => e.id === s.exercise_id)));
+  const sessions = new Set(sets.map((s) => s.date)).size;
+  const volume = work.reduce((a, s) => a + setVolume(s), 0);
+  // Rekorlar: tüm geçmişi bir kez tarayıp her hareket için o ana kadarki en iyileri takip et
+  const prs = [];
+  const all = (await db.list('workout_sets', (x) => x.done && !isWarmup(x) && x.weight_kg > 0 && x.reps > 0 && x.date <= endD)).sort((a, b) => a.date.localeCompare(b.date) || a.set_no - b.set_no);
+  const best = {};
+  for (const x of all) {
+    const b = best[x.exercise_id];
+    const e = e1rmOf(x);
+    if (b && x.date >= start) {
+      const labels = [];
+      if (x.weight_kg > b.w) labels.push(`En ağır: ${trNum(x.weight_kg)} kg`);
+      if (e > b.e + 0.05) labels.push(`Tahmini 1RM: ${trNum(e)} kg`);
+      if (labels.length) prs.push({ ex: (exs.find((z) => z.id === x.exercise_id) || {}).name || 'Egzersiz', date: x.date, labels });
+    }
+    best[x.exercise_id] = { w: Math.max(b ? b.w : 0, x.weight_kg), e: Math.max(b ? b.e : 0, e) };
+  }
+  const regions = await regionSets(start, endD);
+  const food = await db.list('food_logs', (f) => inM(f.date));
+  const byDay = {};
+  for (const f of food) {
+    const d = (byDay[f.date] = byDay[f.date] || { k: 0, p: 0 });
+    d.k += Number(f.kcal) || 0;
+    d.p += Number(f.protein_g) || 0;
+  }
+  const fd = Object.values(byDay).filter((d) => d.k >= 800);
+  const weights = weightTrend(await db.list('body_logs', (b) => b.date <= endD));
+  const wIn = weights.filter((w) => inM(w.date));
+  const wBefore = weights.filter((w) => w.date < start).pop();
+  const w0 = wBefore || wIn[0];
+  const w1 = wIn[wIn.length - 1];
+  let doseDone = 0;
+  let doseTotal = 0;
+  for (let d = start; d <= endD && d <= today(); d = addDays(d, 1)) {
+    const due = await dueOn(d);
+    doseDone += due.done;
+    doseTotal += due.total;
+  }
+  const vit = await db.list('vitals', (v) => inM(v.date));
+  const avgV = (k) => {
+    const xs = vit.map((v) => Number(v[k])).filter((x) => x > 0);
+    return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  };
+  return {
+    ym, start, end: endD,
+    training: { sessions, sets: work.length, volume_kg: Math.round(volume), cardio_min: Math.round(cardio.reduce((a, s) => a + (Number(s.duration_min) || 0), 0)), prs, regions },
+    nutrition: { logged_days: fd.length, avg_kcal: fd.length ? Math.round(fd.reduce((a, d) => a + d.k, 0) / fd.length) : null, avg_protein: fd.length ? Math.round(fd.reduce((a, d) => a + d.p, 0) / fd.length) : null },
+    weight: { start: w0 ? w0.trend : null, end: w1 ? w1.trend : null, change: w0 && w1 ? Math.round((w1.trend - w0.trend) * 10) / 10 : null },
+    doses: { done: doseDone, total: doseTotal },
+    vitals: { n: vit.length, sys: avgV('sys'), dia: avgV('dia'), hr: avgV('hr') },
+  };
 }

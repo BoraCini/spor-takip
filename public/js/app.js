@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.9.1';
+export const APP_VERSION = '2.0.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -199,7 +199,13 @@ function watchBackground() {
     else if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) {
       hiddenAt = 0;
       lockIfNeeded().then(dailyWeight);
-    } else if (document.visibilityState === 'visible' && !locking) dailyWeight();
+    } else if (document.visibilityState === 'visible' && !locking) {
+      dailyWeight();
+      import('./cloud.js').then(async (c) => {
+        if (await c.pullInbox()) refresh();
+        c.autoCloudBackup();
+      });
+    }
   });
 }
 
@@ -427,6 +433,11 @@ async function start() {
   }
   await route();
   if (onboarded) dailyWeight();
+  // Arka planda: Apple Sağlık kutusunu al, günlük şifreli bulut yedeği
+  import('./cloud.js').then(async (c) => {
+    if (await c.pullInbox()) refresh();
+    c.autoCloudBackup();
+  });
 }
 
 start();

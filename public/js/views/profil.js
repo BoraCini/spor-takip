@@ -1,23 +1,17 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadOrShare, lineChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
+import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, openSheet, downloadOrShare, lineChartSVG, trendChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
 import { monthUsage } from '../ai.js';
-import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY } from '../context.js';
+import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate } from '../context.js';
 import * as push from '../push.js';
+import { cloudSupported, cloudUpload, cloudDownload, cloudDelete, passIssue, inboxToken, inboxUrl, pullInbox } from '../cloud.js';
 
 
 function suggestTargets(p) {
   const e = energyBreakdown(p);
   if (!e) return null;
-  const w = Number(p.weight_kg);
-  const tdee = e.tdee;
-  const phase = p.phase || 'koruma';
-  const kcal = Math.round((tdee + (phase === 'bulk' ? 300 : phase === 'cut' ? -500 : 0)) / 10) * 10;
-  const protein = Math.round(w * (phase === 'cut' ? 2.2 : 2.0));
-  const fat = Math.round(Math.max(w * 0.9, (kcal * 0.25) / 9));
-  const carb = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
-  return { kcal, protein, carb, fat, tdee: Math.round(tdee) };
+  return macrosFor(p, e.tdee);
 }
 
 export const render = (root, params) => renderPage(root, params, 'profile');
@@ -42,13 +36,23 @@ export async function renderPage(root, params, mode = 'profile') {
   const standalone = push.isStandalone();
   const pushDiag = [`ana ekran: ${standalone ? 'evet' : 'hayır'}`, `push: ${'PushManager' in window ? 'var' : 'yok'}`, `bildirim: ${'Notification' in window ? 'var' : 'yok'}`, `sw: ${'serviceWorker' in navigator ? 'var' : 'yok'}`].join(' · ');
   const backupPhotos = await db.getSetting('backup_photos', true);
+  const cloudPass = await db.getSetting('cloud_pass');
+  const cloudLast = await db.getSetting('cloud_last');
+  const inTok = await db.getSetting('inbox_token');
+  const inLast = await db.getSetting('inbox_last');
+  const stepsMap = (await db.getSetting('daily_steps', {})) || {};
+  const stepDays = Object.keys(stepsMap).sort();
   const photoCount = (await db.list('progress_photos')).length;
   const lastBackup = await db.getSetting('last_backup');
   const weights = (await db.list('body_logs')).sort((a, b) => a.date.localeCompare(b.date));
   const first = params.first === '1';
+  const wTrend = weightTrend(weights);
+  const wRate = trendRate(wTrend, 14);
   const en = energyBreakdown(p);
   const act = activityOf(p);
   const sug = suggestTargets(p);
+  const adapt = await adaptiveExpenditure(21);
+  const sugA = adapt.ready ? macrosFor(p, adapt.tdee) : null;
   const phase = p.phase || 'koruma';
 
   const wPoints = weights.slice(-12).map((w) => {
@@ -158,6 +162,39 @@ export async function renderPage(root, params, mode = 'profile') {
       <p class="small muted" style="margin:6px 0 0;line-height:18px">PIN bir ekran kilididir; telefonunun kendi şifresi asıl korumadır.</p>
     </section>
 
+    <div class="sec"><h2>Şifreli bulut yedeği</h2>${cloudPass ? '<span class="meta">açık</span>' : ''}</div>
+    <section class="card">
+      ${
+        !cloudSupported()
+          ? '<p class="small muted" style="margin:0">Bu tarayıcı şifreli yedeği desteklemiyor (iOS 16.4 ve sonrası gerekir).</p>'
+          : cloudPass
+          ? `<div class="kv" style="border-top:0"><span class="k">Son bulut yedeği</span><span class="v">${cloudLast ? esc(trDate(cloudLast.slice(0, 10))) + ' ' + esc(new Date(cloudLast).toTimeString().slice(0, 5)) : 'henüz yok'}</span></div>
+             <p class="small muted" style="margin:0 0 6px;line-height:18px">Uygulamayı her gün ilk açışında otomatik yedeklenir. Yeni telefonda Ayarlar › Şifreli bulut yedeği › Buluttan geri yükle'ye aynı şifreyi yazman yeterli.</p>
+             <button type="button" class="list-btn" data-act="cloud-now"><span class="k">Şimdi yedekle</span>${icon.chev}</button>
+             <button type="button" class="list-btn" data-act="cloud-restore"><span class="k">Buluttan geri yükle</span>${icon.chev}</button>
+             <button type="button" class="list-btn danger" data-act="cloud-off"><span class="k">Bulut yedeğini kapat ve sil</span></button>`
+          : `<p style="margin:0 0 10px;font-size:15px;line-height:21px">Telefon kaybolsa ya da değişse bile verilerin kaybolmasın. Yedek <b>senin belirlediğin şifreyle telefonda şifrelenir</b>; sunucu içeriği göremez.</p>
+             <div class="field"><label for="cl-pass">Yedek şifresi (en az 10 karakter)</label><input id="cl-pass" class="input" type="password" autocomplete="new-password" placeholder="Unutmayacağın bir cümle"></div>
+             <div class="field"><label for="cl-pass2">Şifre tekrar</label><input id="cl-pass2" class="input" type="password" autocomplete="new-password"></div>
+             <p class="small warn" style="margin:0 0 10px;line-height:18px">Bu şifreyi unutursan yedeği kimse açamaz, ben de. Bir yere not et.</p>
+             <div class="btn-row"><button type="button" class="btn primary" data-act="cloud-on">Aç ve yedekle</button><button type="button" class="btn" data-act="cloud-restore">Geri yükle</button></div>`
+      }
+    </section>
+
+    <div class="sec"><h2>Apple Sağlık bağlantısı</h2>${inTok ? '<span class="meta">açık</span>' : ''}</div>
+    <section class="card">
+      ${
+        inTok
+          ? `<p class="small muted" style="margin:0 0 8px;line-height:18px">Kestirmeler uygulamasıyla günlük adım sayın ve kilon otomatik gelir. Ortalama adım sayın aktivite hesabına girer.</p>
+             <div class="kv" style="border-top:0"><span class="k">Son veri</span><span class="v">${inLast ? esc(trDate(inLast.slice(0, 10))) : 'henüz gelmedi'}${stepDays.length ? ` · ${stepDays.length} günlük adım` : ''}</span></div>
+             <button type="button" class="list-btn" data-act="health-guide"><span class="k">Kurulum adımları ve bağlantı adresi</span>${icon.chev}</button>
+             <button type="button" class="list-btn" data-act="health-pull"><span class="k">Şimdi kontrol et</span>${icon.chev}</button>
+             <button type="button" class="list-btn danger" data-act="health-off"><span class="k">Bağlantıyı kapat</span></button>`
+          : `<p style="margin:0 0 10px;font-size:15px;line-height:21px">Web uygulamaları Sağlık verisini doğrudan okuyamıyor. iPhone'daki <b>Kestirmeler</b> ile her gün adım sayını ve kilonu otomatik gönderebilirsin.</p>
+             <button type="button" class="btn primary block" data-act="health-on">Bağlantıyı kur</button>`
+      }
+    </section>
+
     <div class="sec"><h2>Yedekleme</h2></div>
     <section class="card">
       <p class="small muted" style="margin:0 0 6px;line-height:18px">Veriler yalnızca bu telefonda durur. Uygulamayı silersen ya da telefon değiştirirsen kaybolmaması için ara ara yedek al ve Dosyalar'a kaydet.</p>
@@ -165,6 +202,7 @@ export async function renderPage(root, params, mode = 'profile') {
       ${photoCount ? `<div class="kv" style="border-top:0"><label class="k" for="bk-photos">Fotoğrafları yedeğe dahil et (${photoCount})</label><span class="switch"><input id="bk-photos" type="checkbox" ${backupPhotos ? 'checked' : ''}><span></span></span></div>` : ''}
       <button type="button" class="list-btn" data-act="export"><span class="k">Yedek al</span>${icon.chev}</button>
       <label class="list-btn" style="cursor:pointer"><span class="k">Yedekten geri yükle</span>${icon.chev}<input type="file" accept="application/json,.json" data-act="import" class="sr-only"></label>
+      <button type="button" class="list-btn" data-act="csv"><span class="k">CSV olarak dışa aktar (Excel)</span>${icon.chev}</button>
       <button type="button" class="list-btn" data-act="clear-chat"><span class="k">Sohbet geçmişini temizle</span>${icon.chev}</button>
       <button type="button" class="list-btn danger" data-act="wipe"><span class="k">Tüm verileri sil</span></button>
     </section>
@@ -222,7 +260,7 @@ export async function renderPage(root, params, mode = 'profile') {
           ${JOBS.map(([k, l, d]) => `<button type="button" role="radio" class="act-job" aria-checked="${act.job === k}" data-actk="job" data-v="${k}"><b>${l}</b><small>${d}</small></button>`).join('')}
         </div></div>
       <div class="field"><label for="a-steps">Günlük ortalama adım</label>
-        <input id="a-steps" class="input" inputmode="numeric" data-acti="steps" value="${esc(act.steps ?? '')}" placeholder="Örn. 7000 (Sağlık uygulamasındaki ortalaman)"></div>
+        <input id="a-steps" class="input" inputmode="numeric" data-acti="steps" value="${esc(act.steps ?? '')}" placeholder="Örn. 7000 (Sağlık uygulamasındaki ortalaman)">${act.steps_src === 'saglik' ? '<span class="small muted">Apple Sağlık\'tan otomatik geliyor (son 14 gün ortalaması)</span>' : ''}</div>
       <div class="act-grp">
         <span class="lbl">Ağırlık antrenmanı</span>
         <div class="grid2">
@@ -279,9 +317,32 @@ export async function renderPage(root, params, mode = 'profile') {
       }
     </section>
 
+    <div class="sec"><h2>Gerçek harcaman</h2><span class="meta">son 21 gün</span></div>
+    <section class="card">
+      ${
+        adapt.ready
+          ? `<div class="act-total"><span>Yediklerin ve kilo eğiliminden</span><b class="num">≈ ${fmt(adapt.tdee)} kcal</b></div>
+             <div class="act-row"><span>Ortalama alınan</span><span class="num">${fmt(adapt.avg_intake)} kcal</span></div>
+             <div class="act-row"><span>Kilo eğilimi</span><span class="num">${adapt.rate_kg_week > 0 ? '+' : ''}${String(adapt.rate_kg_week).replace('.', ',')} kg / hafta</span></div>
+             <div class="act-row"><span>Güven</span><span>${esc(adapt.confidence)} (${adapt.logged_days} kayıtlı gün, ${adapt.weigh_ins} tartı)</span></div>
+             ${sug ? `<div class="act-row"><span>Formülle hesaplanan</span><span class="num">${fmt(sug.tdee)} kcal</span></div>` : ''}
+             ${
+               sugA && Math.abs((Number(p.target_kcal) || 0) - sugA.kcal) >= 80
+                 ? `<div class="inset" style="margin-top:10px"><span style="font-size:15px;font-weight:600">Önerilen hedef: ${fmt(sugA.kcal)} kcal · P ${sugA.protein} · K ${sugA.carb} · Y ${sugA.fat}</span>
+                     <span class="small muted">Gerçek harcamana ${phase === 'bulk' ? '+300 kcal' : phase === 'cut' ? '−500 kcal' : 'koruma için ±0'} eklenerek hesaplandı.</span>
+                     <button type="button" class="btn primary" style="margin-top:8px" data-act="apply-adapt">Bu hedefe geç</button></div>`
+                 : `<p class="small muted" style="margin:8px 0 0">Mevcut kalori hedefin gerçek harcamanla uyumlu.</p>`
+             }`
+          : `<p style="margin:0 0 8px;font-size:15px;line-height:21px">Formüller herkes için ortalama verir. Yediklerini ve kilonu düzenli girersen gerçek harcamanı hesaplarım.</p>
+             <div class="act-row"><span>Kayıtlı gün (en az 10)</span><span class="num">${adapt.logged_days} / 10</span></div>
+             <div class="act-row"><span>Tartı (en az 5)</span><span class="num">${adapt.weigh_ins} / 5</span></div>`
+      }
+      <p class="small muted" style="margin:8px 0 0;line-height:17px">Hesap: ortalama kalori − (kilo eğilimi değişimi × 7.700 kcal). Eksik kaydedilen günler (800 kcal altı) sayılmaz; su ve tuz dalgalanmalarını eğilim çizgisi düzeltir.</p>
+    </section>
+
     <div class="sec"><h2>Kilo geçmişi</h2>${weights.length ? `<span class="meta">${weights.length} kayıt</span>` : ''}</div>
     <section class="card">
-      ${wPoints.length >= 2 ? lineChartSVG(wPoints, { unit: 'kg' }) : `<p class="small muted" style="margin:0 0 10px">Kilonu girdikçe burada grafik oluşur.</p>`}
+      ${wTrend.length >= 2 ? trendChartSVG(wTrend.slice(-30).map((w) => { const d = parseDate(w.date); return { label: `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`, value: w.weight, trend: w.trend }; })) + `<p class="small muted" style="margin:6px 0 0">Çizgi kilo eğilimin${wRate != null ? `: haftada ${wRate > 0 ? '+' : ''}${String(wRate).replace('.', ',')} kg` : ''}. Noktalar günlük tartılar.</p>` : `<p class="small muted" style="margin:0 0 10px">Kilonu girdikçe burada grafik oluşur.</p>`}
       <div style="display:flex;gap:8px;margin-top:10px">
         <label class="sr-only" for="w-today">Bugünkü kilo</label>
         <input id="w-today" class="input" inputmode="decimal" placeholder="Bugünkü kilo (kg)" style="flex:1">
@@ -444,6 +505,14 @@ export async function renderPage(root, params, mode = 'profile') {
       }
       return;
     }
+    if (act === 'apply-adapt' && sugA) {
+      const cur = await db.getProfile();
+      Object.assign(cur, { target_kcal: sugA.kcal, target_protein_g: sugA.protein, target_carb_g: sugA.carb, target_fat_g: sugA.fat });
+      await db.saveProfile(cur);
+      await db.setSetting('checkin_week', (await import('../util.js')).weekStart(today()));
+      toast('Hedefler gerçek harcamana göre güncellendi');
+      return refresh();
+    }
     if (act === 'apply-sug' && sug) {
       const cur = await db.getProfile();
       Object.assign(cur, { target_kcal: sug.kcal, target_protein_g: sug.protein, target_carb_g: sug.carb, target_fat_g: sug.fat });
@@ -483,6 +552,57 @@ export async function renderPage(root, params, mode = 'profile') {
       await disableFaceId();
       toast('PIN kilidi kapatıldı');
       refresh();
+    } else if (act === 'cloud-on') {
+      const a = root.querySelector('#cl-pass').value;
+      const b = root.querySelector('#cl-pass2').value;
+      const issue = passIssue(a);
+      if (issue) return toast(issue, 3500);
+      if (a !== b) return toast('Şifreler aynı değil');
+      t.disabled = true;
+      try {
+        await db.setSetting('cloud_pass', a);
+        const r = await cloudUpload(a);
+        toast(r.ok ? `Bulut yedeği açıldı (${Math.max(1, Math.round(r.size / 1024))} KB)` : 'Bulut yedeği açıldı', 3500);
+      } catch (err) {
+        toast(err.message, 4000);
+      }
+      refresh();
+    } else if (act === 'cloud-now') {
+      t.disabled = true;
+      try {
+        const r = await cloudUpload(cloudPass);
+        toast(r.ok ? 'Buluta yedeklendi' : 'Az önce yedeklendi; birkaç dakika sonra tekrar dene', 3500);
+      } catch (err) {
+        toast(err.message, 4000);
+      }
+      refresh();
+    } else if (act === 'cloud-restore') {
+      openCloudRestore(cloudPass);
+    } else if (act === 'cloud-off') {
+      if (!(await confirmSheet({ title: 'Bulut yedeğini kapat', text: 'Sunucudaki şifreli yedek silinir ve otomatik yedekleme durur. Telefondaki verilerin etkilenmez.', okLabel: 'Kapat ve sil', danger: true }))) return;
+      try {
+        await cloudDelete(cloudPass);
+      } catch {}
+      await db.setSetting('cloud_pass', null);
+      await db.setSetting('cloud_last', null);
+      toast('Bulut yedeği kapatıldı');
+      refresh();
+    } else if (act === 'health-on') {
+      await inboxToken(true);
+      await refresh();
+      openHealthGuide(await inboxToken());
+    } else if (act === 'health-guide') {
+      openHealthGuide(inTok);
+    } else if (act === 'health-pull') {
+      const n = await pullInbox({ quiet: false });
+      if (!n) toast('Yeni veri yok');
+      refresh();
+    } else if (act === 'health-off') {
+      await db.setSetting('inbox_token', null);
+      toast('Apple Sağlık bağlantısı kapatıldı');
+      refresh();
+    } else if (act === 'csv') {
+      openCsv();
     } else if (act === 'export') {
       const data = await db.exportAll({ photos: !!(await db.getSetting('backup_photos', true)) });
       await downloadOrShare(`procoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
@@ -579,4 +699,130 @@ async function logWeight(v) {
   const d = today();
   const existing = (await db.list('body_logs', (r) => r.date === d))[0];
   await db.put('body_logs', { ...(existing || {}), date: d, weight_kg: v });
+}
+
+
+// ---------- Buluttan geri yükle ----------
+function openCloudRestore(savedPass) {
+  const s = openSheet({
+    title: 'Buluttan geri yükle',
+    size: 'auto',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Geri yükle',
+    body: `<div class="field"><label for="cr-pass">Yedek şifresi</label><input id="cr-pass" class="input" type="password" autocomplete="current-password" value="${esc(savedPass || '')}"></div>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Bu telefondaki veriler buluttaki yedekle değiştirilir. API anahtarı, PIN ve Face ID ayarların korunur.</p>`,
+    onRight: async (api) => {
+      const pass = s.el.querySelector('#cr-pass').value;
+      if (!pass) return toast('Şifreyi yaz');
+      try {
+        const { data, at } = await cloudDownload(pass);
+        const ok = await confirmSheet({ title: 'Yedeği geri yükle', text: `${at ? trDate(dateStr(new Date(at))) + ' tarihli yedek bulundu. ' : ''}Bu telefondaki veriler bu yedekle değiştirilsin mi?`, okLabel: 'Geri yükle' });
+        if (!ok) return;
+        await db.importAll(data);
+        await db.setSetting('cloud_pass', pass);
+        applyAccent(await db.getSetting('accent'));
+        api.close();
+        toast('Yedek geri yüklendi');
+        refresh();
+      } catch (err) {
+        toast(err.message, 4000);
+      }
+    },
+  });
+}
+
+// ---------- Apple Sağlık (Kestirmeler) kurulum rehberi ----------
+function openHealthGuide(token) {
+  const url = inboxUrl(token);
+  const s = openSheet({
+    title: 'Apple Sağlık bağlantısı',
+    body: `
+      <section class="card">
+        <span class="small muted">Bağlantı adresin (gizli tut)</span>
+        <div class="url-box">${esc(url)}</div>
+        <button type="button" class="btn block" data-copy>Adresi kopyala</button>
+      </section>
+      <div class="sec"><h2>Kestirmeyi oluştur</h2></div>
+      <section class="card guide">
+        <ol>
+          <li><b>Kestirmeler</b> uygulamasını aç › sağ üstte <b>+</b> › adını <b>Pro Coach Sağlık</b> koy.</li>
+          <li><b>Sağlık Örneklerini Bul</b> eylemini ekle: Tür <b>Adımlar</b>, Başlangıç tarihi <b>Bugün</b>.</li>
+          <li><b>İstatistikleri Hesapla</b> ekle: <b>Toplam</b> (Sağlık örnekleri için).</li>
+          <li>Bir <b>Sağlık Örneklerini Bul</b> daha ekle: Tür <b>Ağırlık</b>, Sıralama <b>En yeni</b>, Sınır <b>1</b>. Sonra <b>Ayrıntıyı Al</b> › <b>Değer</b>.</li>
+          <li><b>URL'nin İçeriğini Al</b> ekle: URL'ye yukarıdaki adresi yapıştır. Yöntem <b>POST</b>, İstek gövdesi <b>JSON</b>. Alanlar:
+            <ul><li><b>steps</b> → İstatistikler (toplam adım)</li><li><b>weight</b> → Değer (kilo, kg)</li><li><b>date</b> → Geçerli Tarih, biçim <b>yyyy-MM-dd</b></li></ul></li>
+          <li>Kestirmeyi bir kez çalıştır; Sağlık izinlerini ver.</li>
+        </ol>
+      </section>
+      <div class="sec"><h2>Her gün otomatik çalışsın</h2></div>
+      <section class="card guide">
+        <ol>
+          <li>Kestirmeler › <b>Otomasyon</b> › <b>+</b> › <b>Günün Saati</b> › örn. <b>22:00</b>, <b>Her Gün</b>.</li>
+          <li><b>Hemen çalıştır</b>'ı seç (çalıştırmadan önce sorma) › Pro Coach Sağlık kestirmesini seç.</li>
+        </ol>
+      </section>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Gönderilen adım ve kilo değerleri uygulamayı açana kadar (en fazla 45 gün) sunucuda bekler; uygulama açılınca alınır ve sunucudan silinir. O gün zaten kilo girdiysen Sağlık'tan gelen kilo üzerine yazılmaz. Son 14 günün ortalama adımı aktivite hesabında kullanılır.</p>`,
+  });
+  s.el.querySelector('[data-copy]').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Adres kopyalandı');
+    } catch {
+      toast('Kopyalanamadı; adresi basılı tutup kopyala');
+    }
+  });
+}
+
+// ---------- CSV dışa aktarma ----------
+const csvCell = (v) => {
+  if (v == null) return '';
+  const s = typeof v === 'number' ? String(v).replace('.', ',') : String(v);
+  return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const csv = (head, rows) => '\ufeff' + [head, ...rows].map((r) => r.map(csvCell).join(';')).join('\r\n');
+
+async function csvFor(kind) {
+  if (kind === 'antrenman') {
+    const exs = await db.list('exercises');
+    const sets = (await db.list('workout_sets', (x) => x.done)).sort((a, b) => a.date.localeCompare(b.date) || a.set_no - b.set_no);
+    const name = (id) => (exs.find((e) => e.id === id) || {}).name || '';
+    return csv(['Tarih', 'Hareket', 'Set', 'Tür', 'Kg', 'Tekrar', 'RPE', 'Drop setler', 'Süre (dk)', 'Mesafe (km)', 'Rekor'],
+      sets.map((x) => [x.date, name(x.exercise_id), x.set_no, x.type === 'warmup' ? 'Isınma' : x.type === 'failure' ? 'Tükeniş' : 'Normal', x.weight_kg || null, x.reps || null, x.rpe, (x.drops || []).map((d) => `${d.weight_kg}x${d.reps}`).join(' '), x.duration_min, x.distance_km, x.pr ? 'evet' : '']));
+  }
+  if (kind === 'beslenme') {
+    const f = (await db.list('food_logs')).sort((a, b) => a.date.localeCompare(b.date));
+    return csv(['Tarih', 'Öğün', 'Besin', 'Gram', 'Kalori', 'Protein', 'Karbonhidrat', 'Yağ', 'Lif'], f.map((x) => [x.date, x.meal, x.name, x.grams, Math.round(x.kcal || 0), x.protein_g, x.carb_g, x.fat_g, x.fiber_g]));
+  }
+  if (kind === 'kilo') {
+    const w = (await db.list('body_logs')).sort((a, b) => a.date.localeCompare(b.date));
+    return csv(['Tarih', 'Kilo (kg)', 'Kaynak'], w.map((x) => [x.date, x.weight_kg, x.source === 'saglik' ? 'Apple Sağlık' : '']));
+  }
+  if (kind === 'tansiyon') {
+    const v = (await db.list('vitals')).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
+    return csv(['Tarih', 'Saat', 'Büyük', 'Küçük', 'Nabız', 'Not'], v.map((x) => [x.date, x.time, x.sys, x.dia, x.hr, x.note]));
+  }
+  if (kind === 'kan') {
+    const tests = await db.list('lab_tests');
+    const vals = await db.list('lab_values');
+    const rows = [];
+    for (const t of tests.sort((a, b) => a.date.localeCompare(b.date))) for (const v of vals.filter((x) => x.test_id === t.id)) rows.push([t.date, t.lab_name, v.name, v.value, v.unit, v.ref_low, v.ref_high]);
+    return csv(['Tarih', 'Laboratuvar', 'Test', 'Sonuç', 'Birim', 'Ref alt', 'Ref üst'], rows);
+  }
+  return '';
+}
+
+function openCsv() {
+  const kinds = [['antrenman', 'Antrenman setleri'], ['beslenme', 'Beslenme kayıtları'], ['kilo', 'Kilo'], ['tansiyon', 'Tansiyon ve nabız'], ['kan', 'Kan değerleri']];
+  const s = openSheet({
+    title: 'CSV olarak dışa aktar',
+    size: 'auto',
+    body: `<section class="card flush">${kinds.map(([k, l]) => `<button type="button" class="list-btn" data-csv="${k}" style="padding:0 14px"><span class="k">${l}</span>${icon.chev}</button>`).join('')}</section>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Dosyalar Excel ve Numbers'ta açılır (noktalı virgülle ayrılmış, Türkçe ondalık).</p>`,
+  });
+  s.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-csv]');
+    if (!b) return;
+    const text = await csvFor(b.dataset.csv);
+    await downloadOrShare(`procoach-${b.dataset.csv}-${today()}.csv`, text, 'text/csv');
+  });
 }

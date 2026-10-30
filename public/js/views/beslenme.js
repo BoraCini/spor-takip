@@ -2,7 +2,7 @@ import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1, weekStart, parseDate, swipeDelete } from '../util.js';
 import { refresh, go } from '../app.js';
 import { removeWithUndo } from '../undo.js';
-import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget } from '../context.js';
+import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpenditure, macrosFor } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION } from '../data/foods.js';
 
@@ -53,6 +53,21 @@ export async function render(root, params) {
     </div>`;
 
   let body = '';
+  // Haftalık kontrol: gerçek harcama hedeften belirgin farklıysa öner (haftada bir)
+  let checkin = null;
+  if (isLog && state.date === today() && tg.kcal && (await db.getSetting('checkin_week')) !== weekStart(today())) {
+    const ad = await adaptiveExpenditure(21);
+    if (ad.ready) {
+      const m = macrosFor(p, ad.tdee);
+      if (Math.abs(m.kcal - tg.kcal) >= 80) checkin = { ad, m };
+    }
+  }
+  if (checkin)
+    body += `<section class="card checkin" aria-label="Haftalık kontrol">
+      <span class="cyc-lbl">Haftalık kontrol</span>
+      <p style="margin:4px 0 8px;font-size:15px;line-height:21px">Son 3 haftada gerçek harcaman <b>≈ ${fmt(checkin.ad.tdee)} kcal</b> (kilo eğilimin ${checkin.ad.rate_kg_week > 0 ? '+' : ''}${String(checkin.ad.rate_kg_week).replace('.', ',')} kg/hafta). Hedefini <b>${fmt(tg.kcal)} → ${fmt(checkin.m.kcal)} kcal</b> yapalım mı?</p>
+      <div class="btn-row"><button type="button" class="btn" data-act="checkin-skip">Bu hafta değil</button><button type="button" class="btn primary" data-act="checkin-ok">Güncelle</button></div>
+    </section>`;
   if (isLog) {
     const left = tg.kcal ? tg.kcal - totals.kcal : null;
     body += `
@@ -253,6 +268,15 @@ export async function render(root, params) {
     } else if (act === 'week-next') {
       const n = addDays(state.date, 7);
       state.date = n > today() ? today() : n;
+      refresh();
+    } else if (act === 'checkin-ok' || act === 'checkin-skip') {
+      if (act === 'checkin-ok' && checkin) {
+        const cur = await db.getProfile();
+        Object.assign(cur, { target_kcal: checkin.m.kcal, target_protein_g: checkin.m.protein, target_carb_g: checkin.m.carb, target_fat_g: checkin.m.fat });
+        await db.saveProfile(cur);
+        toast('Hedefler güncellendi');
+      }
+      await db.setSetting('checkin_week', weekStart(today()));
       refresh();
     } else if (act === 'toggle-meal') {
       const mk = t.dataset.meal;

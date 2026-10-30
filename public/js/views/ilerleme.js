@@ -1,10 +1,12 @@
 // İlerleme: haftalık hacim, kilo, vücut ölçüleri, ilerleme fotoğrafları, rekorlar
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, addDays, weekStart, trDate, trDateYear, icon, openSheet, confirmSheet, round1, lineChartSVG, parseDate, MONTHS_SHORT } from '../util.js';
-import { refresh } from '../app.js';
-import { weeklySummary, MEASURES, isCardio } from '../context.js';
+import { esc, fmt, parseNum, toast, today, addDays, weekStart, trDate, trDateYear, openSheet, confirmSheet, round1, lineChartSVG, trendChartSVG, parseDate, MONTHS_SHORT, MONTHS } from '../util.js';
+import { refresh, go } from '../app.js';
+import { weeklySummary, MEASURES, isCardio, isWarmup, e1rmOf, regionSets, weightTrend, trendRate, monthlyReport } from '../context.js';
+import { bodyMapSVG, heatLegend } from '../bodymap.js';
+import { REGIONS, regionLabel } from '../data/muscles.js';
 
-const st = { open: {} };
+const st = { open: {}, mapRange: 'this', month: null };
 const GROUPS = ['Göğüs', 'Sırt', 'Omuz', 'Kol', 'Bacak', 'Karın'];
 const POSES = ['Ön', 'Yan', 'Arka'];
 const kg = (v) => (v == null || isNaN(v) ? '–' : String(round1(v)).replace('.', ','));
@@ -23,6 +25,24 @@ export async function renderProgress(el) {
   const measures = (await db.list('body_measurements')).sort((a, b) => a.date.localeCompare(b.date));
   const photos = (await db.list('progress_photos')).sort((a, b) => b.date.localeCompare(a.date) || POSES.indexOf(a.pose) - POSES.indexOf(b.pose));
   const records = await bestLifts();
+  // Kas haritası aralığı
+  const ranges = { this: [ws, addDays(ws, 6), 1], last: [addDays(ws, -7), addDays(ws, -1), 1], four: [addDays(ws, -28), addDays(ws, -1), 4] };
+  const [r0, r1, div] = ranges[st.mapRange] || ranges.this;
+  const regRaw = await regionSets(r0, r1);
+  const reg = Object.fromEntries(Object.entries(regRaw).map(([k, v]) => [k, v / div]));
+  const regSorted = Object.entries(reg).sort((a, b) => b[1] - a[1]);
+  // Kilo eğilimi
+  const trend = weightTrend(weights);
+  const rate = trendRate(trend, 14);
+  const lastT = trend[trend.length - 1];
+  // Aylık rapor
+  const ym = st.month || t.slice(0, 7);
+  const rep = await monthlyReport(ym);
+  const [ry, rm] = ym.split('-').map(Number);
+  const prevYm = rm === 1 ? `${ry - 1}-12` : `${ry}-${String(rm - 1).padStart(2, '0')}`;
+  const nextYm = rm === 12 ? `${ry + 1}-01` : `${ry}-${String(rm + 1).padStart(2, '0')}`;
+  const isCurMonth = ym === t.slice(0, 7);
+  const topRegions = Object.entries(rep.training.regions).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
 
   const maxSets = Math.max(20, ...GROUPS.map((g) => cur.training.sets_by_muscle[g] || 0));
   const lastW = weights[weights.length - 1];
@@ -54,9 +74,32 @@ export async function renderProgress(el) {
       <p class="small muted" style="margin:0;line-height:18px">Kas grubu başına haftalık set sayısı (sağdaki küçük rakam geçen hafta). Gölgeli alan, kas gelişimi için çoğu kişide etkili bulunan 10–20 set aralığı.</p>
     </section>
 
+    <div class="sec"><h2>Kas haritası</h2></div>
+    <section class="card">
+      <div class="seg sm" role="tablist" aria-label="Dönem" style="margin:0 0 10px">
+        ${[['this', 'Bu hafta'], ['last', 'Geçen hafta'], ['four', '4 hafta ort.']].map(([k, l]) => `<button type="button" role="tab" aria-selected="${st.mapRange === k}" data-pact="range" data-k="${k}">${l}</button>`).join('')}
+      </div>
+      ${bodyMapSVG(reg)}
+      ${heatLegend()}
+      <div class="bm-list">${regSorted
+        .map(([k, v]) => `<div class="${v > 0 && v < 4 ? '' : ''}"><span>${esc(regionLabel(k))}</span><b>${fmt(v, 1)}</b></div>`)
+        .join('')}</div>
+      ${regSorted.some(([, v]) => v > 0) ? `<p class="small muted" style="margin:8px 0 0;line-height:17px">Hiç çalışmadığın bölgeler: ${esc(regSorted.filter(([, v]) => v === 0).map(([k]) => regionLabel(k)).join(', ') || 'yok')}.</p>` : ''}
+    </section>
+
     <div class="sec"><h2>Kilo</h2>${lastW ? `<span class="meta">${kg(lastW.weight_kg)} kg${firstW && firstW !== lastW ? ` · başlangıçtan ${signed(round1(lastW.weight_kg - firstW.weight_kg), ' kg')}` : ''}</span>` : ''}</div>
     <section class="card">
-      ${weights.length >= 2 ? lineChartSVG(weights.slice(-14).map((w) => ({ label: lbl(w.date), value: w.weight_kg })), { unit: 'kg' }) : '<p class="small muted" style="margin:0 0 10px">Kilonu girdikçe burada grafik oluşur.</p>'}
+      ${
+        trend.length >= 2
+          ? `<div class="trend-head">
+              <div><span class="small muted">Eğilim</span><b class="num">${kg(lastT.trend)} kg</b></div>
+              <div><span class="small muted">Haftalık değişim</span><b class="num ${rate != null && Math.abs(rate) > 1 ? 'warn' : ''}">${rate == null ? '–' : signed(rate, ' kg')}</b></div>
+              <div><span class="small muted">Son tartı</span><b class="num">${kg(lastT.weight)} kg</b></div>
+            </div>
+            ${trendChartSVG(trend.slice(-30).map((w) => ({ label: lbl(w.date), value: w.weight, trend: w.trend })))}
+            <p class="small muted" style="margin:6px 0 0;line-height:17px">Noktalar günlük tartılar, çizgi gerçek eğilim. Günlük ±1 kg oynamalar su ve tuzdan kaynaklanır; eğilime bak.</p>`
+          : '<p class="small muted" style="margin:0 0 10px">Kilonu girdikçe burada grafik oluşur.</p>'
+      }
       <div style="display:flex;gap:8px;margin-top:10px">
         <label class="sr-only" for="pw-today">Bugünkü kilo</label>
         <input id="pw-today" class="input" inputmode="decimal" placeholder="Bugünkü kilo (kg)" style="flex:1">
@@ -85,6 +128,33 @@ export async function renderProgress(el) {
       }
     </section>
     ${lastM ? `<p class="note">Ölçüleri her seferinde aynı koşullarda (örn. sabah, aç karnına) almak karşılaştırmayı daha anlamlı yapar.${prevM ? ` Son ölçüm ${esc(trDate(lastM.date))}, önceki ${esc(trDate(prevM.date))}.` : ''}</p>` : ''}
+
+    <div class="sec"><h2>Aylık rapor</h2>
+      <span class="month-nav">
+        <button type="button" class="dw-nav" data-pact="month" data-m="${prevYm}" aria-label="Önceki ay">‹</button>
+        <span class="meta">${MONTHS[rm - 1]} ${ry}</span>
+        <button type="button" class="dw-nav" data-pact="month" data-m="${nextYm}" aria-label="Sonraki ay" ${isCurMonth ? 'disabled' : ''}>›</button>
+      </span></div>
+    <section class="card" style="display:flex;flex-direction:column;gap:12px">
+      <div class="stat3">
+        <div><b>${rep.training.sessions}</b><span>antrenman</span></div>
+        <div><b>${rep.training.sets}</b><span>çalışma seti</span></div>
+        <div><b>${rep.training.volume_kg >= 10000 ? fmt(rep.training.volume_kg / 1000, 1) : fmt(rep.training.volume_kg)}</b><span>${rep.training.volume_kg >= 10000 ? 'ton' : 'kg'} hacim</span></div>
+      </div>
+      <div class="kv"><span class="k">Kilo eğilimi</span><span class="v num">${rep.weight.change == null ? '–' : `${kg(rep.weight.start)} → ${kg(rep.weight.end)} kg (${signed(rep.weight.change, ' kg')})`}</span></div>
+      <div class="kv"><span class="k">Ortalama kalori / protein</span><span class="v num">${rep.nutrition.avg_kcal ? `${fmt(rep.nutrition.avg_kcal)} kcal · ${fmt(rep.nutrition.avg_protein)} g` : '–'}${rep.nutrition.logged_days ? ` <small>(${rep.nutrition.logged_days} gün)</small>` : ''}</span></div>
+      ${rep.training.cardio_min ? `<div class="kv"><span class="k">Kardiyo</span><span class="v num">${fmt(rep.training.cardio_min)} dk</span></div>` : ''}
+      ${rep.doses.total ? `<div class="kv"><span class="k">Kür / ilaç uyumu</span><span class="v num">%${Math.round((rep.doses.done / rep.doses.total) * 100)} (${rep.doses.done}/${rep.doses.total})</span></div>` : ''}
+      ${rep.vitals.n ? `<div class="kv"><span class="k">Ortalama tansiyon / nabız</span><span class="v num">${rep.vitals.sys ? `${rep.vitals.sys}/${rep.vitals.dia}` : '–'}${rep.vitals.hr ? ` · ${rep.vitals.hr} atım` : ''}</span></div>` : ''}
+      ${topRegions.length ? `<div class="kv"><span class="k">En çok çalışan</span><span class="v">${esc(topRegions.slice(0, 3).map(([k]) => regionLabel(k)).join(', '))}</span></div>` : ''}
+      ${
+        rep.training.prs.length
+          ? `<div><span class="small muted">Bu ayki rekorlar (${rep.training.prs.length})</span>
+              ${rep.training.prs.slice(-8).reverse().map((p) => `<div class="pr-row"><span class="pr-tag" style="margin:0">PR</span><span><b>${esc(p.ex)}</b> · ${esc(p.labels.join(', '))}</span><span class="muted small">${esc(lbl(p.date))}</span></div>`).join('')}</div>`
+          : ''
+      }
+      <button type="button" class="btn" data-pact="ask-month">Coach'a bu ayı yorumlat</button>
+    </section>
 
     <div class="sec"><h2>İlerleme fotoğrafları</h2>
       <label class="link" style="display:flex;align-items:center;cursor:pointer">+ Fotoğraf ekle<input type="file" accept="image/*" class="sr-only" data-pact="photo"></label></div>
@@ -125,6 +195,14 @@ export async function renderProgress(el) {
       await db.saveProfile(p);
       toast('Kilo kaydedildi');
       refresh();
+    } else if (a === 'range') {
+      st.mapRange = b.dataset.k;
+      refresh();
+    } else if (a === 'month') {
+      st.month = b.dataset.m;
+      refresh();
+    } else if (a === 'ask-month') {
+      go(`danisman?ask=month&m=${encodeURIComponent(ym)}`);
     } else if (a === 'measure') openMeasure(lastM);
     else if (a === 'toggle') {
       st.open[b.dataset.k] = !st.open[b.dataset.k];
@@ -140,13 +218,13 @@ export async function renderProgress(el) {
 }
 
 async function bestLifts() {
-  const sets = await db.list('workout_sets', (s) => s.done && s.weight_kg > 0 && s.reps > 0);
+  const sets = await db.list('workout_sets', (s) => s.done && s.weight_kg > 0 && s.reps > 0 && !isWarmup(s));
   const exs = await db.list('exercises');
   const best = {};
   for (const s of sets) {
     const ex = exs.find((x) => x.id === s.exercise_id);
     if (!ex || isCardio(ex)) continue;
-    const e1 = s.weight_kg * (1 + Math.min(s.reps, 12) / 30);
+    const e1 = e1rmOf(s);
     if (!best[ex.id] || e1 > best[ex.id].e1rm) best[ex.id] = { name: ex.name, e1rm: round1(e1), set: s };
   }
   return Object.values(best)

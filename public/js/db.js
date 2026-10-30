@@ -2,7 +2,7 @@
 // v2'de (Supabase) yalnızca bu dosya değişecek: her "store" bir tabloya karşılık gelir.
 
 const DB_NAME = 'sporcoach';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 export const SCHEMA_VERSION = 2;
 const USER_ID = 'local';
 
@@ -30,10 +30,11 @@ export const STORES = [
   'progress_photos',
   'coach_notes',
   'workout_sessions',
+  'vitals',
 ];
 
 // Dışa aktarmaya girmeyecek gizli ayarlar
-const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred'];
+const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last'];
 
 let dbp = null;
 let memory = null; // IndexedDB yoksa geçici bellek

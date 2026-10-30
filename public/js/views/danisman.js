@@ -212,6 +212,13 @@ export async function render(root, params) {
     }
     history.replaceState(null, '', '#/danisman');
   }
+  if (params.ask === 'month' && params.m) {
+    const [yy, mm] = params.m.split('-').map(Number);
+    const MN = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    ta.value = `${MN[mm - 1]} ${yy} ayımı değerlendirir misin? Antrenman, beslenme, kilo eğilimi, rekorlar ve kas dengesi açısından iyi gidenleri ve geliştirebileceğim en fazla üç şeyi yaz.`;
+    autosize();
+    history.replaceState(null, '', '#/danisman');
+  }
   if (params.photo === '1') history.replaceState(null, '', '#/danisman');
 
   // iOS klavye: görünür alan küçüldüğünde sohbeti ona sığdır

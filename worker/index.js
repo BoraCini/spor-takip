@@ -1,6 +1,8 @@
 // Pro Coach sunucu parçası (Cloudflare Worker)
 // - Statik dosyaları (public/) sunar
 // - /api/push/*: bildirim aboneliği ve hatırlatma programı
+// - /api/backup/<id>: şifreli bulut yedeği (sunucu içeriği okuyamaz)
+// - /api/inbox/<token>: Kestirmeler'den gelen adım/kilo verisi için geçici kutu
 // - Zamanlayıcı (cron): her 5 dakikada bir zamanı gelen hatırlatmaları Web Push ile gönderir
 // Kişisel veri saklanmaz: sadece push aboneliği, hatırlatma saatleri ve (varsayılan olarak genel) başlıklar tutulur.
 
@@ -49,6 +51,7 @@ function cleanReminders(list) {
     url: String(r.url || '/').slice(0, 80),
     time: /^\d{2}:\d{2}$/.test(r.time) ? r.time : '09:00',
     days: Array.isArray(r.days) ? r.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : [0, 1, 2, 3, 4, 5, 6],
+    date: /^\d{4}-\d{2}-\d{2}$/.test(r.date || '') ? r.date : null, // tek seferlik hatırlatma
   })).filter((r) => r.id);
 }
 
@@ -66,8 +69,85 @@ function validTz(tz) {
   }
 }
 
+// ---------- Şifreli bulut yedeği ----------
+// İçerik telefonda kullanıcının şifresiyle şifrelenir (AES-GCM); sunucu sadece okunamaz veriyi saklar.
+const BK_ID = /^[a-f0-9]{64}$/;
+const BK_MAX = 20 * 1024 * 1024;
+const INBOX_RE = /^[A-Za-z0-9_-]{32,80}$/;
+
+async function handleBackup(request, env, id) {
+  const key = 'bk:' + id;
+  if (request.method === 'GET') {
+    const { value, metadata } = await env.PUSH_KV.getWithMetadata(key, 'arrayBuffer');
+    if (!value) return json({ error: 'yok' }, 404);
+    return new Response(value, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'x-backup-at': (metadata && metadata.at) || '' } });
+  }
+  if (request.method === 'HEAD') {
+    const { metadata } = await env.PUSH_KV.getWithMetadata(key, 'stream');
+    return new Response(null, { status: metadata ? 200 : 404, headers: { 'x-backup-at': (metadata && metadata.at) || '', 'cache-control': 'no-store' } });
+  }
+  if (request.method === 'PUT') {
+    const len = Number(request.headers.get('content-length') || 0);
+    if (len > BK_MAX) return json({ error: 'buyuk' }, 413);
+    const prev = await env.PUSH_KV.getWithMetadata(key, 'stream');
+    if (prev.metadata && Date.now() - Date.parse(prev.metadata.at) < 5 * 60 * 1000) return json({ error: 'sik' }, 429);
+    const buf = await request.arrayBuffer();
+    if (!buf.byteLength || buf.byteLength > BK_MAX) return json({ error: 'boyut' }, 400);
+    const at = new Date().toISOString();
+    await env.PUSH_KV.put(key, buf, { metadata: { at, size: buf.byteLength }, expirationTtl: 60 * 60 * 24 * 400 });
+    return json({ ok: true, at });
+  }
+  if (request.method === 'DELETE') {
+    await env.PUSH_KV.delete(key);
+    return json({ ok: true });
+  }
+  return json({ error: 'method' }, 405);
+}
+
+// ---------- Apple Sağlık köprüsü (Kestirmeler) ----------
+// Kestirme günlük adım/kilo değerlerini buraya gönderir; uygulama açılınca alır ve kutuyu boşaltır.
+async function handleInbox(request, env, token) {
+  const key = 'ib:' + token;
+  if (request.method === 'POST') {
+    let body;
+    const txt = await request.text();
+    try {
+      body = JSON.parse(txt);
+    } catch {
+      body = Object.fromEntries(new URLSearchParams(txt));
+    }
+    const num = (v) => {
+      const n = parseFloat(String(v ?? '').replace(',', '.').replace(/[^0-9.\-]/g, ''));
+      return isFinite(n) ? n : null;
+    };
+    const item = {
+      date: /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : null,
+      steps: num(body.steps),
+      weight: num(body.weight),
+      bodyfat: num(body.bodyfat),
+      rhr: num(body.rhr),
+      at: new Date().toISOString(),
+    };
+    if (item.steps == null && item.weight == null && item.bodyfat == null && item.rhr == null) return json({ error: 'veri yok' }, 400);
+    const list = ((await env.PUSH_KV.get(key, 'json')) || []).slice(-59);
+    list.push(item);
+    await env.PUSH_KV.put(key, JSON.stringify(list), { expirationTtl: 60 * 60 * 24 * 45 });
+    return json({ ok: true });
+  }
+  if (request.method === 'GET') {
+    const list = (await env.PUSH_KV.get(key, 'json')) || [];
+    if (list.length && new URL(request.url).searchParams.get('clear') === '1') await env.PUSH_KV.delete(key);
+    return json({ items: list });
+  }
+  return json({ error: 'method' }, 405);
+}
+
 async function handleApi(request, env, url) {
   const path = url.pathname.replace(/\/+$/, '');
+  const bk = path.match(/^\/api\/backup\/([a-f0-9]{64})$/);
+  if (bk && BK_ID.test(bk[1])) return handleBackup(request, env, bk[1]);
+  const ib = path.match(/^\/api\/inbox\/([A-Za-z0-9_-]+)$/);
+  if (ib && INBOX_RE.test(ib[1])) return handleInbox(request, env, ib[1]);
   if (path === '/api/push/key' && request.method === 'GET') {
     const v = await getVapid(env);
     return json({ publicKey: v.publicKey });
@@ -170,6 +250,7 @@ export function dueReminders(rec, now) {
   const done = rec.done && rec.done.date === lp.date ? rec.done.ids : [];
   const out = [];
   for (const r of rec.reminders || []) {
+    if (r.date && r.date !== lp.date) continue;
     if (!r.days.includes(lp.wd)) continue;
     const [h, m] = r.time.split(':').map(Number);
     const rMin = h * 60 + m;

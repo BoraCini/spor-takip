@@ -540,3 +540,33 @@ export function downloadOrShare(filename, content, mime) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+
+// Kilo grafiği: günlük tartılar soluk nokta, eğilim (trend) kalın çizgi
+export function trendChartSVG(points, { w = 326, h = 130, unit = 'kg' } = {}) {
+  if (!points.length) return '';
+  const vals = points.flatMap((p) => [p.value, p.trend]);
+  let lo = Math.min(...vals);
+  let hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.15 || 0.5;
+  lo -= pad;
+  hi += pad;
+  const top = 10;
+  const bottom = h - 24;
+  const x = (i) => (points.length === 1 ? w / 2 : 20 + (i * (w - 40)) / (points.length - 1));
+  const y = (v) => bottom - ((v - lo) / (hi - lo)) * (bottom - top);
+  const first = points[0];
+  const last = points[points.length - 1];
+  let out = `<svg class="trend" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(`Kilo eğilimi ${first.label}: ${fmt(first.trend, 1)} ${unit}, ${last.label}: ${fmt(last.trend, 1)} ${unit}`)}">`;
+  // yatay kılavuz çizgileri
+  for (let i = 0; i <= 2; i++) {
+    const v = lo + pad + ((hi - lo - 2 * pad) * i) / 2;
+    out += `<line x1="0" x2="${w}" y1="${y(v)}" y2="${y(v)}" stroke="var(--sep)" stroke-width="1"/><text x="${w}" y="${y(v) - 3}" text-anchor="end">${esc(fmt(v, 1))}</text>`;
+  }
+  points.forEach((p, i) => {
+    out += `<circle cx="${x(i)}" cy="${y(p.value)}" r="2.6" fill="color-mix(in srgb, var(--sub) 45%, transparent)"/>`;
+  });
+  out += `<polyline points="${points.map((p, i) => `${x(i)},${y(p.trend)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>`;
+  out += `<circle cx="${x(points.length - 1)}" cy="${y(last.trend)}" r="4" fill="var(--accent)"/>`;
+  out += `<text x="20" y="${h - 6}" text-anchor="start">${esc(first.label)}</text><text x="${w - 20}" y="${h - 6}" text-anchor="end">${esc(last.label)} · ${esc(fmt(last.trend, 1))} ${unit}</text>`;
+  return out + '</svg>';
+}
