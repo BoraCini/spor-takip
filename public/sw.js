@@ -1,5 +1,5 @@
 // Service worker — uygulama kabuğunu önbelleğe alır, çevrimdışı çalışır.
-const CACHE = 'sporcoach-v24';
+const CACHE = 'sporcoach-v25';
 const SHELL = [
   './',
   'index.html',
@@ -78,7 +78,7 @@ self.addEventListener('fetch', (e) => {
           }
           return res;
         })
-        .catch(() => hit || (req.mode === 'navigate' ? caches.match('index.html') : undefined));
+        .catch(async () => hit || (req.mode === 'navigate' ? await caches.match('index.html') : null) || new Response('', { status: 504, statusText: 'Çevrimdışı' }));
       return hit || net;
     })
   );

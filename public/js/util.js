@@ -375,7 +375,19 @@ export function openSheet({ title = '', body = '', leftLabel = 'Kapat', rightLab
   });
   back.querySelector('[data-sheet-close]').addEventListener('click', () => api.close());
   const rb = back.querySelector('[data-sheet-right]');
-  if (rb) rb.addEventListener('click', () => onRight && onRight(api));
+  // Kaydet'e art arda basılınca kayıt iki kez oluşmasın
+  if (rb)
+    rb.addEventListener('click', async () => {
+      if (rb.dataset.busy || !onRight) return;
+      rb.dataset.busy = '1';
+      rb.disabled = true;
+      try {
+        await onRight(api);
+      } finally {
+        delete rb.dataset.busy;
+        rb.disabled = false;
+      }
+    });
   document.addEventListener('keydown', onKey);
   root.appendChild(back);
   syncSheetLock();

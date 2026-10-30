@@ -1,6 +1,6 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr, avatarHTML } from '../util.js';
-import { go, refresh } from '../app.js';
+import { refresh } from '../app.js';
 import { cycleInfo, dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
 import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
 import { weekday } from '../util.js';

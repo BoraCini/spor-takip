@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadOrShare, lineChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache } from '../util.js';
+import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadOrShare, lineChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
 import { monthUsage } from '../ai.js';
@@ -559,7 +559,7 @@ export async function renderPage(root, params, mode = 'profile') {
       const obj = JSON.parse(await file.text());
       const ok = await confirmSheet({
         title: 'Yedeği geri yükle',
-        text: `${obj.exported_at ? trDate(obj.exported_at.slice(0, 10)) + ' tarihli yedek. ' : ''}Mevcut verilerin bu yedekle değiştirilecek.`,
+        text: `${obj.exported_at ? trDate(dateStr(new Date(obj.exported_at))) + ' tarihli yedek. ' : ''}Mevcut verilerin bu yedekle değiştirilecek.`,
         okLabel: 'Geri yükle',
       });
       if (!ok) return;

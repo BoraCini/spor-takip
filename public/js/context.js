@@ -484,8 +484,10 @@ const OLD_TO_DAYS = { '1.2': 0, '1.375': 2, '1.55': 4, '1.725': 6, '1.9': 6 };
 // Kayıtlı detay yoksa eski "aktivite seviyesi"nden makul bir başlangıç çıkar
 export function activityOf(p) {
   if (p.act) return { job: 'masa', steps: null, train_days: 0, train_min: 60, train_int: 'orta', cardio_min: 0, cardio_int: 'orta', ...p.act };
+  // Eski tek seçimli seviyeden geçenler için hesap eskisine yakın çıksın diye adım tahmini de eklenir
   const a = String(p.activity || '1.55');
-  return { job: a === '1.9' ? 'agir' : 'masa', steps: null, train_days: OLD_TO_DAYS[a] ?? 4, train_min: 60, train_int: 'orta', cardio_min: 0, cardio_int: 'orta' };
+  const STEPS = { '1.2': null, '1.375': 6000, '1.55': 8000, '1.725': 10000, '1.9': 12000 };
+  return { job: a === '1.9' ? 'agir' : 'masa', steps: STEPS[a] ?? null, train_days: OLD_TO_DAYS[a] ?? 4, train_min: 60, train_int: 'orta', cardio_min: 0, cardio_int: 'orta' };
 }
 
 export function energyBreakdown(p) {

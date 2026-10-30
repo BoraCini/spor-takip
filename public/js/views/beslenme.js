@@ -2,7 +2,7 @@ import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1, weekStart, parseDate, swipeDelete } from '../util.js';
 import { refresh, go } from '../app.js';
 import { removeWithUndo } from '../undo.js';
-import { dayNutrition, targetsOf, MEALS, mealLabel, waterDay, waterTarget } from '../context.js';
+import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION } from '../data/foods.js';
 
@@ -558,6 +558,8 @@ async function openAddFood(meal, startTab = null) {
       return;
     }
     if (b.hasAttribute('data-addall')) {
+      if (b.disabled) return;
+      b.disabled = true; // art arda basınca iki kez eklenmesin
       const items = [...picked.values()];
       for (const x of items) await logOne(x.food, x, 'coklu');
       toast(`${items.length} besin eklendi`);
@@ -783,6 +785,8 @@ async function openSayAdd(meal, { text = '', listen: startListen = false } = {})
         },
       });
     } else if (b.hasAttribute('data-addall')) {
+      if (b.disabled) return;
+      b.disabled = true; // art arda basınca iki kez eklenmesin
       const date = addDays(state.date, dayOffset);
       const on = items.filter((x) => x.food && x.on !== false);
       for (const it of on)

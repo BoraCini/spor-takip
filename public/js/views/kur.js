@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate, swipeDelete, daysBetween } from '../util.js';
+import { esc, parseNum, toast, today, addDays, weekStart, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate, swipeDelete, daysBetween } from '../util.js';
 import { refresh } from '../app.js';
 import { removeWithUndo } from '../undo.js';
 import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel } from '../context.js';

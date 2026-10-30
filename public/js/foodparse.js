@@ -221,7 +221,13 @@ export function parseMealText(text, custom = [], usage = null, aliases = {}) {
     // Daha önce kullanıcının düzelttiği eşleşme varsa onu kullan ("lifalif yulaf" → Eti Lifalif)
     const learned = aliases[foodText] ? findFood(aliases[foodText], custom) : null;
     const res = learned ? [learned] : searchFoods(foodText, custom, usage);
-    const food = res[0] || null;
+    let food = res[0] || null;
+    // "2 dilim ekmek", "1 su bardağı pilav": söylenen ölçüye sahip besini tercih et (tam eşleşenler arasından)
+    if (!learned && unit && unit.g !== 1 && !['kg', 'litre', 'adet'].includes(unit.name)) {
+      const key = norm(unit.name).split(' ')[0];
+      const withUnit = res.slice(0, 10).find((f) => coverage(foodText, f) >= 0.99 && (f.portions || []).some((p) => norm(p[0]).includes(key)));
+      if (withUnit) food = withUnit;
+    }
     const cov = learned ? 1 : food ? coverage(foodText, food) : 0;
     const g = food ? gramsFor(food, qty, unit) : null;
     items.push({ text: foodText, said: { qty, unit }, food, match: !food ? 'none' : cov >= 0.99 ? 'full' : 'partial', ...(g || {}) });

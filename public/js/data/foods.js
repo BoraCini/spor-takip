@@ -189,6 +189,9 @@ function wordScore(w, nameN, hayWords) {
   return -1;
 }
 
+// Tek kelimelik genel aramalarda en sık kullanılan temel besinler öne çıksın (kullanım geçmişi oluşana kadar)
+const STAPLES = new Set(['f_feta', 'u_dana_kiyma_10_yag_cig', 'f_milk_semi', 'f_chk_breast_raw', 'f_bread_white', 'f_yog_full', 'f_egg', 'f_oats', 'f_banana', 'f_pilav']);
+
 // Kullanıcının düzelttiği besinler (custom.overrides = orijinal id) orijinalin yerine geçer
 export function searchFoods(query, custom = [], usage = null) {
   const replaced = new Set(custom.filter((c) => c.overrides).map((c) => c.overrides));
@@ -203,13 +206,18 @@ export function searchFoods(query, custom = [], usage = null) {
     const hayWords = (nameN + ' ' + norm(f.alias || '')).split(' ').filter(Boolean);
     let score = 0;
     let hits = 0;
+    const nameWords = nameN.split(' ').filter(Boolean);
     for (const w of words) {
       const sc = wordScore(w, nameN, hayWords);
       if (sc < 0) continue;
       score += sc;
       hits++;
+      // kelime besinin kendi adında geçiyorsa (sadece arama kelimelerinde değil) öne al: "kıyma" → Dana kıyma, Adana kebap değil
+      if (nameWords.includes(w)) score += 0.5;
+      else if (nameWords.some((h) => h.startsWith(w))) score += 0.25;
     }
     if (f.custom) score += 0.5;
+    if (words.length === 1 && STAPLES.has(f.id)) score += 0.8;
     // Aranan kelimeyle başlayan sade besinler (örn. "Patates (çiğ)") yemeklerin önüne geçsin
     if (norm(f.name.split(/[(,]/)[0]) === q) score += 1.5;
     else if (nameN === q || nameN.startsWith(q + ' ')) score += 1;
