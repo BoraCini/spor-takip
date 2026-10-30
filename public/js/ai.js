@@ -1,4 +1,4 @@
-// Danışman: Claude API bağlantısı (canlı akış + önbellek), model seçimi, araçlar (onay kartları) ve harcama takibi
+// Coach: Claude API bağlantısı (canlı akış + önbellek), model seçimi, araçlar (onay kartları) ve harcama takibi
 import * as db from './db.js';
 import { today, round1 } from './util.js';
 import { buildContext, findOrCreateExercise, dueOn, MEALS, slotLabel, MEASURES } from './context.js';
@@ -51,7 +51,7 @@ let STATIC_PROMPT = null;
 function staticPrompt() {
   if (STATIC_PROMPT) return STATIC_PROMPT;
   const foodList = FOODS.map((f) => `${f.id}: ${f.name}${f.portions?.length ? ' [' + f.portions.map((p) => `1 ${p[0]}=${p[1]}g`).join(', ') + ']' : ''}`).join('\n');
-  STATIC_PROMPT = `Sen SporCoach uygulamasının içindeki kişisel spor koçu ve danışmanısın. Kullanıcıyla Türkçe, samimi ama net konuş. Cevapların kısa ve öz olsun; gereksiz uyarı, tekrar ve uzun girişlerden kaçın. Liste ve kalın yazıyı sadece gerçekten okumayı kolaylaştırdığında kullan. Cevapların bazen sesli okunur; bu yüzden tablo ve emoji kullanma.
+  STATIC_PROMPT = `Sen SporCoach uygulamasının içindeki kişisel spor koçusun; uygulamada adın "Coach". Kullanıcıyla Türkçe, samimi ama net konuş. Cevapların kısa ve öz olsun; gereksiz uyarı, tekrar ve uzun girişlerden kaçın. Liste ve kalın yazıyı sadece gerçekten okumayı kolaylaştırdığında kullan. Cevapların bazen sesli okunur; bu yüzden tablo ve emoji kullanma.
 
 GÖREVLERİN
 - Kullanıcı yediklerini, içtiği suyu, yaptığı setleri veya kardiyoyu, aldığı hap/enjeksiyonu, kilosunu, vücut ölçülerini ya da tahlil sonuçlarını yazdığında veya fotoğrafını gönderdiğinde uygun aracı çağırarak kaydı hazırla. Araç ekranda bir onay kartı gösterir; kullanıcı onaylayınca kaydedilir. Aracı çağırdıktan sonra 1–2 cümleyle kısa bir not yaz; karttaki değerleri tekrar listeleme. Bir mesajda birden fazla kayıt türü varsa her biri için ayrı araç çağır.
@@ -504,7 +504,14 @@ async function historyMessages() {
   const recent = msgs.slice(-HISTORY_LIMIT);
   const out = [];
   for (const m of recent) {
-    const text = (m.text || '').trim() || (m.role === 'user' && m.image ? '[fotoğraf gönderdi]' : '');
+    let text = (m.text || '').trim();
+    if (m.role === 'user') {
+      const extra = [];
+      const n = (m.images && m.images.length) || (m.image ? 1 : 0);
+      if (n) extra.push(n > 1 ? `[${n} fotoğraf gönderdi]` : '[fotoğraf gönderdi]');
+      for (const f of m.files || []) extra.push(`[dosya gönderdi: ${f.name}]`);
+      if (extra.length) text = (extra.join(' ') + ' ' + text).trim();
+    }
     if (!text) continue;
     const last = out[out.length - 1];
     if (last && last.role === m.role) last.content += '\n\n' + text;
@@ -514,12 +521,13 @@ async function historyMessages() {
   return out;
 }
 
-// Bir kullanıcı mesajını işle. image: { media_type, data(base64) }
+// Bir kullanıcı mesajını işle. attachments: [{ kind:'image', media_type, data } | { kind:'pdf', name, data } | { kind:'text', name, text }]
 // onModel(model): hangi model çalışıyor; onText(fullText): cevap yazıldıkça
-export async function runTurn({ text, image, onModel, onText }) {
+export async function runTurn({ text, image, attachments = [], onModel, onText }) {
   const apiKey = await db.getSetting('api_key');
-  if (!apiKey) throw new AIError('Danışmanı kullanmak için önce Profil ve ayarlar sayfasından API anahtarını ekle.');
-  const model = chooseModel(text, !!image);
+  if (!apiKey) throw new AIError("Coach'u kullanmak için önce Profil ve ayarlar sayfasından API anahtarını ekle.");
+  if (image) attachments = [{ kind: 'image', ...image }, ...attachments];
+  const model = chooseModel(text, attachments.length > 0);
   onModel && onModel(model);
   const ctx = await buildContext();
   const custom = await db.list('custom_foods');
@@ -530,8 +538,13 @@ export async function runTurn({ text, image, onModel, onText }) {
   const history = await historyMessages(); // son kullanıcı mesajı zaten kaydedildiği için geçmişte var
   if (history.length && history[history.length - 1].role === 'user') history.pop();
   const userContent = [];
-  if (image) userContent.push({ type: 'image', source: { type: 'base64', media_type: image.media_type, data: image.data } });
-  userContent.push({ type: 'text', text: text || 'Bu fotoğrafı incele ve gerekiyorsa kaydet.' });
+  for (const a of attachments) {
+    if (a.kind === 'image') userContent.push({ type: 'image', source: { type: 'base64', media_type: a.media_type, data: a.data } });
+    else if (a.kind === 'pdf') userContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: a.data }, title: a.name });
+    else if (a.kind === 'text') userContent.push({ type: 'text', text: `Ekli dosya: ${a.name}\n\n${a.text}` });
+  }
+  const what = attachments.some((a) => a.kind !== 'image') ? 'Eklediğim dosyayı' : 'Bu fotoğrafı';
+  userContent.push({ type: 'text', text: text || `${what} incele ve gerekiyorsa kaydet.` });
   const messages = [...history, { role: 'user', content: userContent }];
   if (messages[0].role !== 'user') messages.shift();
 

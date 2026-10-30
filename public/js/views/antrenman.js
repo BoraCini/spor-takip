@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, round1, lineChartSVG, parseDate, MONTHS_SHORT } from '../util.js';
+import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, round1, lineChartSVG, parseDate, MONTHS_SHORT, swipeDelete } from '../util.js';
 import { refresh } from '../app.js';
 import { programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES, MUSCLE_GROUP, routineList, routineDay, sessionFor } from '../context.js';
 import { EXERCISE_PRESETS } from '../data/exercises.js';
@@ -86,12 +86,15 @@ export async function render(root, params = {}) {
   const logged = await db.list('workout_sets', (s) => s.date === date);
   const exs = await db.list('exercises');
 
-  // Programda olmayan ama bu gün kaydedilmiş egzersizler (örn. Danışman'dan)
+  // Programda olmayan ama bu gün kaydedilmiş egzersizler (örn. Coach'tan)
   const progIds = new Set(items.map((x) => x.exercise.id));
   const extraIds = [...new Set([...logged.map((s) => s.exercise_id), ...((state.added || {})[date] || [])])].filter((id) => !progIds.has(id));
+  // (atlanan hareketler aşağıda süzülür)
+  const skipMap = (await db.getSetting('skipped_ex', {})) || {};
+  const skipped = new Set(skipMap[date] || []);
   const allItems = [
-    ...items,
-    ...extraIds.map((id) => ({ pe: { target_sets: 0, target_reps: '' }, exercise: exs.find((e) => e.id === id) || { id, name: 'Egzersiz' }, extra: true })),
+    ...items.filter((x) => !skipped.has(x.exercise.id)),
+    ...extraIds.filter((id) => !skipped.has(id)).map((id) => ({ pe: { target_sets: 0, target_reps: '' }, exercise: exs.find((e) => e.id === id) || { id, name: 'Egzersiz' }, extra: true })),
   ];
 
   const cards = [];
@@ -105,7 +108,7 @@ export async function render(root, params = {}) {
     const prev = await previousSession(ex.id, date);
     const sug = suggestNext(ex, it.pe, prev);
     const target = Number(it.pe.target_sets) || 0;
-    const count = Math.max(target, mySets.reduce((m, s) => Math.max(m, s.set_no), 0)) + (state.extra[ex.id] || 0) || (mySets.length ? mySets.length : 1);
+    const count = Math.max(1, Math.max(target, mySets.reduce((m, s) => Math.max(m, s.set_no), 0)) + (state.extra[`${ex.id}|${date}`] || 0));
     const rows = [];
     let lastVals = null;
     for (let n = 1; n <= count; n++) {
@@ -169,7 +172,7 @@ export async function render(root, params = {}) {
       </div>
       ${
         active
-          ? `<div class="set-editor">
+          ? `<div class="set-editor no-swipe">
           <div><label for="kg-${c.ex.id}">Kg</label>
             <div class="stepper"><button type="button" aria-label="Kiloyu 2,5 azalt" data-act="kg" data-d="-2.5" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
             <input id="kg-${c.ex.id}" inputmode="decimal" value="${r.kg == null ? '' : kgTxt(r.kg)}" data-in="kg" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phKg == null ? '0' : kgTxt(r.phKg)}">
@@ -204,7 +207,7 @@ export async function render(root, params = {}) {
       </div>
       ${
         active
-          ? `<div class="set-editor">
+          ? `<div class="set-editor no-swipe">
           <div><label for="mn-${c.ex.id}">Süre (dk)</label>
             <div class="stepper"><button type="button" aria-label="Süreyi azalt" data-act="min" data-d="-1" data-ex="${c.ex.id}" data-n="${r.n}">−</button>
             <input id="mn-${c.ex.id}" inputmode="decimal" value="${r.min ?? ''}" data-in="min" data-ex="${c.ex.id}" data-n="${r.n}" placeholder="${r.phMin ?? '0'}">
@@ -286,10 +289,11 @@ export async function render(root, params = {}) {
           </div>`
     }
 
+    <div id="excards">
     ${cards
       .map(
         (c) => `
-      <section class="card" aria-label="${esc(c.ex.name)}" style="padding:10px 12px 12px">
+      <section class="card ex-card" data-ex="${c.ex.id}" aria-label="${esc(c.ex.name)}" style="padding:10px 12px 12px">
         <div class="ex-head">
           <button type="button" style="display:flex;flex-direction:column;align-items:flex-start;min-height:44px;justify-content:center;text-align:left" data-act="history" data-ex="${c.ex.id}">
             <span class="ex-name">${esc(c.ex.name)}</span>
@@ -312,8 +316,9 @@ export async function render(root, params = {}) {
       </section>`
       )
       .join('')}
+    </div>
     ${allItems.length ? `<button type="button" class="btn block" style="margin:12px 16px 0;width:calc(100% - 32px)" data-act="add-ex">+ Hareket ekle</button>` : ''}
-    ${allItems.length ? `<p class="note">Gri rakamlar öneridir: boş bırakıp ✓'e basarsan onlar kaydedilir, istersen dokunup kendi değerini yaz. "Öneri" geçen seferki performansına göre kademeli yüklenme önerir. Başka bir harekete geçmek için satırına dokun. RPE isteğe bağlı: 10 = tükeniş, 8 = 2 tekrar daha yapabilirdin.</p>` : ''}
+    ${allItems.length ? `<p class="note">Gri rakamlar öneridir: boş bırakıp ✓'e basarsan onlar kaydedilir, istersen dokunup kendi değerini yaz. "Öneri" geçen seferki performansına göre kademeli yüklenme önerir. Başka bir harekete geçmek için satırına dokun. Seti ya da hareketi silmek için sola kaydır. RPE isteğe bağlı: 10 = tükeniş, 8 = 2 tekrar daha yapabilirdin.</p>` : ''}
   `;
 
   // Yardımcılar
@@ -332,6 +337,81 @@ export async function render(root, params = {}) {
       if (row.rec) await db.put('workout_sets', { ...row.rec, weight_kg: vals.kg, reps: vals.reps, rpe: vals.rpe ?? null });
     }
   };
+
+  // ---- Sola kaydırınca sil: set satırı → seti siler; hareket kartı → hareketi bu günden kaldırır ----
+  const exBox = root.querySelector('#excards');
+  if (exBox) {
+    exBox.querySelectorAll('.ex-card').forEach((card) =>
+      swipeDelete(card, '.set-row', async (row) => {
+        const exId = row.dataset.ex;
+        const n = Number(row.dataset.n);
+        const sets = await db.list('workout_sets', (x) => x.date === date && x.exercise_id === exId);
+        const extraBefore = state.extra[`${exId}|${date}`] || 0;
+        const draftsBefore = { ...state.drafts };
+        for (const x of sets) {
+          if (x.set_no === n) await db.remove('workout_sets', x.id);
+          else if (x.set_no > n) await db.put('workout_sets', { ...x, set_no: x.set_no - 1 });
+        }
+        // taslakları da kaydır
+        const pre = `${exId}|${date}|`;
+        const moved = {};
+        for (const [k, v] of Object.entries(state.drafts)) {
+          if (!k.startsWith(pre)) continue;
+          const k2 = Number(k.slice(pre.length));
+          delete state.drafts[k];
+          if (k2 > n) moved[pre + (k2 - 1)] = v;
+          else if (k2 < n) moved[k] = v;
+        }
+        Object.assign(state.drafts, moved);
+        state.extra[`${exId}|${date}`] = extraBefore - 1;
+        delete state.active[`${exId}|${date}`];
+        await refresh();
+        toast(`${n}. set silindi`, 4500, {
+          label: 'Geri al',
+          onClick: async () => {
+            for (const x of sets) {
+              const { deleted_at, ...r } = x;
+              await db.put('workout_sets', r);
+            }
+            state.extra[`${exId}|${date}`] = extraBefore;
+            state.drafts = draftsBefore;
+            refresh();
+          },
+        });
+      })
+    );
+    swipeDelete(
+      exBox,
+      '.ex-card',
+      async (card) => {
+        const exId = card.dataset.ex;
+        const name = (cards.find((c) => c.ex.id === exId) || {}).ex?.name || 'Hareket';
+        const sets = await db.list('workout_sets', (x) => x.date === date && x.exercise_id === exId);
+        for (const x of sets) await db.remove('workout_sets', x.id);
+        const map = (await db.getSetting('skipped_ex', {})) || {};
+        const cutoff = addDays(t, -21);
+        for (const k of Object.keys(map)) if (k < cutoff) delete map[k];
+        map[date] = [...new Set([...(map[date] || []), exId])];
+        await db.setSetting('skipped_ex', map);
+        if (state.added && state.added[date]) state.added[date] = state.added[date].filter((x) => x !== exId);
+        await refresh();
+        toast(`${name} bu günden kaldırıldı`, 4500, {
+          label: 'Geri al',
+          onClick: async () => {
+            for (const x of sets) {
+              const { deleted_at, ...r } = x;
+              await db.put('workout_sets', r);
+            }
+            const m = (await db.getSetting('skipped_ex', {})) || {};
+            m[date] = (m[date] || []).filter((x) => x !== exId);
+            await db.setSetting('skipped_ex', m);
+            refresh();
+          },
+        });
+      },
+      'Kaldır'
+    );
+  }
 
   root.onclick = async (e) => {
     const b = e.target.closest('[data-act],[data-wd],[data-tab]');
@@ -366,13 +446,16 @@ export async function render(root, params = {}) {
     else if (act === 'free' || act === 'add-ex') {
       const picked = await pickExercises();
       if (!picked.length) return;
+      const sk = (await db.getSetting('skipped_ex', {})) || {};
       for (const x of picked) {
         let ex = await findOrCreateExercise(x.name, { cardio: x.muscle === 'Kardiyo' });
         if (x.muscle && !ex.muscle) ex = await db.put('exercises', { ...ex, muscle: x.muscle, kind: x.muscle === 'Kardiyo' ? 'kardiyo' : 'agirlik' });
-        state.extra[ex.id] = Math.max(state.extra[ex.id] || 0, 1);
+        state.extra[`${ex.id}|${date}`] = Math.max(state.extra[`${ex.id}|${date}`] || 0, 1);
         state.added = state.added || {};
         (state.added[date] = state.added[date] || []).includes(ex.id) || state.added[date].push(ex.id);
+        if (sk[date]) sk[date] = sk[date].filter((id) => id !== ex.id);
       }
+      await db.setSetting('skipped_ex', sk);
       refresh();
     }
     else if (act === 'history') openHistory(exs.find((x) => x.id === exId) || cardOf(exId).ex);
@@ -431,7 +514,7 @@ export async function render(root, params = {}) {
       }
       refresh();
     } else if (act === 'addset') {
-      state.extra[exId] = (state.extra[exId] || 0) + 1;
+      state.extra[`${exId}|${date}`] = (state.extra[`${exId}|${date}`] || 0) + 1;
       refresh();
     }
   };

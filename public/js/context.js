@@ -1,4 +1,4 @@
-// Sayfaların ve Danışman'ın ortak kullandığı veri yardımcıları
+// Sayfaların ve Coach'un ortak kullandığı veri yardımcıları
 import * as db from './db.js';
 import { today, weekday, addDays, daysBetween, WD_LONG, round1, weekStart as weekStartOf } from './util.js';
 import { classify } from './data/labs.js';
@@ -311,7 +311,7 @@ export async function labTests() {
   return tests.map((t) => ({ test: t, values: values.filter((v) => v.test_id === t.id) }));
 }
 
-// ---------- Danışman için bağlam özeti ----------
+// ---------- Coach için bağlam özeti ----------
 export async function buildContext() {
   const t = today();
   const p = await db.getProfile();

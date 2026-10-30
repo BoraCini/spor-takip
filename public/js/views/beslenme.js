@@ -1,11 +1,13 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1 } from '../util.js';
+import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1, weekStart, parseDate, swipeDelete } from '../util.js';
 import { refresh, go } from '../app.js';
+import { removeWithUndo } from '../undo.js';
 import { dayNutrition, targetsOf, MEALS, mealLabel, waterDay, waterTarget } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION } from '../data/foods.js';
 
-let state = { tab: 'log', date: today() };
+let state = { tab: 'log', date: today(), collapsed: null };
+const WD = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 
 const pct = (v, t) => (t ? Math.min(100, Math.round((v / t) * 100)) : 0);
 
@@ -18,6 +20,7 @@ function guessMeal() {
   return 'ara';
 }
 
+
 export async function render(root, params) {
   if (params.tab === 'plan' || params.tab === 'log') state.tab = params.tab;
   const p = await db.getProfile();
@@ -29,6 +32,25 @@ export async function render(root, params) {
   const wTarget = await waterTarget(p);
   const yEntries = isLog ? (await dayNutrition(addDays(state.date, -1))).entries : [];
   const phaseLbl = { bulk: 'Bulk', cut: 'Cut', koruma: 'Koruma' }[p.phase || 'koruma'];
+  if (!state.collapsed) state.collapsed = new Set(await db.getSetting('meal_collapsed', []));
+  // Haftanın günleri: kayıt olan günlerde ✓
+  const ws = weekStart(state.date);
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
+  const logged = new Set((await db.list('food_logs', (r) => r.date >= ws && r.date <= weekDays[6])).map((r) => r.date));
+  const t0 = today();
+  const weekHTML = `<div class="dweek" role="group" aria-label="Hafta">
+      <button type="button" class="dw-nav" data-act="week-prev" aria-label="Önceki hafta">${icon.left}</button>
+      ${weekDays
+        .map((d, i) => {
+          const sel = d === state.date;
+          const fut = d > t0;
+          const has = logged.has(d);
+          return `<button type="button" class="dw${sel ? ' sel' : ''}${has ? ' has' : ''}${d === t0 ? ' today' : ''}" data-act="day" data-d="${d}" ${fut ? 'disabled' : ''} aria-pressed="${sel}" aria-label="${esc(relDay(d))}${has ? ', kayıt var' : ''}">
+            <span class="dw-l">${WD[i]}</span><span class="dw-c">${has ? icon.check : parseDate(d).getDate()}</span></button>`;
+        })
+        .join('')}
+      <button type="button" class="dw-nav" data-act="week-next" aria-label="Sonraki hafta" ${weekDays[6] >= t0 ? 'disabled' : ''}>${icon.right}</button>
+    </div>`;
 
   let body = '';
   if (isLog) {
@@ -78,33 +100,52 @@ export async function render(root, params) {
         </div>
       </section>`;
 
+    body += '<div id="meals">';
     for (const [mk, ml] of MEALS) {
       const items = entries.filter((e) => e.meal === mk);
-      const kcal = items.reduce((s, e) => s + (e.kcal || 0), 0);
+      const sum = (k) => items.reduce((a, e) => a + (Number(e[k]) || 0), 0);
+      const kcal = sum('kcal');
+      const open = !state.collapsed.has(mk);
+      const y = items.length ? [] : yEntries.filter((e) => e.meal === mk && !e.plan_item_id);
       body += `
-        <div class="sec"><h2>${ml}${items.length ? ` · <span class="num">${fmt(kcal)}</span> kcal` : ''}</h2>
-          <button type="button" class="link" data-act="add" data-meal="${mk}">+ Ekle</button></div>
-        <section class="card flush" aria-label="${ml}">
+        <section class="card meal-card${open ? ' open' : ''}" aria-label="${ml}">
+          <div class="meal-hd">
+            <button type="button" class="meal-tg" data-act="toggle-meal" data-meal="${mk}" aria-expanded="${open}">
+              <span class="meal-t">${ml}</span>
+              <span class="meal-k num">${items.length ? `${fmt(kcal)} <small>kcal</small>` : ''}</span>
+              <span class="meal-chev">${icon.chev}</span>
+            </button>
+            <button type="button" class="meal-add" data-act="add" data-meal="${mk}" aria-label="${ml} öğününe ekle">${icon.plus}</button>
+          </div>
           ${
-            items.length
-              ? items
-                  .map(
-                    (e) => `<button type="button" class="row" data-act="edit-entry" data-id="${e.id}">
-                      <span class="row-main"><span class="row-title normal">${esc(e.name)}${e.estimated ? '<span class="est">tahmini</span>' : ''}</span>
-                      <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams)) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
-                      <span class="row-end">${fmt(e.kcal)}</span></button>`
-                  )
-                  .join('')
-              : (() => {
-                  const y = yEntries.filter((e) => e.meal === mk && !e.plan_item_id);
-                  return y.length
-                    ? `<div class="empty" style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 0">Henüz bir şey yok
-                        <button type="button" class="pill" data-act="copy-meal" data-meal="${mk}" style="display:flex;align-items:center;gap:6px">${icon.copy}<span>Dünkü ${({ kahvalti: 'kahvaltıyı', ogle: 'öğle yemeğini', aksam: 'akşam yemeğini', ara: 'ara öğünü' })[mk]} ekle (${y.length})</span></button></div>`
-                    : `<div class="empty">Henüz bir şey yok</div>`;
-                })()
+            open
+              ? `${
+                  items.length
+                    ? `<div class="meal-mac" aria-label="${ml} makroları">
+                        <span><small>Yağ</small><b class="num">${fmt(sum('fat_g'), 1)}</b></span>
+                        <span><small>Karb</small><b class="num">${fmt(sum('carb_g'), 1)}</b></span>
+                        <span><small>Prot</small><b class="num">${fmt(sum('protein_g'), 1)}</b></span>
+                        <span><small>TGD</small><b class="num">${tg.kcal ? `%${fmt((kcal / tg.kcal) * 100)}` : '—'}</b></span>
+                        <span><small>Kalori</small><b class="num">${fmt(kcal)}</b></span>
+                      </div>
+                      <div class="meal-list">${items
+                        .map(
+                          (e) => `<button type="button" class="row meal-row" data-act="edit-entry" data-id="${e.id}">
+                            <span class="row-main"><span class="row-title normal">${esc(e.name)}${e.estimated ? '<span class="est">tahmini</span>' : ''}</span>
+                            <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams)) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
+                            <span class="row-end">${fmt(e.kcal)}</span></button>`
+                        )
+                        .join('')}</div>`
+                    : y.length
+                    ? `<div class="meal-empty"><button type="button" class="pill" data-act="copy-meal" data-meal="${mk}" style="display:flex;align-items:center;gap:6px">${icon.copy}<span>Dünkü ${({ kahvalti: 'kahvaltıyı', ogle: 'öğle yemeğini', aksam: 'akşam yemeğini', ara: 'ara öğünü' })[mk]} ekle (${y.length})</span></button></div>`
+                    : `<button type="button" class="meal-empty muted" data-act="add" data-meal="${mk}">Henüz bir şey yok · eklemek için dokun</button>`
+                }`
+              : ''
           }
         </section>`;
     }
+    body += '</div>';
+    if (entries.length) body += `<p class="note" style="margin-top:6px">Bir besini silmek için sola kaydır.</p>`;
 
     body += `
       <div class="sec"><h2>Mikro besinler</h2></div>
@@ -120,7 +161,7 @@ export async function render(root, params) {
           )
           .join('')}
       </section>
-      <p class="note">Kalori ve makrolar besin veritabanından hesaplanır; "tahmini" işaretli olanlar Danışman'ın tahminidir. Mikro besinler yalnızca lif, sodyum ve potasyum için izlenir.</p>`;
+      <p class="note">Kalori ve makrolar besin veritabanından hesaplanır; "tahmini" işaretli olanlar Coach'un tahminidir. Mikro besinler yalnızca lif, sodyum ve potasyum için izlenir.</p>`;
   } else {
     const pt = plan.reduce(
       (a, x) => ({ kcal: a.kcal + (Number(x.kcal) || 0), p: a.p + (Number(x.protein_g) || 0), c: a.c + (Number(x.carb_g) || 0), f: a.f + (Number(x.fat_g) || 0) }),
@@ -154,7 +195,7 @@ export async function render(root, params) {
                   </div>`;
                 })
                 .join('')
-            : `<div class="empty">Henüz plan yok. "Öğün ekle" ile kendi beslenme planını yaz;<br>istersen Danışman'dan hedefine göre plan hazırlamasını da isteyebilirsin.</div>`
+            : `<div class="empty">Henüz plan yok. "Öğün ekle" ile kendi beslenme planını yaz;<br>istersen Coach'tan hedefine göre plan hazırlamasını da isteyebilirsin.</div>`
         }
       </section>
       <p class="note">İşaretlediğin öğün, plandaki değerlerle Günlük'e eklenir. Farklı bir şey yediysen Günlük'ten düzeltebilirsin.</p>`;
@@ -180,7 +221,12 @@ export async function render(root, params) {
       <button type="button" role="tab" aria-selected="${isLog}" data-tab="log">Günlük</button>
       <button type="button" role="tab" aria-selected="${!isLog}" data-tab="plan">Planım</button>
     </div>
+    ${weekHTML}
     ${body}`;
+
+  // Sola kaydırınca sil
+  const mealsEl = root.querySelector('#meals');
+  if (mealsEl) swipeDelete(mealsEl, '.meal-row', (row) => removeWithUndo('food_logs', row.dataset.id, 'Besin silindi'));
 
   root.onclick = async (e) => {
     const t = e.target.closest('[data-act],[data-tab]');
@@ -195,6 +241,22 @@ export async function render(root, params) {
       refresh();
     } else if (act === 'next') {
       if (state.date < today()) state.date = addDays(state.date, 1);
+      refresh();
+    } else if (act === 'day') {
+      state.date = t.dataset.d;
+      refresh();
+    } else if (act === 'week-prev') {
+      state.date = addDays(state.date, -7);
+      refresh();
+    } else if (act === 'week-next') {
+      const n = addDays(state.date, 7);
+      state.date = n > today() ? today() : n;
+      refresh();
+    } else if (act === 'toggle-meal') {
+      const mk = t.dataset.meal;
+      if (state.collapsed.has(mk)) state.collapsed.delete(mk);
+      else state.collapsed.add(mk);
+      await db.setSetting('meal_collapsed', [...state.collapsed]);
       refresh();
     } else if (act === 'add') openAddFood(t.dataset.meal || (state.date === today() ? guessMeal() : 'ara'));
     else if (act === 'scan') scanAndAdd(state.date === today() ? guessMeal() : 'ara');
@@ -1030,7 +1092,7 @@ async function openRecipe(existing, after) {
       <input id="rc-q" class="input" type="search" placeholder="Malzeme ara ve ekle: bulgur, soğan…" autocomplete="off" style="margin-bottom:8px">
       <div id="rc-res"></div>
       <div class="card" id="rc-tot"></div>
-      <p class="small muted" style="margin:0 4px 12px;line-height:18px">Malzemeleri çiğ ağırlıklarıyla gir. Kaydettiğin tarif "Tarifler" sekmesinde ve aramada çıkar; Danışman da onu tanır.</p>
+      <p class="small muted" style="margin:0 4px 12px;line-height:18px">Malzemeleri çiğ ağırlıklarıyla gir. Kaydettiğin tarif "Tarifler" sekmesinde ve aramada çıkar; Coach da onu tanır.</p>
       ${existing ? '<button type="button" class="btn danger block" data-del-recipe>Tarifi sil</button>' : ''}`,
     onRight: async (api) => {
       const name = s.el.querySelector('#rc-name').value.trim();
@@ -1183,7 +1245,7 @@ async function openEditEntry(entry) {
       <div class="card" style="margin:0 0 12px">
         <div class="kv"><span class="k">Kalori</span><span class="v">${fmt(entry.kcal)} kcal</span></div>
         <div class="kv"><span class="k">Protein · Karb · Yağ</span><span class="v">${fmt(entry.protein_g)} · ${fmt(entry.carb_g)} · ${fmt(entry.fat_g)} g</span></div>
-        <div class="kv"><span class="k">Kaynak</span><span class="v">${entry.source === 'plan' ? 'Beslenme planı' : entry.estimated ? 'Danışman tahmini' : 'Veritabanı'}</span></div>
+        <div class="kv"><span class="k">Kaynak</span><span class="v">${entry.source === 'plan' ? 'Beslenme planı' : entry.estimated ? 'Coach tahmini' : 'Veritabanı'}</span></div>
       </div>
       <button type="button" class="btn danger block" data-del style="background:var(--card)">Kaydı sil</button>`,
   });
@@ -1404,7 +1466,7 @@ function openPlanItem(item) {
         <div class="field"><label for="pi-c">Karbonhidrat (g)</label><input id="pi-c" class="input" inputmode="decimal" value="${esc(it.carb_g)}"></div>
         <div class="field"><label for="pi-f">Yağ (g)</label><input id="pi-f" class="input" inputmode="decimal" value="${esc(it.fat_g)}"></div>
       </div>
-      <p class="small muted" style="margin:0 0 12px">Değerleri bilmiyorsan Danışman'a "şu öğünün kalorisi ne" diye sorabilirsin.</p>
+      <p class="small muted" style="margin:0 0 12px">Değerleri bilmiyorsan Coach'a "şu öğünün kalorisi ne" diye sorabilirsin.</p>
       ${item ? '<button type="button" class="btn danger block" data-del style="background:var(--card)">Öğünü plandan sil</button>' : ''}`,
     onRight: async (api) => {
       const g = (id) => s.el.querySelector(id).value.trim();

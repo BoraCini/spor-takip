@@ -1,6 +1,7 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate } from '../util.js';
+import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, trDateYear, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, downloadOrShare, parseDate, swipeDelete } from '../util.js';
 import { refresh } from '../app.js';
+import { removeWithUndo } from '../undo.js';
 import { cycleInfo, dueOn, doseText, SITES, suggestSite, SLOTS, slotLabel } from '../context.js';
 import { COMPOUND_GROUPS, searchCompounds, compoundInfo, findCompound } from '../data/compounds.js';
 import { SUPP_GROUPS, searchSupplements, findSupplement, unitForForm } from '../data/supplements.js';
@@ -139,7 +140,7 @@ export async function render(root, params = {}) {
     ${
       comps.length
         ? `<div class="sec"><h2>Kullandıklarım</h2></div>
-      <section class="card flush" aria-label="Kullanılan maddeler">
+      <section class="card flush" aria-label="Kullanılan maddeler" data-swipe-list>
         ${comps
           .map((c) => {
             const days = c.days && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6];
@@ -156,6 +157,7 @@ export async function render(root, params = {}) {
     }
   `;
 
+  swipeDelete(root.querySelector('[data-swipe-list]'), '.row[data-act="edit"]', (row) => removeWithUndo('compounds', row.dataset.id, 'Silindi · geçmiş kayıtların duruyor'));
   root.onclick = async (e) => {
     const tb = e.target.closest('[data-tab]');
     if (tb) {
@@ -209,7 +211,7 @@ async function renderSupp(root) {
       !items.length
         ? `<section class="card" style="text-align:center;padding:22px 16px">
             <p style="margin:0 0 6px;font-size:17px;font-weight:600">Koruyucu ilaç ve vitamin ekle</p>
-            <p class="small muted" style="margin:0 0 14px;line-height:18px">Kullandığın vitamin, mineral, karaciğer/kalp koruyucu ve takviyeleri marka, ürün ve içerik bilgisiyle ekle. Her gün ne alacağını burada işaretlersin; Danışman da bunları bilir.</p>
+            <p class="small muted" style="margin:0 0 14px;line-height:18px">Kullandığın vitamin, mineral, karaciğer/kalp koruyucu ve takviyeleri marka, ürün ve içerik bilgisiyle ekle. Her gün ne alacağını burada işaretlersin; Coach da bunları bilir.</p>
             <button type="button" class="btn primary" data-act="add">Ekle</button>
           </section>`
         : `<div class="sec"><h2>Bugün</h2>${total ? `<span class="meta">${done} / ${total} alındı</span>` : ''}</div>
@@ -240,7 +242,7 @@ async function renderSupp(root) {
               : '<section class="card"><div class="empty" style="padding:8px 0">Bugün için planlanmış bir şey yok.</div></section>'
           }
           <div class="sec"><h2>Kullandıklarım</h2><span class="meta">${items.filter((c) => c.active !== false).length} aktif</span></div>
-          <section class="card flush" aria-label="Koruyucu ilaç ve vitaminler">
+          <section class="card flush" aria-label="Koruyucu ilaç ve vitaminler" data-swipe-list>
             ${items
               .map((c) => {
                 const days = c.days && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6];
@@ -253,7 +255,8 @@ async function renderSupp(root) {
               .join('')}
           </section>`
     }
-    <p class="note">Danışman, kullandığın vitamin ve koruyucuları bilir; tahlil yorumlarken ve önerilerde bunları hesaba katar. Reçeteli ilaçların kullanımı ve dozu için doktoruna danış.</p>`;
+    <p class="note">Coach, kullandığın vitamin ve koruyucuları bilir; tahlil yorumlarken ve önerilerde bunları hesaba katar. Reçeteli ilaçların kullanımı ve dozu için doktoruna danış.</p>`;
+  swipeDelete(root.querySelector('[data-swipe-list]'), '.row[data-act="edit"]', (row) => removeWithUndo('compounds', row.dataset.id, 'Silindi · geçmiş kayıtların duruyor'));
   root.onclick = async (e) => {
     const tb = e.target.closest('[data-tab]');
     if (tb) {

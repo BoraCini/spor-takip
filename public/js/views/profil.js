@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadOrShare, lineChartSVG, MONTHS_SHORT, parseDate } from '../util.js';
+import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, downloadOrShare, lineChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache } from '../util.js';
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
 import { monthUsage } from '../ai.js';
@@ -32,6 +32,7 @@ function suggestTargets(p) {
 export async function render(root, params) {
   const p = await db.getProfile();
   const accent = (await db.getSetting('accent')) || ACCENTS[0].value;
+  const avatar = await db.getSetting('avatar');
   const restSec = await db.getSetting('rest_seconds', 90);
   const pin = await hasPin();
   const faceAvail = pin && (await faceIdAvailable());
@@ -68,10 +69,17 @@ export async function render(root, params) {
       </div>
     </header>
 
-    ${first ? `<p class="note" style="margin-top:0;margin-bottom:12px">Kendini kısaca tanıt. Danışman bu bilgileri her soruda kullanır, böylece her seferinde anlatman gerekmez. Hepsini sonra değiştirebilirsin.</p>` : ''}
+    ${first ? `<p class="note" style="margin-top:0;margin-bottom:12px">Kendini kısaca tanıt. Coach bu bilgileri her soruda kullanır, böylece her seferinde anlatman gerekmez. Hepsini sonra değiştirebilirsin.</p>` : ''}
 
     <div class="sec"><h2>Profil</h2></div>
     <section class="card" id="pform">
+      <div class="avatar-row">
+        <span class="avatar-lg">${avatarHTML(p.name)}</span>
+        <div class="avatar-acts">
+          <label class="btn" style="cursor:pointer">${avatar ? 'Fotoğrafı değiştir' : 'Profil fotoğrafı ekle'}<input type="file" accept="image/*" id="avatar-in" class="sr-only"></label>
+          ${avatar ? '<button type="button" class="btn ghost" data-act="avatar-del">Kaldır</button>' : ''}
+        </div>
+      </div>
       <div class="field"><label for="p-name">Adın</label><input id="p-name" class="input" data-p="name" value="${esc(p.name || '')}" autocomplete="given-name"></div>
       <div class="grid2">
         <div class="field"><label for="p-sex">Cinsiyet</label>
@@ -98,7 +106,7 @@ export async function render(root, params) {
         </select></div>
       <div class="field"><label for="p-goal">Hedefin</label><textarea id="p-goal" class="input" data-p="goal" placeholder="Örn. yazın 8 kg temiz kilo almak, bench'te 120 kg">${esc(p.goal || '')}</textarea></div>
       <div class="field"><label for="p-inj">Sakatlıklar / dikkat edilecekler</label><textarea id="p-inj" class="input" data-p="injuries" placeholder="Örn. sol omuzda impingement, bel fıtığı geçmişi">${esc(p.injuries || '')}</textarea></div>
-      <div class="field" style="margin-bottom:0"><label for="p-notes">Diğer notlar</label><textarea id="p-notes" class="input" data-p="notes" placeholder="Danışmanın bilmesini istediğin başka şeyler">${esc(p.notes || '')}</textarea></div>
+      <div class="field" style="margin-bottom:0"><label for="p-notes">Diğer notlar</label><textarea id="p-notes" class="input" data-p="notes" placeholder="Coach'un bilmesini istediğin başka şeyler">${esc(p.notes || '')}</textarea></div>
     </section>
 
     <div class="sec"><h2>Günlük hedefler</h2></div>
@@ -134,9 +142,9 @@ export async function render(root, params) {
 
     ${first ? `<div style="padding:16px"><button type="button" class="btn primary block" data-act="done-first">Bitti, başlayalım</button></div>` : ''}
 
-    <div class="sec"><h2>Danışman (yapay zekâ)</h2></div>
+    <div class="sec"><h2>Coach (yapay zekâ)</h2></div>
     <section class="card">
-      <p class="small muted" style="margin:0 0 10px;line-height:18px">Danışman, Anthropic'in Claude modelini kullanır. Bunun için Claude Console'dan aldığın bir API anahtarı gerekir. Anahtar yalnızca bu telefonda saklanır ve yedeğe dahil edilmez.</p>
+      <p class="small muted" style="margin:0 0 10px;line-height:18px">Coach, Anthropic'in Claude modelini kullanır. Bunun için Claude Console'dan aldığın bir API anahtarı gerekir. Anahtar yalnızca bu telefonda saklanır ve yedeğe dahil edilmez.</p>
       <div class="field"><label for="api-key">API anahtarı</label>
         <input id="api-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-..." value="${apiKey ? '••••••••••••' : ''}">
       </div>
@@ -147,12 +155,12 @@ export async function render(root, params) {
       <div class="kv" style="margin-top:12px"><span class="k">Bu ayki harcama (tahmini)</span><span class="v">$${usage.cost.toFixed(2)}</span></div>
       <div class="kv"><span class="k">Bu ay mesaj</span><span class="v">${fmt(usage.calls)}</span></div>
       ${usage.saved > 0.005 ? `<div class="kv"><span class="k">Önbellekle tasarruf</span><span class="v">$${usage.saved.toFixed(2)}</span></div>` : ''}
-      <p class="small muted" style="margin:6px 0 0;line-height:18px">Console'da aylık harcama limiti koymanı öneririm; limit aşılırsa Danışman durur, uygulamanın geri kalanı çalışmaya devam eder.</p>
+      <p class="small muted" style="margin:6px 0 0;line-height:18px">Console'da aylık harcama limiti koymanı öneririm; limit aşılırsa Coach durur, uygulamanın geri kalanı çalışmaya devam eder.</p>
     </section>
 
-    <div class="sec"><h2>Danışman'ın notları</h2><span class="meta">${notes.length} not</span></div>
+    <div class="sec"><h2>Coach'un notları</h2><span class="meta">${notes.length} not</span></div>
     <section class="card">
-      <p class="small muted" style="margin:0 0 6px;line-height:18px">Danışman konuşmalarda öğrendiği kalıcı tercihlerini buraya not eder ve her cevapta bunlara uyar. İstediğini silebilir ya da kendin ekleyebilirsin.</p>
+      <p class="small muted" style="margin:0 0 6px;line-height:18px">Coach konuşmalarda öğrendiği kalıcı tercihlerini buraya not eder ve her cevapta bunlara uyar. İstediğini silebilir ya da kendin ekleyebilirsin.</p>
       ${notes.map((n) => `<div class="note-item"><span>${esc(n.text)}</span><button type="button" class="icon-btn ed-ic" style="color:var(--warn)" aria-label="Notu sil: ${esc(n.text)}" data-act="del-note" data-id="${n.id}">${icon.trash}</button></div>`).join('')}
       <div style="display:flex;gap:8px;margin-top:10px">
         <label class="sr-only" for="note-new">Yeni not</label>
@@ -260,6 +268,34 @@ export async function render(root, params) {
     });
   });
 
+  // ---- Profil fotoğrafı: kare kırpılıp küçültülür, sadece bu telefonda saklanır ----
+  root.querySelector('#avatar-in').addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const url = URL.createObjectURL(f);
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error('Fotoğraf açılamadı'));
+        i.src = url;
+      });
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const c = document.createElement('canvas');
+      c.width = c.height = 256;
+      c.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
+      URL.revokeObjectURL(url);
+      const data = c.toDataURL('image/jpeg', 0.82);
+      await db.setSetting('avatar', data);
+      setAvatarCache(data);
+      toast('Profil fotoğrafı eklendi');
+      refresh();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
   const fid = root.querySelector('#faceid');
   if (fid)
     fid.addEventListener('change', async () => {
@@ -291,6 +327,12 @@ export async function render(root, params) {
       cur.phase = t.dataset.phase;
       await db.saveProfile(cur);
       toast('Dönem: ' + t.textContent);
+      return refresh();
+    }
+    if (t.dataset.act === 'avatar-del') {
+      await db.setSetting('avatar', null);
+      setAvatarCache(null);
+      toast('Profil fotoğrafı kaldırıldı');
       return refresh();
     }
     if (t.dataset.accent) {
@@ -365,7 +407,7 @@ export async function render(root, params) {
       await downloadOrShare(`sporcoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
       await db.setSetting('last_backup', today());
     } else if (act === 'clear-chat') {
-      if (await confirmSheet({ title: 'Sohbeti temizle', text: 'Danışmanla tüm konuşma geçmişi silinir. Kayıtlı verilerin (beslenme, antrenman, kür, tahliller) etkilenmez.', okLabel: 'Temizle', danger: true })) {
+      if (await confirmSheet({ title: 'Sohbeti temizle', text: 'Coach ile tüm konuşma geçmişi silinir. Kayıtlı verilerin (beslenme, antrenman, kür, tahliller) etkilenmez.', okLabel: 'Temizle', danger: true })) {
         await db.clearStore('chat_messages');
         toast('Sohbet temizlendi');
       }

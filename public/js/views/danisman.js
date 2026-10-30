@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr } from '../util.js';
+import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr, avatarHTML } from '../util.js';
 import { go, refresh } from '../app.js';
 import { dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
 import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
@@ -11,7 +11,7 @@ let voiceReply = false;
 let stopListen = null;
 
 let busy = false;
-let pendingImage = null; // { media_type, data, thumb }
+let pending = []; // eklenecekler: { kind:'image', media_type, data, thumb } | { kind:'pdf', name, data } | { kind:'text', name, text }
 let rootEl = null;
 let vvHandler = null;
 
@@ -50,11 +50,11 @@ export async function render(root, params) {
         <header class="hdr">
           <div class="hdr-text">
             <span class="eyebrow">${esc(trDate(t, true))}</span>
-            <h1 class="title">Danışman</h1>
+            <h1 class="title">Coach</h1>
           </div>
           <div class="hdr-actions">
             ${ttsSupported() ? `<button type="button" class="icon-btn" id="voicetog" aria-pressed="${voiceReply}" aria-label="Cevapları sesli oku">${voiceReply ? icon.speaker : icon.speakerOff}</button>` : ''}
-            <a href="#/profil" class="icon-btn" aria-label="Profil ve ayarlar">${icon.person}</a>
+            <a href="#/profil" class="icon-btn avatar" aria-label="Profil ve ayarlar">${avatarHTML(p.name)}</a>
           </div>
         </header>
         <nav class="chips" aria-label="Bugünün özeti">
@@ -80,12 +80,16 @@ export async function render(root, params) {
       <div class="chat-list" id="chat" aria-live="polite"></div>
       <div class="attach-preview" id="attach" hidden></div>
       <form class="composer" id="composer">
-        <label class="icon-btn" style="cursor:pointer" aria-label="Fotoğraf ekle">
-          ${icon.camera}
-          <input type="file" accept="image/*" id="photo" class="sr-only">
-        </label>
+        <div class="plus-wrap">
+          <button type="button" class="icon-btn plus" id="plusbtn" aria-haspopup="menu" aria-expanded="false" aria-label="Ekle">${icon.plus}</button>
+          <div class="plus-menu" id="plusmenu" role="menu" hidden>
+            <label role="menuitem">${icon.photo}<span>Fotoğraflar</span><input type="file" accept="image/*" multiple data-pick="photo" class="sr-only"></label>
+            <label role="menuitem">${icon.camera}<span>Kamera</span><input type="file" accept="image/*" capture="environment" data-pick="camera" class="sr-only"></label>
+            <label role="menuitem">${icon.file}<span>Dosya</span><input type="file" accept="application/pdf,image/*,text/plain,text/csv,application/json,.txt,.csv,.json,.md" multiple data-pick="file" class="sr-only"></label>
+          </div>
+        </div>
         <label for="msg" class="sr-only">Mesaj</label>
-        <textarea id="msg" rows="1" placeholder="Yaz ya da sor…" enterkeyhint="send"></textarea>
+        <textarea id="msg" rows="1" placeholder="Coach'a yaz…" enterkeyhint="send"></textarea>
         <button type="button" class="icon-btn mic" id="micbtn" aria-pressed="false" aria-label="Sesli mesaj">${icon.mic}</button>
         <button type="submit" class="icon-btn send" aria-label="Gönder">${icon.send}</button>
       </form>
@@ -93,6 +97,7 @@ export async function render(root, params) {
 
   await drawMessages({ hasKey, name: p.name, params });
   await drawBanners();
+  drawAttach();
 
   const form = root.querySelector('#composer');
   const ta = root.querySelector('#msg');
@@ -112,7 +117,34 @@ export async function render(root, params) {
     if (voiceReply) unlockSpeech();
     send(ta.value);
   });
-  root.querySelector('#photo').addEventListener('change', onPhoto);
+  // ---- + menüsü: fotoğraf, kamera, dosya ----
+  const plus = root.querySelector('#plusbtn');
+  const menu = root.querySelector('#plusmenu');
+  const closeMenu = () => {
+    menu.hidden = true;
+    plus.setAttribute('aria-expanded', 'false');
+    plus.classList.remove('open');
+  };
+  plus.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    menu.hidden = !open;
+    plus.setAttribute('aria-expanded', String(open));
+    plus.classList.toggle('open', open);
+  });
+  root.addEventListener('click', (e) => {
+    if (!menu.hidden && !e.target.closest('.plus-wrap')) closeMenu();
+  });
+  menu.querySelectorAll('input[type=file]').forEach((inp) =>
+    inp.addEventListener('change', async (e) => {
+      closeMenu();
+      const files = [...(e.target.files || [])];
+      e.target.value = '';
+      for (const f of files) await addAttachment(f);
+      drawAttach();
+      if (files.length) ta.focus();
+    })
+  );
 
   // ---- Ses ----
   const vt = root.querySelector('#voicetog');
@@ -166,7 +198,7 @@ export async function render(root, params) {
         stopListen = null;
         mic.classList.remove('rec');
         mic.setAttribute('aria-pressed', 'false');
-        ta.placeholder = 'Yaz ya da sor…';
+        ta.placeholder = "Coach'a yaz…";
       },
     });
   });
@@ -247,7 +279,7 @@ function showLive(full) {
   if (!full) {
     if (live) {
       live.remove();
-      if (!list.querySelector('.typing')) list.insertAdjacentHTML('beforeend', '<div class="typing" aria-label="Danışman yazıyor"><i></i><i></i><i></i></div>');
+      if (!list.querySelector('.typing')) list.insertAdjacentHTML('beforeend', '<div class="typing" aria-label="Coach yazıyor"><i></i><i></i><i></i></div>');
     }
     return;
   }
@@ -273,22 +305,15 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
   const msgs = await db.list('chat_messages');
   let html = '<div class="spacer"></div>';
   if (!msgs.length) {
-    html += `<div class="bubble ai">
-      <p>Merhaba${name ? ' ' + esc(name) : ''}! Bana yediklerini, yaptığın setleri, aldığın hapları ya da kilonu yazabilirsin; kaydı ben hazırlarım, sen onaylarsın.</p>
-      <p>Beslenme, antrenman, kür ve tahlil sonuçların hakkında da soru sorabilirsin. Tahlil raporunun fotoğrafını gönderirsen değerleri okuyup kaydederim.</p></div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;align-self:flex-start;max-width:90%">
-        ${['3 yumurta ve 2 dilim tam buğday ekmeği yedim', 'Bugün proteinim yeterli mi?', 'Bench press 80 kg 8, 8, 7 yaptım', 'Bu haftanın raporunu hazırla']
-          .map((s) => `<button type="button" class="tog suggest" data-suggest="${esc(s)}">${esc(s)}</button>`)
-          .join('')}
-      </div>`;
+    html += `<div class="coach-empty" aria-label="Coach">${orbHTML()}</div>`;
   }
   if (!hasKey) {
     html += `<div class="act-card"><div class="ac-head"><span class="ac-title">Kurulum</span></div>
-      <p style="margin:0 0 10px;font-size:15px;line-height:21px">Danışmanın çalışması için bir Claude API anahtarı gerekiyor. Anahtarı Profil ve ayarlar sayfasından ekleyebilirsin.</p>
+      <p style="margin:0 0 10px;font-size:15px;line-height:21px">Coach'un çalışması için bir Claude API anahtarı gerekiyor. Anahtarı Profil ve ayarlar sayfasından ekleyebilirsin.</p>
       <a href="#/profil" class="btn primary">Anahtarı ekle</a></div>`;
   }
   if (params.photo === '1') {
-    html += `<div class="bubble ai"><p>Sol alttaki kamera simgesine dokunup tahlil raporunun fotoğrafını çek ya da galeriden seç. Değerleri okuyup Kan testleri sayfasına kaydetmen için onay kartı hazırlarım.</p></div>`;
+    html += `<div class="bubble ai"><p>Sol alttaki + düğmesine dokunup tahlil raporunun fotoğrafını ya da PDF'ini ekle. Değerleri okuyup Kan testleri sayfasına kaydetmen için onay kartı hazırlarım.</p></div>`;
   }
   let lastDay = '';
   for (const m of msgs) {
@@ -298,7 +323,11 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
       lastDay = d;
     }
     if (m.role === 'user') {
-      html += `<div class="bubble me">${m.image ? `<img src="${m.image}" alt="Gönderilen fotoğraf">` : ''}${esc(m.text || '')}</div>`;
+      const imgs = m.images || (m.image ? [m.image] : []);
+      const files = m.files || [];
+      html += `<div class="bubble me">${imgs.length ? `<div class="b-imgs${imgs.length > 1 ? ' multi' : ''}">${imgs.map((src) => `<img src="${src}" alt="Gönderilen fotoğraf">`).join('')}</div>` : ''}${files
+        .map((f) => `<span class="b-file">${icon.file}<span>${esc(f.name)}</span></span>`)
+        .join('')}${esc(m.text || '')}</div>`;
     } else if (m.role === 'assistant') {
       html += `<div class="bubble ai">${miniMarkdown(m.text || '')}</div>`;
       if (m.model || ttsSupported())
@@ -309,7 +338,7 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
       html += `<div class="bubble err" role="alert">${esc(m.text)}</div>`;
     }
   }
-  if (busy) html += `<div class="typing" aria-label="Danışman yazıyor"><i></i><i></i><i></i></div>`;
+  if (busy) html += `<div class="typing" aria-label="Coach yazıyor"><i></i><i></i><i></i></div>`;
   list.innerHTML = html;
   scrollBottom();
   list.onclick = onListClick;
@@ -425,7 +454,7 @@ function cardHTML(m) {
   }
   if (c.type === 'note') {
     const undone = m.status === 'undone';
-    return `<section class="act-card" aria-label="Danışman notu"><div class="ac-head"><span class="ac-title">${c.action === 'add' ? 'Not aldım' : 'Notu sildim'}</span>
+    return `<section class="act-card" aria-label="Coach notu"><div class="ac-head"><span class="ac-title">${c.action === 'add' ? 'Not aldım' : 'Notu sildim'}</span>
       ${undone ? '<span class="ac-src">geri alındı</span>' : `<button type="button" class="ac-src" style="color:var(--accent);font-weight:600;min-height:32px" data-card="undo-note" data-id="${m.id}">Geri al</button>`}</div>
       <p style="margin:0;font-size:15px;line-height:21px;${undone ? 'text-decoration:line-through;color:var(--sub)' : ''}">${esc(c.text)}</p></section>`;
   }
@@ -572,50 +601,84 @@ function toJpeg(img, maxSide, q) {
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   return c.toDataURL('image/jpeg', q);
 }
-async function onPhoto(e) {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
+const MAX_ATTACH = 5;
+const readAs = (file, how) =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('Dosya okunamadı'));
+    if (how === 'text') r.readAsText(file);
+    else r.readAsDataURL(file);
+  });
+async function addAttachment(file) {
+  if (pending.length >= MAX_ATTACH) return toast(`Bir mesaja en fazla ${MAX_ATTACH} ek koyabilirsin`);
+  const name = file.name || 'dosya';
+  const type = file.type || '';
+  const ext = (name.split('.').pop() || '').toLowerCase();
   try {
-    const { img, url } = await loadImage(file);
-    const full = toJpeg(img, 1568, 0.85);
-    const thumb = toJpeg(img, 360, 0.7);
-    URL.revokeObjectURL(url);
-    pendingImage = { media_type: 'image/jpeg', data: full.split(',')[1], thumb };
-    const box = rootEl.querySelector('#attach');
-    box.hidden = false;
-    box.innerHTML = `<img src="${thumb}" alt="Eklenecek fotoğraf"><span style="flex:1">Fotoğraf eklendi. İstersen bir not yaz ve gönder.</span>
-      <button type="button" class="btn ghost" data-rmimg>Kaldır</button>`;
-    box.querySelector('[data-rmimg]').addEventListener('click', () => {
-      pendingImage = null;
-      box.hidden = true;
-      box.innerHTML = '';
-    });
-    rootEl.querySelector('#msg').focus();
+    if (type.startsWith('image/') || ['heic', 'heif', 'jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+      const { img, url } = await loadImage(file);
+      const full = toJpeg(img, 1568, 0.85);
+      const thumb = toJpeg(img, 360, 0.7);
+      URL.revokeObjectURL(url);
+      pending.push({ kind: 'image', media_type: 'image/jpeg', data: full.split(',')[1], thumb, name });
+    } else if (type === 'application/pdf' || ext === 'pdf') {
+      if (file.size > 20 * 1024 * 1024) return toast('PDF çok büyük (en fazla 20 MB)');
+      const d = await readAs(file, 'url');
+      pending.push({ kind: 'pdf', name, data: String(d).split(',')[1] });
+    } else if (type.startsWith('text/') || ['txt', 'csv', 'json', 'md', 'tsv'].includes(ext) || type === 'application/json') {
+      let text = await readAs(file, 'text');
+      if (text.length > 60000) text = text.slice(0, 60000) + '\n…(kısaltıldı)';
+      pending.push({ kind: 'text', name, text });
+    } else {
+      toast('Bu dosya türü eklenemiyor. Fotoğraf, PDF ya da metin dosyası (txt, csv) ekleyebilirsin.', 4000);
+    }
   } catch (err) {
-    toast(err.message);
+    toast(err.message || 'Dosya eklenemedi');
   }
+}
+function drawAttach() {
+  const box = rootEl && rootEl.querySelector('#attach');
+  if (!box) return;
+  box.hidden = !pending.length;
+  box.innerHTML = pending
+    .map(
+      (a, i) => `<span class="att">${a.kind === 'image' ? `<img src="${a.thumb}" alt="">` : `<span class="att-ic">${icon.file}</span><span class="att-n">${esc(a.name)}</span>`}
+        <button type="button" class="att-x" data-rm="${i}" aria-label="${esc(a.name || 'Ek')} kaldır">×</button></span>`
+    )
+    .join('');
+  box.onclick = (e) => {
+    const b = e.target.closest('[data-rm]');
+    if (!b) return;
+    pending.splice(Number(b.dataset.rm), 1);
+    drawAttach();
+  };
+}
+
+// Coach'un boş ekran görseli: tema renginde, akan renkli bir küre
+function orbHTML() {
+  return `<div class="orb" aria-hidden="true"><span class="orb-glow"></span><span class="orb-ball"><span class="orb-swirl"></span><span class="orb-swirl s2"></span><span class="orb-swirl s3"></span><span class="orb-shine"></span></span></div>`;
 }
 
 // ---------- Gönder ----------
 async function send(raw) {
   const text = (raw || '').trim();
-  if (busy || (!text && !pendingImage)) return;
+  if (busy || (!text && !pending.length)) return;
   stopSpeaking();
-  const image = pendingImage;
-  pendingImage = null;
+  const atts = pending;
+  pending = [];
   const ta = rootEl.querySelector('#msg');
   ta.value = '';
   ta.style.height = 'auto';
-  const box = rootEl.querySelector('#attach');
-  box.hidden = true;
-  box.innerHTML = '';
+  drawAttach();
 
-  await db.put('chat_messages', { role: 'user', text, image: image ? image.thumb : null });
+  const imgs = atts.filter((a) => a.kind === 'image');
+  const files = atts.filter((a) => a.kind !== 'image').map((a) => ({ name: a.name, kind: a.kind }));
+  await db.put('chat_messages', { role: 'user', text, image: imgs[0] ? imgs[0].thumb : null, images: imgs.map((a) => a.thumb), files });
   busy = true;
   await drawMessages();
   try {
-    const res = await runTurn({ text, image: image ? { media_type: image.media_type, data: image.data } : null, onText: showLive });
+    const res = await runTurn({ text, attachments: atts, onText: showLive });
     for (const card of res.cards) {
       if (card.type === 'doses') {
         const sg = await suggestSite();

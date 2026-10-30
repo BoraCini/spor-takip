@@ -112,11 +112,25 @@ export const icon = {
   speakerOff: S('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>'),
   up: S('<path d="M12 19V5M6 11l6-6 6 6"/>'),
   down: S('<path d="M12 5v14M6 13l6 6 6-6"/>'),
+  photo: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l4.5-4.5 3 3L15 12l5 5"/>'),
+  file: S('<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5M9 13h6M9 16.5h4"/>'),
+  sparkle: S('<path d="M12 3.5l1.8 4.7 4.7 1.8-4.7 1.8L12 16.5l-1.8-4.7L5.5 10l4.7-1.8z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>'),
 };
+
+// ---- Profil resmi (ayarlarda data URL olarak saklanır; açılışta önbelleğe alınır) ----
+let avatarCache = null;
+export function setAvatarCache(v) {
+  avatarCache = v || null;
+}
+export function avatarHTML(name = '') {
+  if (avatarCache) return `<img class="avatar-img" src="${avatarCache}" alt="">`;
+  const ch = (name || '').trim().charAt(0).toLocaleUpperCase('tr-TR');
+  return ch ? `<span class="avatar-ch" aria-hidden="true">${esc(ch)}</span>` : icon.person;
+}
 
 // ---- Bildirim (toast) ----
 let toastTimer;
-export function toast(msg, ms = 2200) {
+export function toast(msg, ms = 2200, action = null) {
   let el = document.getElementById('toast');
   if (!el) {
     el = document.createElement('div');
@@ -126,9 +140,154 @@ export function toast(msg, ms = 2200) {
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  el.classList.toggle('has-act', !!action);
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-act';
+    b.textContent = action.label;
+    b.addEventListener('click', () => {
+      el.hidden = true;
+      clearTimeout(toastTimer);
+      action.onClick();
+    });
+    el.appendChild(b);
+  }
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), ms);
+  toastTimer = setTimeout(() => (el.hidden = true), action ? Math.max(ms, 4500) : ms);
+}
+
+// ---- Sola kaydırınca sil (iOS listeleri gibi) ----
+// swipeDelete(container, selector, onDelete(row)) — satır sola çekilince arkasındaki kırmızı "Sil" görünür;
+// düğmeye dokununca ya da satır sonuna kadar çekilince onDelete çağrılır.
+const SW_BTN = 84;
+let swOpen = null; // { row, btn }
+function swClose(anim = true) {
+  if (!swOpen) return;
+  const { row, btn } = swOpen;
+  swOpen = null;
+  row.style.transition = anim ? 'transform .22s ease' : '';
+  row.style.transform = '';
+  btn.style.transition = anim ? 'width .22s ease' : '';
+  btn.style.width = '0px';
+  setTimeout(() => {
+    btn.remove();
+    row.classList.remove('sw-active');
+    if (row.parentElement) row.parentElement.classList.remove('sw-host');
+  }, anim ? 230 : 0);
+}
+document.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (swOpen && !swOpen.row.contains(e.target) && !swOpen.btn.contains(e.target)) swClose();
+  },
+  true
+);
+export function swipeDelete(container, selector, onDelete, label = 'Sil') {
+  if (!container || container.dataset.swipe === selector) return;
+  container.dataset.swipe = selector;
+  container.style.touchAction = 'pan-y';
+  let st = null;
+  const makeBtn = (row) => {
+    const host = row.parentElement;
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sw-del';
+    btn.textContent = label;
+    btn.style.top = row.offsetTop + 'px';
+    btn.style.height = row.offsetHeight + 'px';
+    btn.style.right = Math.max(0, host.clientWidth - row.offsetLeft - row.offsetWidth) + 'px';
+    btn.style.width = '0px';
+    if (row.offsetHeight > 120) btn.classList.add('tall');
+    host.classList.add('sw-host');
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await doDelete(row, btn);
+    });
+    host.appendChild(btn);
+    row.classList.add('sw-active');
+    return btn;
+  };
+  const doDelete = async (row, btn) => {
+    swOpen = null;
+    row.style.transition = 'transform .2s ease, opacity .2s ease';
+    row.style.transform = 'translateX(-100%)';
+    row.style.opacity = '0';
+    btn.style.transition = 'width .2s ease';
+    btn.style.width = row.offsetWidth + 'px';
+    await new Promise((r) => setTimeout(r, 180));
+    try {
+      await onDelete(row);
+    } finally {
+      btn.remove();
+      if (row.parentElement) row.parentElement.classList.remove('sw-host');
+      if (row.isConnected) {
+        row.style.transition = '';
+        row.style.transform = '';
+        row.style.opacity = '';
+        row.classList.remove('sw-active');
+      }
+    }
+  };
+  container.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.swipeClaimed) return;
+    const row = e.target.closest(selector);
+    if (!row || !container.contains(row) || e.target.closest('input,textarea,select,.no-swipe')) return;
+    e.swipeClaimed = true;
+    if (swOpen && swOpen.row !== row) swClose();
+    st = { row, x: e.clientX, y: e.clientY, base: swOpen && swOpen.row === row ? -SW_BTN : 0, drag: false, id: e.pointerId };
+  });
+  container.addEventListener('pointermove', (e) => {
+    if (!st || e.pointerId !== st.id) return;
+    const dx = e.clientX - st.x;
+    const dy = e.clientY - st.y;
+    if (!st.drag) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return (st = null);
+      if (Math.abs(dx) < 10) return;
+      if (dx > 0 && st.base === 0) return (st = null);
+      st.drag = true;
+      st.w = st.row.offsetWidth;
+      if (!swOpen || swOpen.row !== st.row) swOpen = { row: st.row, btn: makeBtn(st.row) };
+      st.row.style.transition = '';
+      try {
+        st.row.setPointerCapture(e.pointerId);
+      } catch {}
+    }
+    const x = Math.min(0, st.base + dx);
+    st.x2 = x;
+    st.row.style.transform = `translateX(${x}px)`;
+    if (swOpen) swOpen.btn.style.width = -x + 'px';
+  });
+  const end = async (e) => {
+    if (!st || e.pointerId !== st.id) return;
+    const s = st;
+    st = null;
+    if (!s.drag) return;
+    // sürüklemeden sonra gelen tıklamayı yut
+    const eat = (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+    };
+    s.row.addEventListener('click', eat, { capture: true, once: true });
+    setTimeout(() => s.row.removeEventListener('click', eat, { capture: true }), 350);
+    const x = s.x2 || 0;
+    if (!swOpen) return;
+    if (-x > s.w * 0.6) return doDelete(s.row, swOpen.btn);
+    if (-x > SW_BTN * 0.5) {
+      s.row.style.transition = 'transform .22s ease';
+      s.row.style.transform = `translateX(${-SW_BTN}px)`;
+      swOpen.btn.style.transition = 'width .22s ease';
+      swOpen.btn.style.width = SW_BTN + 'px';
+    } else swClose();
+  };
+  container.addEventListener('pointerup', end);
+  container.addEventListener('pointercancel', (e) => {
+    if (st && st.drag) end(e);
+    else st = null;
+  });
 }
 
 // ---- Alt sayfa (sheet) ----

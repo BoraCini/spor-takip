@@ -44,7 +44,7 @@ export async function render(root) {
         <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Test ekle" data-act="add">${icon.plus}</button></div></header>
       <section class="card" style="text-align:center;padding:24px 16px">
         <p style="margin:0 0 6px;font-size:17px;font-weight:600">Henüz test eklemedin</p>
-        <p class="small muted" style="margin:0 0 16px;line-height:18px">Laboratuvarın ya da e-Nabız'ın verdiği PDF'i seç; değerler, birimler ve referans aralıkları telefonda okunur, internete ya da yapay zekâya gönderilmez. Yorum istediğinde "Danışmana yorumlat"ı kullanırsın.</p>
+        <p class="small muted" style="margin:0 0 16px;line-height:18px">Laboratuvarın ya da e-Nabız'ın verdiği PDF'i seç; değerler, birimler ve referans aralıkları telefonda okunur, internete ya da yapay zekâya gönderilmez. Yorum istediğinde "Coach'a yorumlat"ı kullanırsın.</p>
         <label class="btn primary block" style="cursor:pointer;margin-bottom:8px">PDF'ten ekle<input type="file" accept="application/pdf,.pdf" class="sr-only" data-file="pdf"></label>
         <div class="btn-row">
           <label class="btn" style="cursor:pointer">Fotoğraftan (YZ)<input type="file" accept="image/*" class="sr-only" data-file="img"></label>
@@ -253,7 +253,7 @@ function openAddChooser() {
           <input type="file" accept="image/*" class="sr-only" data-file="img"></label>
         <button type="button" class="row" data-manual><span class="row-main"><span class="row-title">Elle ekle</span></span>${icon.chev}</button>
       </div>
-      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Okunan değerleri kaydetmeden önce görüp düzeltebilirsin. Yapay zekâ yalnızca fotoğraftan okurken ve "Danışmana yorumlat" dediğinde devreye girer.</p>`,
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Okunan değerleri kaydetmeden önce görüp düzeltebilirsin. Yapay zekâ yalnızca fotoğraftan okurken ve "Coach'a yorumlat" dediğinde devreye girer.</p>`,
   });
   s.el.querySelectorAll('input[data-file]').forEach((inp) =>
     inp.addEventListener('change', () => {

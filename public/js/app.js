@@ -1,10 +1,10 @@
 import * as db from './db.js';
 import { showLock, hasPin, setupPinFlow } from './lock.js';
-import { confirmSheet, esc, toast, today, parseNum } from './util.js';
+import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.7.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -46,17 +46,27 @@ export async function refresh() {
   await route(true);
 }
 
+const TAB_ORDER = ['danisman', 'beslenme', 'antrenman', 'kur', 'kan', 'profil'];
+
+function markTabs(name) {
+  const bar = document.getElementById('tabbar');
+  let idx = -1;
+  bar.querySelectorAll('a').forEach((a, i) => {
+    if (a.dataset.tab === name) {
+      a.setAttribute('aria-current', 'page');
+      idx = i;
+    } else a.removeAttribute('aria-current');
+  });
+  bar.classList.toggle('has-cur', idx >= 0);
+  if (idx >= 0) bar.style.setProperty('--ti', idx);
+}
+
 async function route(keepScroll = false) {
   const seq = ++renderSeq;
   const { name, params } = parseHash();
   const viewEl = document.getElementById('view');
   const scroll = keepScroll ? window.scrollY : 0;
-  if (current && current.mod.destroy) {
-    try {
-      current.mod.destroy();
-    } catch {}
-  }
-  document.body.classList.remove('chat-mode');
+  const prev = current ? current.name : null;
   let mod;
   try {
     mod = await views[name]();
@@ -66,19 +76,55 @@ async function route(keepScroll = false) {
     return;
   }
   if (seq !== renderSeq) return;
-  current = { name, mod };
-  document.querySelectorAll('#tabbar a').forEach((a) => {
-    if (a.dataset.tab === name) a.setAttribute('aria-current', 'page');
-    else a.removeAttribute('aria-current');
-  });
-  try {
-    await mod.render(viewEl, params);
-  } catch (e) {
-    console.error(e);
-    viewEl.innerHTML = `<div class="card" style="margin-top:60px"><p>Bir hata oluştu: ${esc(e.message)}</p></div>`;
+
+  const update = async () => {
+    if (current && current.mod.destroy) {
+      try {
+        current.mod.destroy();
+      } catch {}
+    }
+    document.body.classList.remove('chat-mode');
+    current = { name, mod };
+    markTabs(name);
+    try {
+      await mod.render(viewEl, params);
+    } catch (e) {
+      console.error(e);
+      viewEl.innerHTML = `<div class="card" style="margin-top:60px"><p>Bir hata oluştu: ${esc(e.message)}</p></div>`;
+    }
+    window.scrollTo(0, scroll);
+  };
+
+  // Sekme değişince sayfa, sekme sırasına göre sağdan ya da soldan kayarak gelir
+  const slide =
+    !keepScroll && prev && prev !== name && !document.querySelector('.sheet-backdrop') && !matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? TAB_ORDER.indexOf(name) > TAB_ORDER.indexOf(prev)
+        ? 'fwd'
+        : 'back'
+      : null;
+  if (slide && document.startViewTransition) {
+    const root = document.documentElement;
+    root.dataset.vt = slide;
+    try {
+      const vt = document.startViewTransition(update);
+      await vt.updateCallbackDone;
+      vt.finished.finally(() => {
+        if (root.dataset.vt === slide) delete root.dataset.vt;
+      });
+    } catch (e) {
+      delete root.dataset.vt;
+      if (current?.name !== name) await update();
+    }
+  } else {
+    await update();
+    if (slide) {
+      viewEl.classList.remove('slide-fwd', 'slide-back');
+      void viewEl.offsetWidth;
+      viewEl.classList.add('slide-' + slide);
+      setTimeout(() => viewEl.classList.remove('slide-' + slide), 400);
+    }
   }
   if (seq !== renderSeq) return;
-  window.scrollTo(0, scroll);
   syncSoon();
 }
 
@@ -241,6 +287,7 @@ function registerSW() {
 async function start() {
   await db.init();
   applyAccent(await db.getSetting('accent'));
+  setAvatarCache(await db.getSetting('avatar'));
   registerSW();
   initRest();
   watchBackground();
