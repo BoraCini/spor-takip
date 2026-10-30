@@ -926,3 +926,18 @@ button.meal-empty { min-height: 48px; align-items: center; }
   .keypad button { width: 70px; height: 70px; border-radius: 35px; font-size: 28px; }
 }
 .logo-pic { display: contents; }
+
+/* ---------- Düğme yazılarını her zaman ortala (span/a/label olarak kullanılanlar dahil) ---------- */
+.pill, .tog {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  line-height: 1.15; text-align: center; vertical-align: middle;
+}
+.pill { white-space: nowrap; }
+.btn { line-height: 1.15; text-align: center; white-space: nowrap; }
+.btn.block, .btn-row .btn { white-space: normal; }
+.seg button { display: flex; align-items: center; justify-content: center; line-height: 1.15; padding: 0 6px; text-align: center; }
+.sec .link, label.link { display: inline-flex; align-items: center; }
+/* iOS tarih/saat kutuları: yazı ortada kaymasın, yükseklik çökmesin */
+input.input[type="date"], input.input[type="time"] { display: block; height: 44px; line-height: 22px; text-align: left; }
+input.input[type="date"]::-webkit-date-and-time-value, input.input[type="time"]::-webkit-date-and-time-value { text-align: left; margin: 0; min-height: 22px; }
+input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webkit-datetime-edit { padding: 0; }

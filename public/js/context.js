@@ -468,7 +468,7 @@ export const JOBS = [
 ];
 export const INTENSITY = {
   agirlik: [['hafif', 'Hafif', 3.5], ['orta', 'Orta', 5], ['yogun', 'Yoğun', 6]],
-  kardiyo: [['hafif', 'Yürüyüş', 3.8], ['orta', 'Orta tempo', 7], ['yogun', 'Yüksek / interval', 10]],
+  kardiyo: [['hafif', 'Yürüyüş', 3.8], ['orta', 'Orta tempo', 7], ['yogun', 'Yüksek', 10]],
 };
 const OLD_TO_DAYS = { '1.2': 0, '1.375': 2, '1.55': 4, '1.725': 6, '1.9': 6 };
 
