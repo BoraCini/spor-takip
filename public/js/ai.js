@@ -57,6 +57,7 @@ GÖREVLERİN
 - Kullanıcı yediklerini, içtiği suyu, yaptığı setleri veya kardiyoyu, aldığı hap/enjeksiyonu, kilosunu, vücut ölçülerini ya da tahlil sonuçlarını yazdığında veya fotoğrafını gönderdiğinde uygun aracı çağırarak kaydı hazırla. Araç ekranda bir onay kartı gösterir; kullanıcı onaylayınca kaydedilir. Aracı çağırdıktan sonra 1–2 cümleyle kısa bir not yaz; karttaki değerleri tekrar listeleme. Bir mesajda birden fazla kayıt türü varsa her biri için ayrı araç çağır.
 - Yemek kaydı: Besin listesinde veya kullanıcının kendi besinlerinde karşılığı olan her şey için food_id ver ve miktarı grama çevir (örn. 3 yumurta → 150 g, 2 dilim tam buğday ekmeği → 56 g). Listede olmayanlar için food_id verme; est_per_100g ile 100 g başına gerçekçi tahmini değer ver. Öğün belirtilmemişse saate ve bağlama göre makul olanı seç.
 - Kardiyo (koşu, yürüyüş, bisiklet vb.) için log_workout_sets aracında sets yerine cardio alanını kullan.
+- Drop set: Kullanıcı bir seti dinlenmeden daha düşük ağırlıkla devam ettirdiyse (örn. "30 kg 20 tekrar, hemen 20 kg 15") bunu ayrı set yapma; ilk ağırlığı set, devamlarını o setin drops alanına yaz. Antrenman geçmişinde "→ ... (drop set)" olarak görünür.
 - Kalıcı notlar: Kullanıcı kalıcı bir tercih ya da bilgi paylaştığında (örn. sevmediği/yemediği yiyecekler, antrenman saati, salondaki ekipman kısıtı, uzun vadeli hedefi) remember_note ile kısa bir not olarak kaydet. Geçici şeyleri (bugün yorgunum gibi) not etme. Kullanıcı bir notun yanlış olduğunu ya da artık geçerli olmadığını söylerse forget_note ile sil. Notlar "danisman_notlari" alanında görünür; cevaplarında bunlara uy.
 - Haftalık rapor istendiğinde "bu_hafta_ozet" ve "gecen_hafta_ozet" verilerini kullan: beslenme (kayıtlı gün, ortalama kalori ve protein, hedefe uyum), antrenman (seans, set, hacim, kas grubu başına set; 10–20 set aralığı çoğu kişi için etkilidir), kilo değişimi ve dönem hedefiyle uyumu, kür takibine uyum, su. Önce iyi gidenleri, sonra en fazla üç somut iyileştirme önerisini yaz. Kısa tut.
 - Antrenman, beslenme ve diyet konusunda kullanıcının hedefine, dönemine (bulk/cut/koruma), sakatlıklarına, notlarına ve isteklerine göre somut öneriler ver. Güncel bilimsel yaklaşımları ve sahada uzun süredir denenmiş klasik yöntemleri birlikte değerlendir; çelişiyorlarsa bunu açıkça söyle. Kullanıcı bir öneriyi kendi tercihine göre değiştirmek isterse ona uyarla.
@@ -128,7 +129,20 @@ export const TOOLS = [
         exercise: { type: 'string', description: 'Egzersiz adı; kullanıcının programındaki adla eşleşiyorsa o adı kullan (örn. "Koşu bandı").' },
         sets: {
           type: 'array',
-          items: { type: 'object', properties: { weight_kg: { type: 'number' }, reps: { type: 'number' }, rpe: { type: 'number', description: 'Kullanıcı söylediyse 6-10' } }, required: ['weight_kg', 'reps'] },
+          items: {
+            type: 'object',
+            properties: {
+              weight_kg: { type: 'number' },
+              reps: { type: 'number' },
+              rpe: { type: 'number', description: 'Kullanıcı söylediyse 6-10' },
+              drops: {
+                type: 'array',
+                description: 'Drop set yaptıysa: ana setten hemen sonra dinlenmeden yapılan düşük ağırlıklı devamlar, sırasıyla. Örn. 30kg×20 sonra 20kg×15 → weight_kg 30, reps 20, drops [{weight_kg:20, reps:15}]',
+                items: { type: 'object', properties: { weight_kg: { type: 'number' }, reps: { type: 'number' } }, required: ['weight_kg', 'reps'] },
+              },
+            },
+            required: ['weight_kg', 'reps'],
+          },
         },
         cardio: {
           type: 'object',
@@ -239,7 +253,7 @@ async function buildCard(name, input) {
     if (input.cardio && input.cardio.duration_min) {
       return { type: 'cardio', date, exercise, duration_min: round1(Number(input.cardio.duration_min)), distance_km: input.cardio.distance_km ? round1(Number(input.cardio.distance_km)) : null };
     }
-    return { type: 'sets', date, exercise, sets: (input.sets || []).map((s) => ({ weight_kg: Number(s.weight_kg) || 0, reps: Math.round(Number(s.reps) || 0), rpe: s.rpe ? Math.round(Number(s.rpe)) : null })) };
+    return { type: 'sets', date, exercise, sets: (input.sets || []).map((s) => ({ weight_kg: Number(s.weight_kg) || 0, reps: Math.round(Number(s.reps) || 0), rpe: s.rpe ? Math.round(Number(s.rpe)) : null, drops: Array.isArray(s.drops) && s.drops.length ? s.drops.map((d) => ({ weight_kg: Number(d.weight_kg) || 0, reps: Math.round(Number(d.reps) || 0) })) : null })) };
   }
   if (name === 'mark_doses') {
     const due = await dueOn(date);
@@ -302,7 +316,7 @@ function cardSummary(card) {
   if (card.type === 'food')
     return `Onay kartı gösterildi (${card.meal}, ${card.date}): ` + card.items.map((i) => `${i.name} ${i.grams} g${i.estimated ? ' (tahmini değer)' : ''}`).join(', ');
   if (card.type === 'water') return `Onay kartı gösterildi: ${card.ml} ml su`;
-  if (card.type === 'sets') return `Onay kartı gösterildi: ${card.exercise} — ${card.sets.map((s) => `${s.weight_kg}×${s.reps}`).join(', ')}`;
+  if (card.type === 'sets') return `Onay kartı gösterildi: ${card.exercise} — ${card.sets.map((s) => `${s.weight_kg}×${s.reps}${s.drops ? s.drops.map((d) => ` → ${d.weight_kg}×${d.reps}`).join('') + ' (drop)' : ''}`).join(', ')}`;
   if (card.type === 'cardio') return `Onay kartı gösterildi: ${card.exercise} — ${card.duration_min} dk${card.distance_km ? ', ' + card.distance_km + ' km' : ''}`;
   if (card.type === 'doses')
     return card.items.length ? `Onay kartı gösterildi: ${card.items.map((i) => `${i.name} (${i.slot})`).join(', ')}` : 'Bu tarih için işaretlenecek, henüz alınmamış bir doz bulunamadı (kür listesi boş olabilir ya da hepsi zaten işaretli).';
@@ -340,7 +354,7 @@ export async function commitCard(card) {
       await db.put('workout_sets', { date: card.date, exercise_id: ex.id, set_no: ++n, duration_min: card.duration_min, distance_km: card.distance_km, weight_kg: 0, reps: 0, done: true });
       return 'Kardiyo kaydedildi';
     }
-    for (const s of card.sets) await db.put('workout_sets', { date: card.date, exercise_id: ex.id, set_no: ++n, weight_kg: s.weight_kg, reps: s.reps, rpe: s.rpe || null, done: true });
+    for (const s of card.sets) await db.put('workout_sets', { date: card.date, exercise_id: ex.id, set_no: ++n, weight_kg: s.weight_kg, reps: s.reps, rpe: s.rpe || null, drops: s.drops || null, done: true });
     return `${card.sets.length} set kaydedildi`;
   }
   if (card.type === 'doses') {

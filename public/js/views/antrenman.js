@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, weekStart, weekday, trDate, WD_SHORT, WD_LONG, icon, openSheet, confirmSheet, round1, lineChartSVG, parseDate, MONTHS_SHORT, swipeDelete } from '../util.js';
 import { refresh } from '../app.js';
-import { programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES, MUSCLE_GROUP, routineList, routineDay, sessionFor } from '../context.js';
+import { dropsOf, setVolume, programDay, previousSession, findOrCreateExercise, weekProgram, isCardio, suggestNext, MUSCLES, MUSCLE_GROUP, routineList, routineDay, sessionFor } from '../context.js';
 import { EXERCISE_PRESETS } from '../data/exercises.js';
 import * as rest from '../rest.js';
 import { renderProgress } from './ilerleme.js';
@@ -9,6 +9,8 @@ import { renderProgress } from './ilerleme.js';
 const state = { tab: 'workout', wd: null, weekOffset: 0, drafts: {}, active: {}, extra: {} };
 let wakeLock = null;
 
+// Drop için önerilen kilo: bir önceki ağırlığın ~%75'i, 2,5 kg'a yuvarlanmış
+const dropKg = (w) => (w ? Math.max(0, Math.round((w * 0.75) / 2.5) * 2.5) : null);
 const kgTxt = (v) => (v == null || v === '' || isNaN(v) ? '–' : String(round1(v)).replace('.', ','));
 const pace = (min, km) => {
   if (!min || !km) return '';
@@ -137,11 +139,21 @@ export async function render(root, params = {}) {
         const phReps = lastVals ? lastVals.reps : sugReps ?? (p ? p.reps : parseInt(it.pe.target_reps, 10) || null);
         const rpe = rec ? rec.rpe ?? null : d ? d.rpe ?? null : null;
         if (done) {
-          totalVol += (rec.weight_kg || 0) * (rec.reps || 0);
+          totalVol += setVolume(rec);
           doneSets++;
         }
         lastVals = { kg: kg ?? phKg, reps: reps ?? phReps };
-        row = { n, rec, prevTxt: p ? `${kgTxt(p.weight_kg)} × ${p.reps}` : '–', kg, reps, phKg, phReps, rpe, done, key };
+        // Drop set devamları: kayıttan, yoksa taslaktan
+        const drops = rec && rec.drops ? rec.drops : d && d.drops ? d.drops : [];
+        let pw = kg ?? phKg;
+        let pr = reps ?? phReps;
+        const dropRows = drops.map((x) => {
+          const r2 = { kg: x.weight_kg ?? null, reps: x.reps ?? null, phKg: dropKg(pw), phReps: pr };
+          pw = r2.kg ?? r2.phKg;
+          pr = r2.reps ?? r2.phReps;
+          return r2;
+        });
+        row = { n, rec, prevTxt: p ? `${kgTxt(p.weight_kg)} × ${p.reps}${dropsOf(p).length ? ' ↓' : ''}` : '–', kg, reps, phKg, phReps, rpe, done, key, drops: dropRows };
       }
       rows.push(row);
     }
@@ -163,13 +175,24 @@ export async function render(root, params = {}) {
       .map((r) => {
         const active = r.n === c.activeN && !r.done;
         return `
-      <div class="set-grid set-row ${r.done ? 'done' : ''} ${active ? 'active' : ''}" data-act="pick" data-ex="${c.ex.id}" data-n="${r.n}" role="group" aria-label="Set ${r.n}">
-        <span class="n">${r.n}</span>
+      <div class="set-grid set-row ${r.done ? 'done' : ''} ${active ? 'active' : ''} ${r.drops.length ? 'has-drop' : ''}" data-act="pick" data-ex="${c.ex.id}" data-n="${r.n}" role="group" aria-label="Set ${r.n}${r.drops.length ? ', drop set' : ''}">
+        <span class="n">${r.n}${r.drops.length ? '<small class="ds-tag">DS</small>' : ''}</span>
         <span class="prev">${esc(r.prevTxt)}</span>
         <span class="v ${r.kg == null ? 'ph' : ''}">${kgTxt(r.kg ?? r.phKg)}</span>
         <span class="v ${r.reps == null ? 'ph' : ''}">${r.reps ?? r.phReps ?? '–'}${r.rpe ? `<small class="rpe-tag">@${r.rpe}</small>` : ''}</span>
         <button type="button" class="set-check" aria-pressed="${r.done}" aria-label="Set ${r.n} ${r.done ? 'tamamlandı, geri al' : 'tamamla'}" data-act="done" data-ex="${c.ex.id}" data-n="${r.n}">${icon.check}</button>
       </div>
+      ${
+        r.drops.length && !active
+          ? r.drops
+              .map(
+                (x, i) => `<div class="set-grid drop-sub ${r.done ? 'done' : ''}" aria-label="Drop ${i + 1}: ${kgTxt(x.kg ?? x.phKg)} kg × ${x.reps ?? x.phReps ?? '–'}">
+                  <span></span><span class="prev">↓ drop ${r.drops.length > 1 ? i + 1 : ''}</span>
+                  <span class="v ${x.kg == null ? 'ph' : ''}">${kgTxt(x.kg ?? x.phKg)}</span><span class="v ${x.reps == null ? 'ph' : ''}">${x.reps ?? x.phReps ?? '–'}</span><span></span></div>`
+              )
+              .join('')
+          : ''
+      }
       ${
         active
           ? `<div class="set-editor no-swipe">
@@ -186,6 +209,27 @@ export async function render(root, params = {}) {
             ${[6, 7, 8, 9, 10]
               .map((v) => `<button type="button" class="tog" aria-pressed="${r.rpe === v}" data-act="rpe" data-v="${v}" data-ex="${c.ex.id}" data-n="${r.n}">${v}</button>`)
               .join('')}
+          </div>
+          <div class="drop-ed" role="group" aria-label="Drop set">
+            ${
+              r.drops.length
+                ? `<div class="drop-hd"><span class="rpe-lbl">Drop set</span><span class="small muted">dinlenmeden devam</span></div>
+                   ${r.drops
+                     .map(
+                       (x, i) => `<div class="drop-row">
+                         <span class="drop-i">↓ ${i + 1}</span>
+                         <label class="sr-only" for="dk-${c.ex.id}-${i}">${i + 1}. drop kilo</label>
+                         <input id="dk-${c.ex.id}-${i}" class="input drop-in" inputmode="decimal" value="${x.kg == null ? '' : kgTxt(x.kg)}" placeholder="${x.phKg == null ? 'kg' : kgTxt(x.phKg)}" data-din="kg" data-di="${i}" data-ex="${c.ex.id}" data-n="${r.n}">
+                         <span class="drop-u">kg ×</span>
+                         <label class="sr-only" for="dr-${c.ex.id}-${i}">${i + 1}. drop tekrar</label>
+                         <input id="dr-${c.ex.id}-${i}" class="input drop-in" inputmode="numeric" value="${x.reps ?? ''}" placeholder="${x.phReps ?? 'tekrar'}" data-din="reps" data-di="${i}" data-ex="${c.ex.id}" data-n="${r.n}">
+                         <button type="button" class="drop-x" aria-label="${i + 1}. dropu kaldır" data-act="drop-rm" data-di="${i}" data-ex="${c.ex.id}" data-n="${r.n}">×</button>
+                       </div>`
+                     )
+                     .join('')}
+                   <button type="button" class="drop-add" data-act="drop-add" data-ex="${c.ex.id}" data-n="${r.n}">+ Bir drop daha</button>`
+                : `<button type="button" class="drop-add first" data-act="drop-add" data-ex="${c.ex.id}" data-n="${r.n}">${icon.down}<span>Drop set yaptım</span></button>`
+            }
           </div>
         </div>`
           : ''
@@ -332,9 +376,9 @@ export async function render(root, params = {}) {
       state.drafts[row.key] = vals;
       if (row.rec) await db.put('workout_sets', { ...row.rec, duration_min: vals.min, distance_km: vals.km });
     } else {
-      const vals = { kg: row.kg, reps: row.reps, rpe: row.rpe, ...patch };
+      const vals = { kg: row.kg, reps: row.reps, rpe: row.rpe, drops: row.drops.map((x) => ({ weight_kg: x.kg, reps: x.reps })), ...patch };
       state.drafts[row.key] = vals;
-      if (row.rec) await db.put('workout_sets', { ...row.rec, weight_kg: vals.kg, reps: vals.reps, rpe: vals.rpe ?? null });
+      if (row.rec) await db.put('workout_sets', { ...row.rec, weight_kg: vals.kg, reps: vals.reps, rpe: vals.rpe ?? null, drops: vals.drops && vals.drops.length ? vals.drops : null });
     }
   };
 
@@ -504,7 +548,9 @@ export async function render(root, params = {}) {
         const kg = row.kg ?? row.phKg;
         const reps = row.reps ?? row.phReps;
         if (kg == null || reps == null) return toast('Önce kilo ve tekrarı gir');
-        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, weight_kg: kg, reps, rpe: row.rpe ?? null, done: true });
+        // boş bırakılan drop kutularında gri öneri kaydedilir
+        const drops = row.drops.map((x) => ({ weight_kg: x.kg ?? x.phKg, reps: x.reps ?? x.phReps })).filter((x) => x.weight_kg != null && x.reps);
+        await db.put('workout_sets', { ...(row.rec || {}), date, exercise_id: exId, set_no: row.n, weight_kg: kg, reps, rpe: row.rpe ?? null, drops: drops.length ? drops : null, done: true });
         delete state.active[`${exId}|${date}`];
         if (isToday) {
           rest.start(await db.getSetting('rest_seconds', 90));
@@ -513,6 +559,13 @@ export async function render(root, params = {}) {
         }
       }
       refresh();
+    } else if (act === 'drop-add' || act === 'drop-rm') {
+      const row = rowOf(exId, b.dataset.n);
+      const list = row.drops.map((x) => ({ weight_kg: x.kg, reps: x.reps }));
+      if (act === 'drop-add') list.push({ weight_kg: null, reps: null });
+      else list.splice(Number(b.dataset.di), 1);
+      await saveRow(row, exId, { drops: list });
+      refresh();
     } else if (act === 'addset') {
       state.extra[`${exId}|${date}`] = (state.extra[`${exId}|${date}`] || 0) + 1;
       refresh();
@@ -520,6 +573,18 @@ export async function render(root, params = {}) {
   };
 
   root.oninput = async (e) => {
+    const di = e.target.closest('[data-din]');
+    if (di) {
+      const row = rowOf(di.dataset.ex, di.dataset.n);
+      const i = Number(di.dataset.di);
+      const empty = di.value.trim() === '';
+      let v = empty ? null : parseNum(di.value);
+      if (!empty && isNaN(v)) return;
+      if (di.dataset.din === 'reps' && v != null) v = Math.round(v);
+      row.drops[i][di.dataset.din] = v;
+      await saveRow(row, di.dataset.ex, { drops: row.drops.map((x) => ({ weight_kg: x.kg, reps: x.reps })) });
+      return;
+    }
     const inp = e.target.closest('[data-in]');
     if (!inp) return;
     const row = rowOf(inp.dataset.ex, inp.dataset.n);
@@ -956,10 +1021,10 @@ async function openHistory(ex) {
           .reverse()
           .slice(0, 20)
           .map((d) => `<div class="row"><span class="row-main"><span class="row-title normal">${esc(trDate(d, true))}</span>
-            <span class="row-sub num">${byDate[d].map((s) => `${kgTxt(s.weight_kg)}×${s.reps}${s.rpe ? ' @' + s.rpe : ''}`).join(' · ')}</span></span></div>`)
+            <span class="row-sub num">${byDate[d].map((s) => `${kgTxt(s.weight_kg)}×${s.reps}${s.rpe ? ' @' + s.rpe : ''}${dropsOf(s).map((x) => ` ↓${kgTxt(x.weight_kg)}×${x.reps}`).join('')}`).join(' · ')}</span></span></div>`)
           .join('')}
       </div>
-      <p class="small muted" style="margin:8px 4px 0">Tahmini 1RM, Epley formülüyle en iyi setinden hesaplanır.</p>${muscleField}`
+      <p class="small muted" style="margin:8px 4px 0">Tahmini 1RM, Epley formülüyle en iyi setinden hesaplanır; drop devamları (↓) hesaba katılmaz ama hacme eklenir.</p>${muscleField}`
       : `<div class="empty">Bu egzersiz için henüz kayıtlı set yok.</div>${muscleField}`,
   });
   bindMuscle(sh);

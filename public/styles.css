@@ -941,3 +941,41 @@ button.meal-empty { min-height: 48px; align-items: center; }
 input.input[type="date"], input.input[type="time"] { display: block; height: 44px; line-height: 22px; text-align: left; }
 input.input[type="date"]::-webkit-date-and-time-value, input.input[type="time"]::-webkit-date-and-time-value { text-align: left; margin: 0; min-height: 22px; }
 input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webkit-datetime-edit { padding: 0; }
+
+/* ---------- İlk kurulum: kilit seçimi ---------- */
+.choice-list { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 10px; }
+.choice {
+  display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; padding: 14px 16px; min-height: 76px;
+  border-radius: 16px; background: var(--card); box-shadow: inset 0 0 0 1px var(--sep);
+}
+.choice:active { transform: scale(.985); }
+.choice-ic { width: 44px; height: 44px; border-radius: 22px; flex: none; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); }
+.choice-ic.muted-ic { background: var(--fill); color: var(--sub); }
+.choice-ic svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.choice-t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.choice-t b { font-size: 16px; font-weight: 600; }
+.choice-t small { font-size: 13px; line-height: 17px; color: var(--sub); }
+
+/* ---------- Drop set ---------- */
+.set-row .n { display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.ds-tag { font-size: 9px; font-weight: 700; letter-spacing: .03em; color: var(--accent); margin-top: 1px; }
+.set-row.has-drop { border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+.drop-sub { min-height: 30px; margin-top: 2px; border-radius: 8px; text-align: center; }
+.drop-sub.done { background: var(--fill2); }
+.drop-sub .prev { font-size: 12px; font-weight: 600; color: var(--accent); text-align: left; white-space: nowrap; }
+.drop-sub .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.drop-sub .v.ph { color: var(--sub); font-weight: 500; }
+.drop-ed { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.drop-hd { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.drop-hd .rpe-lbl { padding: 0; color: var(--accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.drop-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto minmax(0, 1fr) 36px; gap: 6px; align-items: center; }
+.drop-i { font-size: 13px; font-weight: 600; color: var(--accent); text-align: center; }
+.drop-in.input { min-height: 40px; padding: 8px 10px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.drop-u { font-size: 13px; color: var(--sub); }
+.drop-x { width: 36px; height: 40px; font-size: 20px; color: var(--sub); }
+.drop-add {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 12px;
+  border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--accent); background: transparent; box-shadow: inset 0 0 0 1px var(--sep);
+}
+.drop-add.first { align-self: stretch; background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.drop-add svg { width: 18px; height: 18px; }

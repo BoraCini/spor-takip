@@ -41,6 +41,15 @@ export function targetsOf(p) {
 }
 
 // ---------- Antrenman ----------
+// Drop set: ana setin ardından dinlenmeden yapılan düşük ağırlıklı devamlar → set.drops = [{ weight_kg, reps }]
+export const dropsOf = (s) => (Array.isArray(s && s.drops) ? s.drops.filter((d) => d && (d.weight_kg != null || d.reps != null)) : []);
+export function setVolume(s) {
+  return (Number(s.weight_kg) || 0) * (Number(s.reps) || 0) + dropsOf(s).reduce((a, d) => a + (Number(d.weight_kg) || 0) * (Number(d.reps) || 0), 0);
+}
+export function dropText(s) {
+  const d = dropsOf(s);
+  return d.length ? ' → ' + d.map((x) => `${x.weight_kg}kg×${x.reps}`).join(' → ') + ' (drop set)' : '';
+}
 export async function programDay(wd) {
   const days = await db.list('program_days', (d) => d.weekday === wd);
   const day = days[0] || null;
@@ -206,7 +215,7 @@ export async function weeklySummary(ws) {
     }
     const g = MUSCLE_GROUP[ex?.muscle] || 'Diğer';
     byMuscle[g] = (byMuscle[g] || 0) + 1;
-    volume += (s.weight_kg || 0) * (s.reps || 0);
+    volume += setVolume(s);
   }
   const sessions = new Set(sets.map((s) => s.date)).size;
   const weights = (await db.list('body_logs', (b) => b.date <= we)).sort((a, b) => a.date.localeCompare(b.date));
@@ -345,7 +354,7 @@ export async function buildContext() {
     const n = exName(s.exercise_id);
     byDate[k][n] = byDate[k][n] || [];
     const ex = exs.find((e) => e.id === s.exercise_id);
-    byDate[k][n].push(isCardio(ex) ? `${s.duration_min || '?'} dk${s.distance_km ? ' ' + s.distance_km + ' km' : ''}` : `${s.weight_kg}kg×${s.reps}${s.rpe ? ' @RPE' + s.rpe : ''}`);
+    byDate[k][n].push(isCardio(ex) ? `${s.duration_min || '?'} dk${s.distance_km ? ' ' + s.distance_km + ' km' : ''}` : `${s.weight_kg}kg×${s.reps}${s.rpe ? ' @RPE' + s.rpe : ''}${dropText(s)}`);
   }
   const cyc = await cycleInfo(t);
   const allComps = await db.list('compounds');

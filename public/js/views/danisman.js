@@ -403,7 +403,7 @@ function cardHTML(m) {
     return `<section class="act-card" aria-label="Set kaydı onayı">
       <div class="ac-head"><span class="ac-title">Antrenman${dateNote}</span></div>
       <div class="ac-item"><span class="row-main"><span style="font-size:15px;font-weight:600">${esc(c.exercise)}</span>
-        <span class="small muted num">${c.sets.map((s, i) => `${i + 1}. set: ${fmt(s.weight_kg, 1)} kg × ${s.reps}`).join(' · ')}</span></span></div>
+        <span class="small muted num">${c.sets.map((s, i) => `${i + 1}. set: ${fmt(s.weight_kg, 1)} kg × ${s.reps}${s.drops && s.drops.length ? ' ↓ ' + s.drops.map((d) => `${fmt(d.weight_kg, 1)} × ${d.reps}`).join(' ↓ ') + ' (drop set)' : ''}`).join(' · ')}</span></span></div>
       ${buttons}${status}</section>`;
   }
   if (c.type === 'doses') {

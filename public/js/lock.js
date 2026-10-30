@@ -206,7 +206,7 @@ export function showLock({ onForgot, allowFaceId = true } = {}) {
 }
 
 // Yeni PIN belirleme (iki kez sorar). resolve(true) belirlendi, resolve(false) vazgeçildi
-export function setupPinFlow({ title = 'PIN belirle', text = '', allowCancel = true } = {}) {
+export function setupPinFlow({ title = 'PIN belirle', text = '', allowCancel = true, cancelLabel = 'Vazgeç' } = {}) {
   return new Promise((resolve) => {
     document.body.classList.add('locked');
     const finish = (val, api) => {
@@ -217,7 +217,7 @@ export function setupPinFlow({ title = 'PIN belirle', text = '', allowCancel = t
     const first = keypadScreen({
       title,
       text: text || `${PIN_LEN} haneli bir PIN seç. Uygulama her açıldığında ve 5 dakikadan uzun arka planda kaldığında sorulur.`,
-      cancelLabel: allowCancel ? 'Vazgeç' : '',
+      cancelLabel: allowCancel ? cancelLabel : '',
       onCancel: (api) => finish(false, api),
       onComplete: (pin1, api1) => {
         api1.close();
@@ -232,7 +232,7 @@ export function setupPinFlow({ title = 'PIN belirle', text = '', allowCancel = t
             } else {
               api2.close();
               document.body.classList.remove('locked');
-              setupPinFlow({ title: 'Eşleşmedi, yeniden dene', text: 'İki giriş aynı olmalı.', allowCancel }).then(resolve);
+              setupPinFlow({ title: 'Eşleşmedi, yeniden dene', text: 'İki giriş aynı olmalı.', allowCancel, cancelLabel }).then(resolve);
             }
           },
         });

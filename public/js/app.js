@@ -1,10 +1,10 @@
 import * as db from './db.js';
-import { showLock, hasPin, setupPinFlow } from './lock.js';
+import { showLock, hasPin, setupPinFlow, faceIdAvailable, enableFaceId } from './lock.js';
 import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.8.2';
+export const APP_VERSION = '1.9.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -273,16 +273,87 @@ function welcome() {
   });
 }
 
+// Kilit seçimi: şifreyle mi, şifresiz mi başlanacak
+function lockChoice() {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'lock';
+    el.innerHTML = `
+      <picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img class="logo" src="icons/logo.png" alt="Pro Coach"></picture>
+      <h1>Uygulama kilitlensin mi?</h1>
+      <p>Kür, kan değerleri ve kilon gibi kişisel bilgilerin burada duracak. İstersen uygulamayı bir PIN ile koruyabilirsin.</p>
+      <div class="choice-list">
+        <button type="button" class="choice" data-pin>
+          <span class="choice-ic">${lockIcon}</span>
+          <span class="choice-t"><b>Şifreli başla</b><small>4 haneli PIN belirle; destekleyen telefonda Face ID ile de açılır</small></span>
+        </button>
+        <button type="button" class="choice" data-nopin>
+          <span class="choice-ic muted-ic">${openIcon}</span>
+          <span class="choice-t"><b>Şifre belirlemek istemiyorum</b><small>Uygulama kilitsiz açılır. İstediğin zaman Ayarlar › Güvenlik'ten açabilirsin</small></span>
+        </button>
+      </div>`;
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pin],[data-nopin]');
+      if (!b) return;
+      el.remove();
+      resolve(b.hasAttribute('data-pin'));
+    });
+    document.body.appendChild(el);
+  });
+}
+const lockIcon = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>';
+const openIcon = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 7.6-1.7"/></svg>';
+
+// PIN belirlendikten sonra Face ID önerisi (Face ID kaydı kullanıcı dokunuşuyla başlamalı)
+function faceIdOffer() {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'lock';
+    el.innerHTML = `
+      <picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img class="logo" src="icons/logo.png" alt="Pro Coach"></picture>
+      <h1>Face ID ile açılsın mı?</h1>
+      <p>Her seferinde PIN yazmak yerine yüzünle açarsın. Face ID olmazsa PIN sorulur.</p>
+      <div class="choice-list">
+        <button type="button" class="btn primary block" data-yes>Face ID'yi aç</button>
+        <button type="button" class="btn ghost block" data-no>Şimdilik sadece PIN</button>
+      </div>`;
+    el.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-yes],[data-no]');
+      if (!b) return;
+      let on = false;
+      if (b.hasAttribute('data-yes')) {
+        try {
+          await enableFaceId();
+          on = true;
+        } catch (err) {
+          toast(err && err.name === 'NotAllowedError' ? 'Face ID izni verilmedi; Ayarlar › Güvenlik\'ten sonra açabilirsin.' : 'Face ID kurulamadı; PIN ile devam ediyoruz.', 4000);
+        }
+      }
+      el.remove();
+      resolve(on);
+    });
+    document.body.appendChild(el);
+  });
+}
+
 async function onboarding() {
   document.body.classList.add('locked');
   await welcome();
-  const set = await setupPinFlow({
-    title: 'PIN belirle',
-    text: '4 haneli bir PIN seç. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldığında sorulur. İstersen Vazgeç diyerek PIN\'siz devam edebilirsin.',
-  });
+  let set = false;
+  let face = false;
+  while (await lockChoice()) {
+    set = await setupPinFlow({
+      title: 'PIN belirle',
+      text: '4 haneli bir PIN seç. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldığında sorulur.',
+      cancelLabel: 'Geri',
+    });
+    if (set) break;
+  }
+  document.body.classList.add('locked');
+  if (set && (await faceIdAvailable())) face = await faceIdOffer();
   document.body.classList.remove('locked');
   await db.setSetting('onboarded', true);
-  if (set) toast('PIN belirlendi');
+  toast(set ? (face ? 'PIN ve Face ID hazır' : 'PIN belirlendi') : 'Şifresiz başladın · Ayarlar\'dan açabilirsin', 3000);
   go('profil?first=1');
 }
 
