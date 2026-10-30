@@ -215,7 +215,7 @@ export async function exportAll({ photos = true } = {}) {
 }
 
 export async function importAll(obj) {
-  if (!obj || obj.app !== 'sporcoach' || !obj.data) throw new Error('Bu dosya bir SporCoach yedeği değil.');
+  if (!obj || obj.app !== 'sporcoach' || !obj.data) throw new Error('Bu dosya bir Pro Coach yedeği değil.');
   const keep = {};
   for (const k of SECRET_SETTINGS) keep[k] = await getSetting(k);
   for (const s of STORES) {

@@ -59,8 +59,8 @@ export async function enableFaceId() {
   const cred = await navigator.credentials.create({
     publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
-      rp: { name: 'SporCoach', id: location.hostname },
-      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'sporcoach', displayName: 'SporCoach' },
+      rp: { name: 'Pro Coach', id: location.hostname },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'sporcoach', displayName: 'Pro Coach' },
       pubKeyCredParams: [
         { type: 'public-key', alg: -7 },
         { type: 'public-key', alg: -257 },
@@ -108,7 +108,7 @@ function keypadScreen({ title, text, onComplete, extraLabel, onExtra, cancelLabe
   let pin = '';
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
   el.innerHTML = `
-    <img class="logo" src="icons/logo.png" alt="SporCoach">
+    <picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img class="logo" src="icons/logo.png" alt="Pro Coach"></picture>
     <h1>${esc(title)}</h1>
     ${text ? `<p>${esc(text)}</p>` : ''}
     <div class="pin-dots" aria-live="polite" aria-label="Girilen hane sayısı">${'<i></i>'.repeat(PIN_LEN)}</div>

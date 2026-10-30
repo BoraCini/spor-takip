@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '1.8.0';
+export const APP_VERSION = '1.8.1';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -261,8 +261,8 @@ function welcome() {
     const el = document.createElement('div');
     el.className = 'lock';
     el.innerHTML = `
-      <img class="logo" src="icons/logo.png" alt="SporCoach">
-      <h1>SporCoach'a hoş geldin</h1>
+      <picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img class="logo" src="icons/logo.png" alt="Pro Coach"></picture>
+      <h1>Pro Coach'a hoş geldin</h1>
       <p>Antrenmanın, beslenmen, kürün ve kan testlerin tek yerde. Verilerin yalnızca bu telefonda saklanır.</p>
       <button type="button" class="btn primary" style="min-width:220px" data-go>Başla</button>`;
     el.querySelector('[data-go]').addEventListener('click', () => {
@@ -325,8 +325,21 @@ function registerSW() {
   });
 }
 
+// ---------- Ana ekran simgesi: telefon koyu temadaysa koyu logo ----------
+// iPhone ana ekrana eklerken o anki simgeyi alır; sonradan kendisi değiştirmez.
+function syncTouchIcon() {
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  const set = () => {
+    const l = document.getElementById('touch-icon');
+    if (l) l.href = mq.matches ? 'icons/icon-180-dark.png' : 'icons/icon-180.png';
+  };
+  set();
+  mq.addEventListener?.('change', set);
+}
+
 // ---------- Başlat ----------
 async function start() {
+  syncTouchIcon();
   await db.init();
   applyAccent(await db.getSetting('accent'));
   setAvatarCache(await db.getSetting('avatar'));

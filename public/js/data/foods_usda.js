@@ -1,4 +1,4 @@
-// USDA SR Legacy kaynaklı temel besinler (100 g başına). Türkçe adlar ve porsiyonlar SporCoach tarafından eklendi.
+// USDA SR Legacy kaynaklı temel besinler (100 g başına). Türkçe adlar ve porsiyonlar Pro Coach tarafından eklendi.
 // Veri: USDA FoodData Central SR Legacy, TempoLife (tempolife.app) derlemesi üzerinden — CC-BY-4.0.
 // Sıra: id, ad, arama kelimeleri, kcal, protein, karbonhidrat, yağ, lif, sodyum mg, porsiyonlar
 const R = [

@@ -131,7 +131,7 @@ export async function enable() {
   if (!isSupported()) throw new Error('Bu cihaz bildirimleri desteklemiyor. iPhone\'da iOS 16.4 veya üstü gerekir.');
   if (!isStandalone()) throw new Error('Bildirimler için uygulamayı ana ekrandaki simgesinden açman gerekiyor.');
   const perm = await Notification.requestPermission();
-  if (perm !== 'granted') throw new Error('Bildirim izni verilmedi. Ayarlar > Bildirimler > SporCoach\'tan açabilirsin.');
+  if (perm !== 'granted') throw new Error('Bildirim izni verilmedi. Ayarlar > Bildirimler > Pro Coach\'tan açabilirsin.');
   const reg = await navigator.serviceWorker.ready;
   let key;
   try {

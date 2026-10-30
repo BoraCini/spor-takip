@@ -1,4 +1,4 @@
-# SporCoach
+# Pro Coach (eski adı SporCoach)
 
 iPhone'da ana ekrana eklenip uygulama gibi çalışan kişisel spor takip uygulaması (PWA).
 

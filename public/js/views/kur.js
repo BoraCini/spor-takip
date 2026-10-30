@@ -727,7 +727,7 @@ function buildIcs(comps, ci, hideNames) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const startDate = today().replace(/-/g, '');
   const until = ci.end ? ci.end.replace(/-/g, '') + 'T235959' : null;
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//SporCoach//TR', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:SporCoach Kür'];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ProCoach//TR', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Pro Coach Kür'];
   let n = 0;
   for (const c of comps.filter((x) => x.active !== false)) {
     const days = c.days && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6];
@@ -777,7 +777,7 @@ function openIcs(comps, ci) {
   });
   s.el.querySelector('[data-go]').addEventListener('click', async () => {
     const hide = s.el.querySelector('#ics-hide').checked;
-    await downloadOrShare('sporcoach-kur.ics', buildIcs(active, ci, hide), 'text/calendar');
+    await downloadOrShare('procoach-kur.ics', buildIcs(active, ci, hide), 'text/calendar');
     s.close();
   });
 }

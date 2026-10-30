@@ -117,7 +117,7 @@ const BASE_FOODS = [
 ];
 
 export const FOODS = [...BASE_FOODS, ...FOODS_TR, ...FOODS_USDA, ...FOODS_BRANDS];
-export const FOOD_ATTRIBUTION = 'Temel besin değerleri: USDA FoodData Central (SR Legacy), TempoLife (tempolife.app) derlemesi üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar SporCoach tarafından eklendi.';
+export const FOOD_ATTRIBUTION = 'Temel besin değerleri: USDA FoodData Central (SR Legacy), TempoLife (tempolife.app) derlemesi üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar Pro Coach tarafından eklendi.';
 
 // Varsayılan porsiyon: son kullanılan miktar, yoksa ilk porsiyon, yoksa 100 g
 export function defaultServing(food, last = null) {

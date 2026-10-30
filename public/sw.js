@@ -1,5 +1,5 @@
 // Service worker — uygulama kabuğunu önbelleğe alır, çevrimdışı çalışır.
-const CACHE = 'sporcoach-v21';
+const CACHE = 'sporcoach-v22';
 const SHELL = [
   './',
   'index.html',
@@ -10,6 +10,9 @@ const SHELL = [
   'icons/icon-512.png',
   'icons/icon-512-maskable.png',
   'icons/logo.png',
+  'icons/logo-dark.png',
+  'icons/icon-180-dark.png',
+  'icons/icon-192-dark.png',
   'js/app.js',
   'js/db.js',
   'js/util.js',
@@ -87,10 +90,10 @@ self.addEventListener('push', (e) => {
   try {
     data = e.data ? e.data.json() : {};
   } catch {
-    data = { title: 'SporCoach', body: e.data ? e.data.text() : '' };
+    data = { title: 'Pro Coach', body: e.data ? e.data.text() : '' };
   }
   e.waitUntil(
-    self.registration.showNotification(data.title || 'SporCoach', {
+    self.registration.showNotification(data.title || 'Pro Coach', {
       body: data.body || '',
       icon: 'icons/icon-192.png',
       badge: 'icons/icon-192.png',

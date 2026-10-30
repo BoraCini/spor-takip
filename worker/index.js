@@ -1,4 +1,4 @@
-// SporCoach sunucu parçası (Cloudflare Worker)
+// Pro Coach sunucu parçası (Cloudflare Worker)
 // - Statik dosyaları (public/) sunar
 // - /api/push/*: bildirim aboneliği ve hatırlatma programı
 // - Zamanlayıcı (cron): her 5 dakikada bir zamanı gelen hatırlatmaları Web Push ile gönderir
@@ -44,7 +44,7 @@ function cleanReminders(list) {
   if (!Array.isArray(list)) return [];
   return list.slice(0, 60).map((r) => ({
     id: String(r.id || '').slice(0, 40),
-    title: String(r.title || 'SporCoach').slice(0, 80),
+    title: String(r.title || 'Pro Coach').slice(0, 80),
     body: String(r.body || '').slice(0, 160),
     url: String(r.url || '/').slice(0, 80),
     time: /^\d{2}:\d{2}$/.test(r.time) ? r.time : '09:00',
@@ -118,7 +118,7 @@ async function handleApi(request, env, url) {
     return json({ ok: true });
   }
   if (path === '/api/push/test') {
-    const r = await sendPush(env, rec, { title: 'SporCoach', body: 'Bildirimler çalışıyor. Hatırlatmalar bu şekilde gelecek.', url: '/#/profil', tag: 'test' });
+    const r = await sendPush(env, rec, { title: 'Pro Coach', body: 'Bildirimler çalışıyor. Hatırlatmalar bu şekilde gelecek.', url: '/#/profil', tag: 'test' });
     if (r.gone) await env.PUSH_KV.delete(key);
     return json({ ok: r.ok, status: r.status });
   }

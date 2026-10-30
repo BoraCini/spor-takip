@@ -97,7 +97,7 @@ export async function renderPage(root, params, mode = 'profile') {
         !standalone && !pushOn
           ? `<p style="margin:0 0 10px;font-size:15px;line-height:21px">Şu an uygulama <b>Safari içinde</b> açık görünüyor. iPhone bildirimlere sadece ana ekrandan <b>web uygulaması olarak</b> açılan uygulamalarda izin veriyor.</p>
              <ol style="margin:0;padding-left:20px;font-size:15px;line-height:22px">
-               <li>Ana ekrandaki eski SporCoach simgesini sil (önce Yedek al ile verilerini yedekle).</li>
+               <li>Ana ekrandaki eski simgeyi sil (önce Yedek al ile verilerini yedekle).</li>
                <li>Safari'de siteyi aç → Paylaş → <b>Ana Ekrana Ekle</b>.</li>
                <li>Açılan ekranda <b>"Web Uygulaması Olarak Aç"</b> seçeneğinin açık olduğundan emin ol → Ekle.</li>
                <li>Yeni simgeden aç; üstte Safari adres çubuğu görünmemeli. Yedeğini Ayarlar'dan geri yükle.</li>
@@ -168,7 +168,7 @@ export async function renderPage(root, params, mode = 'profile') {
       <button type="button" class="list-btn" data-act="clear-chat"><span class="k">Sohbet geçmişini temizle</span>${icon.chev}</button>
       <button type="button" class="list-btn danger" data-act="wipe"><span class="k">Tüm verileri sil</span></button>
     </section>
-    <div class="app-foot"><img src="icons/logo.png" alt=""><span>SporCoach ${APP_VERSION}</span></div>
+    <div class="app-foot"><picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/logo.png" alt=""></picture><span>Pro Coach ${APP_VERSION}</span></div>
   `
     : `
     <header class="hdr">
@@ -304,7 +304,7 @@ export async function renderPage(root, params, mode = 'profile') {
 
     <a href="#/ayarlar" class="card list-row-link" style="display:flex;align-items:center;gap:10px;margin-top:16px"><span style="color:var(--accent)">${icon.gear}</span><span style="flex:1;font-size:16px">Ayarlar</span>${icon.chev}</a>
     <p class="small muted" style="margin:6px 20px 0;line-height:18px">Coach anahtarı, renkler, bildirimler, PIN ve yedekleme Ayarlar'da.</p>
-    <div class="app-foot"><img src="icons/logo.png" alt=""><span>SporCoach ${APP_VERSION}</span></div>
+    <div class="app-foot"><picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/logo.png" alt=""></picture><span>Pro Coach ${APP_VERSION}</span></div>
   `;
 
   // ---- Profil alanları: değişince kaydet ----
@@ -485,7 +485,7 @@ export async function renderPage(root, params, mode = 'profile') {
       refresh();
     } else if (act === 'export') {
       const data = await db.exportAll({ photos: !!(await db.getSetting('backup_photos', true)) });
-      await downloadOrShare(`sporcoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
+      await downloadOrShare(`procoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
       await db.setSetting('last_backup', today());
     } else if (act === 'clear-chat') {
       if (await confirmSheet({ title: 'Sohbeti temizle', text: 'Coach ile tüm konuşma geçmişi silinir. Kayıtlı verilerin (beslenme, antrenman, kür, tahliller) etkilenmez.', okLabel: 'Temizle', danger: true })) {

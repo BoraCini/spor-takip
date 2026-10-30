@@ -260,7 +260,7 @@ async function drawBanners() {
     const a = b.dataset.banner;
     if (a === 'backup') {
       const data = await db.exportAll();
-      await downloadOrShare(`sporcoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
+      await downloadOrShare(`procoach-yedek-${today()}.json`, JSON.stringify(data), 'application/json');
       await db.setSetting('last_backup', today());
     } else if (a === 'snooze-backup') await db.setSetting('backup_snooze', addDays(today(), 3));
     else if (a === 'report' || a === 'dismiss-report') {

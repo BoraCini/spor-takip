@@ -925,3 +925,4 @@ button.meal-empty { min-height: 48px; align-items: center; }
   .keypad { gap: 12px 22px; grid-template-columns: repeat(3, 70px); }
   .keypad button { width: 70px; height: 70px; border-radius: 35px; font-size: 28px; }
 }
+.logo-pic { display: contents; }
