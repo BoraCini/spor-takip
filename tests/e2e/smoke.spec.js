@@ -20,33 +20,63 @@ test('besin arayıp ekler', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('bulut yedeği arayüzden açılır ve başka cihazda geri yüklenir', async ({ page, browser }) => {
+test('bulut yedeği (v3) arayüzden açılır; yeni cihazda adla ve kurtarma koduyla geri yüklenir', async ({ page, browser }) => {
   const errors = await onboard(page);
   await page.evaluate(async () => {
     const db = await import('./js/db.js');
     await db.put('food_logs', { date: '2026-10-01', meal: 'ogle', name: 'E2E yemeği', grams: 100, kcal: 100 });
   });
   await go(page, 'ayarlar', 1500);
+  const name = 'e2e-' + Date.now() + '@ornek.com';
   const pass = 'e2e test sifresi ' + Date.now();
+  await page.fill('#cl-name', name);
   await page.fill('#cl-pass', pass);
   await page.fill('#cl-pass2', pass);
   await page.click('[data-act="cloud-on"]');
-  await expect(page.locator('#toast')).toContainText('Bulut yedeği açıldı', { timeout: 20_000 });
+  await expect(page.locator('.sheet .rc-code')).toContainText('PC3-', { timeout: 30_000 });
+  await expect(page.locator('.sheet [data-qr] svg')).toBeVisible();
+  const code = (await page.locator('.sheet .rc-code').textContent()).trim();
+  await page.click('.sheet [data-done]');
+  await expect(page.locator('.kv', { hasText: 'Yedek adı' })).toContainText(name.toLowerCase());
+  expect(await page.evaluate(async () => (await import('./js/db.js')).getSetting('cloud_pass'))).toBeNull();
 
-  const ctx2 = await browser.newContext();
-  const p2 = await ctx2.newPage();
-  await onboard(p2);
-  await go(p2, 'ayarlar', 1500);
-  await p2.click('[data-act="cloud-restore"]');
-  await p2.fill('#cr-pass', pass);
-  await p2.click('.sheet-hd [data-sheet-right]');
-  await p2.waitForTimeout(3000);
-  await p2.click('.sheet .btn.primary >> nth=-1');
-  await p2.waitForTimeout(1500);
-  const names = await p2.evaluate(async () => (await (await import('./js/db.js')).list('food_logs')).map((f) => f.name));
-  expect(names).toContain('E2E yemeği');
+  for (const who of [name, code]) {
+    const ctx2 = await browser.newContext();
+    const p2 = await ctx2.newPage();
+    await onboard(p2);
+    await go(p2, 'ayarlar', 1500);
+    await p2.click('[data-act="cloud-restore"]');
+    await p2.fill('#cr-who', who);
+    await p2.fill('#cr-pass', pass);
+    await p2.click('.sheet-hd [data-sheet-right]');
+    await expect(p2.locator('.sheet [data-ok]')).toBeVisible({ timeout: 30_000 });
+    await p2.click('.sheet [data-ok]');
+    await expect(p2.locator('#toast')).toContainText('Yedek geri yüklendi');
+    const names = await p2.evaluate(async () => (await (await import('./js/db.js')).list('food_logs')).map((f) => f.name));
+    expect(names).toContain('E2E yemeği');
+    expect(await p2.evaluate(async () => !!(await (await import('./js/db.js')).getSetting('cloud_v3')))).toBe(true);
+    await ctx2.close();
+  }
   expect(errors).toEqual([]);
-  await ctx2.close();
+});
+
+test('eski (PC02) bulut yedeği Ayarlar\'dan yeni biçime taşınır', async ({ page }) => {
+  const errors = await onboard(page);
+  const pass = 'eski bicim sifresi ' + Date.now();
+  await page.evaluate(async (p) => {
+    const db = await import('./js/db.js');
+    const c = await import('./js/cloud.js');
+    await db.put('food_logs', { date: '2026-10-01', meal: 'ogle', name: 'Eski', grams: 1, kcal: 1 });
+    await db.setSetting('cloud_pass', p);
+    await c.cloudUpload(p);
+  }, pass);
+  await go(page, 'ayarlar', 1500);
+  await expect(page.getByText('Yedeğini yeni güvenli biçime taşı.')).toBeVisible();
+  await page.fill('#cl-up-name', 'tasima-' + Date.now());
+  await page.click('[data-act="cloud-upgrade"]');
+  await expect(page.locator('.sheet .rc-code')).toContainText('PC3-', { timeout: 30_000 });
+  expect(await page.evaluate(async () => (await import('./js/cloud.js')).cloudMode())).toBe('v3');
+  expect(errors).toEqual([]);
 });
 
 test('ilk açılışta service worker kurulunca sayfa yenilenmez (kurulum yarıda kalmaz)', async ({ page }) => {

@@ -167,8 +167,7 @@ async function handleBackup(request, env, id) {
     if (!(await writeAllowed(request, prev.metadata))) return json({ error: 'yetki' }, 403);
     if (prev.metadata && Date.now() - Date.parse(prev.metadata.at) < 5 * 60 * 1000) return json({ error: 'sik' }, 429);
     if (!prev.metadata) {
-      const all = await env.PUSH_KV.list({ prefix: 'bk:', limit: MAX_BACKUPS + 1 });
-      if (all.keys.length >= MAX_BACKUPS) return json({ error: 'dolu' }, 507);
+      if ((await backupCount(env)) >= MAX_BACKUPS) return json({ error: 'dolu' }, 507);
     }
     const wk = request.headers.get('x-write-key') || '';
     const wh = /^[a-f0-9]{64}$/.test(wk) ? await sha256hex(wk) : (prev.metadata && prev.metadata.wh) || null;
@@ -184,6 +183,99 @@ async function handleBackup(request, env, id) {
     const prev = await env.PUSH_KV.getWithMetadata(key, 'stream');
     if (!prev.metadata) return json({ ok: true });
     if (!(await writeAllowed(request, prev.metadata))) return json({ error: 'yetki' }, 403);
+    await env.PUSH_KV.delete(key);
+    return json({ ok: true });
+  }
+  return json({ error: 'method' }, 405);
+}
+
+// ---------- Vault v3 ----------
+// 'vx:<kasa>' şifreli yedek; metadata'da okuma (rh) ve yazma (wh) anahtarlarının SHA-256 özeti.
+// 'vn:<ad özeti>' yedek adından kasaya ulaşmak için bulucu: { vault_id, salt, v }. Tuz gizli değildir;
+// kasayı okumak için şifreden türeyen okuma anahtarı gerekir.
+const HEX64 = /^[a-f0-9]{64}$/;
+const VAULT_TTL = 60 * 60 * 24 * 400;
+
+async function keyMatches(given, hash) {
+  return HEX64.test(given || '') && !!hash && safeEq(await sha256hex(given), hash);
+}
+async function backupCount(env) {
+  const a = await env.PUSH_KV.list({ prefix: 'bk:', limit: MAX_BACKUPS + 1 });
+  const b = await env.PUSH_KV.list({ prefix: 'vx:', limit: MAX_BACKUPS + 1 });
+  return a.keys.length + b.keys.length;
+}
+
+async function handleVault(request, env, id) {
+  const key = 'vx:' + id;
+  const rk = request.headers.get('x-read-key') || '';
+  const wk = request.headers.get('x-write-key') || '';
+  const m = request.method;
+  if (m === 'GET' || m === 'HEAD') {
+    const cur = await env.PUSH_KV.getWithMetadata(key, m === 'GET' ? 'arrayBuffer' : 'stream');
+    if (!cur.metadata) return json({ error: 'yok' }, 404);
+    if (!(await keyMatches(rk, cur.metadata.rh))) return json({ error: 'yetki' }, 403);
+    const headers = { 'cache-control': 'no-store', 'x-backup-at': cur.metadata.at || '' };
+    if (m === 'HEAD') return new Response(null, { status: 200, headers });
+    return new Response(cur.value, { headers: { ...headers, 'content-type': 'application/octet-stream' } });
+  }
+  if (m === 'PUT') {
+    const len = Number(request.headers.get('content-length') || 0);
+    if (len > BK_MAX) return json({ error: 'buyuk' }, 413);
+    const prev = await env.PUSH_KV.getWithMetadata(key, 'stream');
+    if (prev.metadata) {
+      if (!(await keyMatches(wk, prev.metadata.wh))) return json({ error: 'yetki' }, 403);
+      if (Date.now() - Date.parse(prev.metadata.at) < 5 * 60 * 1000) return json({ error: 'sik' }, 429);
+    } else {
+      if (!HEX64.test(rk) || !HEX64.test(wk)) return json({ error: 'anahtar' }, 400);
+      if ((await backupCount(env)) >= MAX_BACKUPS) return json({ error: 'dolu' }, 507);
+    }
+    const buf = await request.arrayBuffer();
+    if (!buf.byteLength || buf.byteLength > BK_MAX) return json({ error: 'boyut' }, buf.byteLength ? 413 : 400);
+    if (new TextDecoder().decode(new Uint8Array(buf, 0, 4)) !== 'PC03') return json({ error: 'bicim' }, 400);
+    const at = new Date().toISOString();
+    const metadata = {
+      at,
+      size: buf.byteLength,
+      rh: prev.metadata ? prev.metadata.rh : await sha256hex(rk),
+      wh: prev.metadata ? prev.metadata.wh : await sha256hex(wk),
+    };
+    await env.PUSH_KV.put(key, buf, { metadata, expirationTtl: VAULT_TTL });
+    return json({ ok: true, at });
+  }
+  if (m === 'DELETE') {
+    const prev = await env.PUSH_KV.getWithMetadata(key, 'stream');
+    if (!prev.metadata) return json({ ok: true });
+    if (!(await keyMatches(wk, prev.metadata.wh))) return json({ error: 'yetki' }, 403);
+    await env.PUSH_KV.delete(key);
+    return json({ ok: true });
+  }
+  return json({ error: 'method' }, 405);
+}
+
+async function handleVaultName(request, env, loc) {
+  const key = 'vn:' + loc;
+  const wk = request.headers.get('x-write-key') || '';
+  const m = request.method;
+  const cur = await env.PUSH_KV.get(key, 'json');
+  if (m === 'GET') {
+    if (!cur) return json({ error: 'yok' }, 404);
+    return json({ vault_id: cur.vault_id, salt: cur.salt, v: cur.v || 3 });
+  }
+  if (m === 'PUT') {
+    let body;
+    try {
+      body = JSON.parse((await request.text()).slice(0, 2000));
+    } catch {
+      return json({ error: 'json' }, 400);
+    }
+    if (!body || !HEX64.test(body.vault_id || '') || !HEX64.test(body.salt || '') || !HEX64.test(wk)) return json({ error: 'gecersiz' }, 400);
+    if (cur && !(await keyMatches(wk, cur.wh))) return json({ error: 'ad alinmis' }, 409);
+    await env.PUSH_KV.put(key, JSON.stringify({ vault_id: body.vault_id, salt: body.salt, v: 3, wh: cur ? cur.wh : await sha256hex(wk) }), { expirationTtl: VAULT_TTL });
+    return json({ ok: true });
+  }
+  if (m === 'DELETE') {
+    if (!cur) return json({ ok: true });
+    if (!(await keyMatches(wk, cur.wh))) return json({ error: 'yetki' }, 403);
     await env.PUSH_KV.delete(key);
     return json({ ok: true });
   }
@@ -307,6 +399,10 @@ async function handleInbox(request, env, token, sub) {
 
 async function handleApi(request, env, url) {
   const path = url.pathname.replace(/\/+$/, '');
+  const vx = path.match(/^\/api\/vault\/([a-f0-9]{64})$/);
+  if (vx) return handleVault(request, env, vx[1]);
+  const vn = path.match(/^\/api\/vault-name\/([a-f0-9]{64})$/);
+  if (vn) return handleVaultName(request, env, vn[1]);
   const bk = path.match(/^\/api\/backup\/([a-f0-9]{64})$/);
   if (bk && BK_ID.test(bk[1])) return handleBackup(request, env, bk[1]);
   const ib = path.match(/^\/api\/inbox\/([A-Za-z0-9_-]+)(?:\/(ack))?$/);

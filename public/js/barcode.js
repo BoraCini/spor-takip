@@ -21,11 +21,11 @@ function loadZXing() {
   return zxingLoading;
 }
 
-async function makeDecoder() {
+async function makeDecoder(qr = false) {
   if ('BarcodeDetector' in window) {
     try {
       const supported = await window.BarcodeDetector.getSupportedFormats();
-      const fmts = FORMATS.filter((f) => supported.includes(f));
+      const fmts = (qr ? ['qr_code'] : FORMATS).filter((f) => supported.includes(f));
       if (fmts.length) {
         const det = new window.BarcodeDetector({ formats: fmts });
         return async (video) => {
@@ -37,7 +37,7 @@ async function makeDecoder() {
   }
   const Z = await loadZXing();
   const hints = new Map();
-  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.CODE_128]);
+  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, qr ? [Z.BarcodeFormat.QR_CODE] : [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.CODE_128]);
   hints.set(Z.DecodeHintType.TRY_HARDER, true);
   const reader = new Z.MultiFormatReader();
   reader.setHints(hints);
@@ -47,10 +47,10 @@ async function makeDecoder() {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (!vw || !vh) return null;
-    // ortadaki şeridi oku (daha hızlı ve isabetli)
+    // barkodda ortadaki şeridi oku (daha hızlı ve isabetli); QR'da tüm kare
     const cw = Math.min(vw, 960);
     const scale = cw / vw;
-    const bandH = Math.round(vh * 0.4);
+    const bandH = qr ? vh : Math.round(vh * 0.4);
     canvas.width = cw;
     canvas.height = Math.round(bandH * scale);
     ctx.drawImage(video, 0, Math.round((vh - bandH) / 2), vw, bandH, 0, 0, canvas.width, canvas.height);
@@ -64,27 +64,28 @@ async function makeDecoder() {
   };
 }
 
-// Barkodu okut: kodu (string) ya da null döndürür
-export function scanBarcode() {
+// Barkodu okut: kodu (string) ya da null döndürür. qr: true → QR kod okur (ör. yedek kurtarma kodu)
+export function scanBarcode({ qr = false, accept = null } = {}) {
+  const valid = accept || ((c) => /^\d{6,14}$/.test(c));
   return new Promise((resolve) => {
     let result = null;
     let stream = null;
     let stopped = false;
     let timer = null;
     const s = openSheet({
-      title: 'Barkod okut',
+      title: qr ? 'QR kodu okut' : 'Barkod okut',
       leftLabel: 'Vazgeç',
       body: `
         <div style="position:relative;border-radius:16px;overflow:hidden;background:#000;aspect-ratio:3/4;max-height:56dvh;margin:0 auto 12px">
           <video playsinline muted autoplay style="width:100%;height:100%;object-fit:cover;display:block"></video>
-          <div aria-hidden="true" style="position:absolute;left:8%;right:8%;top:38%;height:24%;border:2px solid rgba(255,255,255,.85);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.25)"></div>
+          <div aria-hidden="true" style="position:absolute;left:8%;right:8%;${qr ? 'top:20%;height:60%' : 'top:38%;height:24%'};border:2px solid rgba(255,255,255,.85);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.25)"></div>
           <p data-msg style="position:absolute;left:0;right:0;bottom:10px;margin:0;text-align:center;color:#fff;font-size:14px;text-shadow:0 1px 3px rgba(0,0,0,.6)">Kamera açılıyor…</p>
         </div>
-        <form data-manual style="display:flex;gap:8px">
+        ${qr ? '' : `<form data-manual style="display:flex;gap:8px">
           <label class="sr-only" for="bc-manual">Barkod numarası</label>
           <input id="bc-manual" class="input" inputmode="numeric" placeholder="ya da barkod numarasını yaz" autocomplete="off" style="flex:1">
           <button type="submit" class="btn primary">Ara</button>
-        </form>`,
+        </form>`}`,
       onClose: () => {
         stopped = true;
         clearTimeout(timer);
@@ -94,7 +95,7 @@ export function scanBarcode() {
     });
     const video = s.el.querySelector('video');
     const msg = s.el.querySelector('[data-msg]');
-    s.el.querySelector('[data-manual]').addEventListener('submit', (e) => {
+    s.el.querySelector('[data-manual]')?.addEventListener('submit', (e) => {
       e.preventDefault();
       const v = s.el.querySelector('#bc-manual').value.replace(/\D/g, '');
       if (v.length < 6) return toast('Barkod numarası eksik');
@@ -103,13 +104,13 @@ export function scanBarcode() {
     });
     (async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        msg.textContent = 'Kamera kullanılamıyor; numarayı elle yazabilirsin.';
+        msg.textContent = qr ? 'Kamera kullanılamıyor; kodu elle yazabilirsin.' : 'Kamera kullanılamıyor; numarayı elle yazabilirsin.';
         return;
       }
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
       } catch (err) {
-        msg.textContent = err && err.name === 'NotAllowedError' ? 'Kamera izni verilmedi. Ayarlar > Safari > Kamera\'dan izin verebilirsin.' : 'Kamera açılamadı; numarayı elle yazabilirsin.';
+        msg.textContent = err && err.name === 'NotAllowedError' ? 'Kamera izni verilmedi. Ayarlar > Safari > Kamera\'dan izin verebilirsin.' : qr ? 'Kamera açılamadı; kodu elle yazabilirsin.' : 'Kamera açılamadı; numarayı elle yazabilirsin.';
         return;
       }
       if (stopped) return stream.getTracks().forEach((t) => t.stop());
@@ -119,19 +120,19 @@ export function scanBarcode() {
       } catch {}
       let decode;
       try {
-        decode = await makeDecoder();
+        decode = await makeDecoder(qr);
       } catch (e) {
         msg.textContent = e.message;
         return;
       }
-      msg.textContent = 'Barkodu çerçevenin içine getir';
+      msg.textContent = qr ? 'QR kodu çerçevenin içine getir' : 'Barkodu çerçevenin içine getir';
       const tick = async () => {
         if (stopped) return;
         let code = null;
         try {
           code = await decode(video);
         } catch {}
-        if (code && /^\d{6,14}$/.test(code)) {
+        if (code && valid(code)) {
           result = code;
           s.close();
           return;

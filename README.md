@@ -13,9 +13,11 @@ Tüm kişisel veriler yalnızca cihazda (IndexedDB) saklanır. Bildirim sunucusu
 hatırlatma saatleri ve (varsayılan olarak genel) başlıklar tutulur.
 
 İsteğe bağlı iki istisna:
-- **Şifreli bulut yedeği:** Telefonda kullanıcının şifresinden PBKDF2 (310 bin tur) + HKDF ile sunucu adresi,
-  AES-GCM anahtarı ve yazma anahtarı türetilir. Sunucu yalnızca okunamaz veriyi ve yazma anahtarının özetini tutar;
-  yazma anahtarı olmadan yedeğin üzerine yazılamaz ve silinemez.
+- **Şifreli bulut yedeği (Vault v3):** Her kasa için rastgele 256 bit kasa kimliği ve tuz. Şifreden PBKDF2-SHA256
+  (600 bin tur) + HKDF ile birbirinden bağımsız şifreleme (AES-256-GCM), okuma ve yazma anahtarları türetilir.
+  Sunucu yalnızca okunamaz veriyi ve okuma/yazma anahtarlarının özetini tutar; okumak, yazmak ve silmek için
+  ilgili anahtar gerekir. Yeni cihazda kasaya yedek adı + şifre ya da kurtarma kodu (QR) + şifre ile ulaşılır.
+  Telefonda ham şifre saklanmaz; otomatik yedek dışa aktarılamaz bir anahtarla çalışır. Eski PC01/PC02 yedekler okunur.
 - **Apple Sağlık kutusu:** Kestirmeler'den gelen adım/kilo verisi, uygulama alana kadar en fazla 45 gün tutulur.
   Kutu yalnızca uygulama açtıysa veri kabul eder.
 
@@ -45,6 +47,8 @@ Yeni sürüm yayınlarken `public/sw.js` içindeki `CACHE` adını artır.
 ## Veri kaynakları
 
 Temel besin değerleri: USDA FoodData Central (SR Legacy), [TempoLife](https://tempolife.app) derlemesi (`tempo-food-db`) üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar bu projede eklendi. Paketli ürünler: Open Food Facts (ODbL).
+
+QR kodlar: [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT, `public/vendor/qrcode`).
 
 Tahlil PDF'leri telefonda [pdf.js](https://mozilla.github.io/pdf.js/) (Apache-2.0, `public/vendor/pdfjs`) ile okunur; yapay zekâ kullanılmaz.
 

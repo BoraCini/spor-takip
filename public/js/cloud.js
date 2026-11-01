@@ -4,6 +4,7 @@
 import * as db from './db.js';
 import { today, addDays, toast } from './util.js';
 import { activityOf } from './context.js';
+import * as V from './vault.js';
 
 const enc = new TextEncoder();
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -80,18 +81,34 @@ export function passIssue(p) {
   return null;
 }
 
-export async function cloudUpload(pass, { guard = false } = {}) {
-  const { id, key, write } = await secretsFor(pass);
+// Yedeği hazırlar: dışa aktar (okuma hatasında fırlatır: eksik yedek gönderilmez) → ani düşüş kontrolü → gzip
+async function prepareBackup(guard) {
   const withPhotos = await db.getSetting('backup_photos', true);
-  const data = await db.exportAll({ photos: withPhotos }); // okuma hatasında fırlatır: eksik yedek gönderilmez
+  const data = await db.exportAll({ photos: withPhotos });
   if (guard) {
     const hold = dropCheck(db.backupCounts(data), await db.getSetting('cloud_last_counts'));
     if (hold) {
       await db.setSetting('cloud_hold', { at: new Date().toISOString(), ...hold });
-      return { ok: false, reason: 'dusus', ...hold };
+      return { hold };
     }
   }
   const zipped = await pipe(enc.encode(JSON.stringify(data)), new CompressionStream('gzip'));
+  return { data, zipped };
+}
+async function markBackedUp(data) {
+  const at = new Date().toISOString();
+  await db.setSetting('cloud_last', at);
+  await db.setSetting('cloud_last_counts', db.backupCounts(data));
+  await db.setSetting('cloud_hold', null);
+  return at;
+}
+
+// ---- Eski biçim (PC02, 2.0.1–2.0.2): yalnızca henüz v3'e geçmemiş kurulumlar için ----
+export async function cloudUpload(pass, { guard = false } = {}) {
+  const { id, key, write } = await secretsFor(pass);
+  const prep = await prepareBackup(guard);
+  if (prep.hold) return { ok: false, reason: 'dusus', ...prep.hold };
+  const { data, zipped } = prep;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('PC02') }, key, zipped));
   const out = new Uint8Array(4 + 12 + ct.length);
@@ -106,10 +123,7 @@ export async function cloudUpload(pass, { guard = false } = {}) {
     if (res.status === 403) throw new Error('Bu yedeğin üzerine yazılamadı.');
     throw new Error('Sunucuya ulaşılamadı.');
   }
-  const at = new Date().toISOString();
-  await db.setSetting('cloud_last', at);
-  await db.setSetting('cloud_last_counts', db.backupCounts(data));
-  await db.setSetting('cloud_hold', null);
+  const at = await markBackedUp(data);
   // eski biçimdeki yedek varsa yeni biçime geçtikten sonra sil
   if (!(await db.getSetting('cloud_v2'))) {
     await dropLegacy(pass);
@@ -157,6 +171,157 @@ export async function cloudDelete(pass) {
   await dropLegacy(pass);
 }
 
+// ---------- Vault v3 ----------
+// Telefonda saklanan: kasa kimliği, tuz, yedek adı, dışa aktarılamaz şifreleme anahtarı (CryptoKey) ve okuma/yazma
+// yetki anahtarları. Ham şifre saklanmaz. Şifreleme anahtarı kullanılabilir ama içeriği okunamaz, şifre geri elde edilemez.
+const getVault = () => db.getSetting('cloud_v3');
+
+export async function cloudMode() {
+  if (await getVault()) return 'v3';
+  if (await db.getSetting('cloud_pass')) return 'v2';
+  return 'off';
+}
+
+async function uploadV3(vault, prep) {
+  const sealed = await V.sealPayload(vault.encKey, vault.id, prep.zipped);
+  await V.vaultPut(vault.id, vault, sealed);
+  return sealed.length;
+}
+
+// Yeni kasa: ad + şifre. Kurtarma kodunu döndürür (kullanıcıya bir kez gösterilir, ayarlardan tekrar görülebilir).
+export async function enableVault({ name, pass, migrateFrom = null }) {
+  const ni = V.nameIssue(name);
+  if (ni) throw new Error(ni);
+  const pi = passIssue(pass);
+  if (pi) throw new Error(pi);
+  const locId = await V.locatorId(name);
+  if (await V.locatorGet(locId)) throw new Error('Bu yedek adı kullanılıyor. Başka bir ad seç ya da "Geri yükle" ile o yedeği aç.');
+  const { id, salt } = V.newVault();
+  const keys = await V.deriveVaultKeys(pass, salt, id);
+  const vault = { id, salt, name: V.normalizeName(name), locId, ...keys, created: new Date().toISOString() };
+  const prep = await prepareBackup(false);
+  const size = await uploadV3(vault, prep);
+  try {
+    await V.locatorPut(locId, { vault_id: id, salt, v: 3 }, keys);
+  } catch (e) {
+    await V.vaultDelete(id, keys).catch(() => {}); // ad bu arada alındıysa kasayı geri al
+    throw e;
+  }
+  await db.setSetting('cloud_v3', vault);
+  const at = await markBackedUp(prep.data);
+  // Eski biçimden geçiş: yeni kasa doğrulandıktan SONRA eski yedek silinir ve düz metin şifre kaldırılır
+  const old = migrateFrom || (await db.getSetting('cloud_pass'));
+  if (old) {
+    try {
+      await cloudDelete(old);
+    } catch {}
+    await db.setSetting('cloud_pass', null);
+  }
+  return { code: await V.encodeRecovery(id, salt), at, size };
+}
+
+// Eski (PC02) kurulumdan v3'e geçiş: kayıtlı şifre ile, kullanıcının seçtiği adla
+export async function upgradeToVault(name) {
+  const pass = await db.getSetting('cloud_pass');
+  if (!pass) throw new Error('Eski bulut yedeği bulunamadı.');
+  return enableVault({ name, pass, migrateFrom: pass });
+}
+
+export async function recoveryCode() {
+  const v = await getVault();
+  return v ? V.encodeRecovery(v.id, v.salt) : null;
+}
+
+// Hangi biçimde olursa olsun "şimdi yedekle"
+export async function backupNow({ guard = false } = {}) {
+  const vault = await getVault();
+  if (vault) {
+    const prep = await prepareBackup(guard);
+    if (prep.hold) return { ok: false, reason: 'dusus', ...prep.hold };
+    let size;
+    try {
+      size = await uploadV3(vault, prep);
+    } catch (e) {
+      if (e.status === 429) return { ok: false, reason: 'sik' };
+      throw e;
+    }
+    // bulucunun ömrünü uzat (ayda bir)
+    const lr = await db.getSetting('cloud_loc_refresh');
+    if (!lr || Date.now() - Date.parse(lr) > 30 * 86400000) {
+      try {
+        await V.locatorPut(vault.locId, { vault_id: vault.id, salt: vault.salt, v: 3 }, vault);
+        await db.setSetting('cloud_loc_refresh', new Date().toISOString());
+      } catch {}
+    }
+    return { ok: true, at: await markBackedUp(prep.data), size };
+  }
+  const pass = await db.getSetting('cloud_pass');
+  if (pass) return cloudUpload(pass, { guard });
+  throw new Error('Bulut yedeği kapalı.');
+}
+
+// Geri yükleme: "kim" = yedek adı ya da kurtarma kodu. Boş bırakılırsa eski (şifreyle bulunan) yedek denenir.
+// Döner: { data, at, vault } — vault varsa bu telefon aynı kasaya yedeklemeye devam edebilir (adoptVault).
+export async function findBackup({ who = '', pass }) {
+  if (!pass) throw new Error('Şifreyi yaz.');
+  let id;
+  let salt;
+  let name = null;
+  let locId = null;
+  if (V.looksLikeRecovery(who)) {
+    ({ id, salt } = await V.decodeRecovery(who));
+  } else if (String(who).trim()) {
+    const ni = V.nameIssue(who);
+    if (ni) throw new Error(ni);
+    locId = await V.locatorId(who);
+    const loc = await V.locatorGet(locId);
+    if (!loc) throw new Error('Bu adla bir yedek bulunamadı. Adı kontrol et ya da kurtarma kodunu kullan.');
+    ({ vault_id: id, salt } = loc);
+    name = V.normalizeName(who);
+  } else {
+    const r = await cloudDownload(pass); // eski biçim (PC02/PC01)
+    return { ...r, vault: null, legacyPass: pass };
+  }
+  const keys = await V.deriveVaultKeys(pass, salt, id);
+  let got;
+  try {
+    got = await V.vaultGet(id, keys);
+  } catch (e) {
+    if (e.status === 403) throw new Error('Şifre yanlış.');
+    if (e.status === 404) throw new Error('Bu kasada yedek bulunamadı.');
+    throw e;
+  }
+  if (got.buf.byteLength > MAX_COMPRESSED) throw new Error('Yedek beklenenden büyük; açılmadı.');
+  const zipped = await V.openPayload(keys.encKey, id, got.buf);
+  const text = new TextDecoder().decode(await gunzipLimited(zipped));
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('Yedek bozuk (içerik okunamadı).');
+  }
+  return { data, at: got.at, vault: { id, salt, name, locId, ...keys, created: new Date().toISOString() } };
+}
+
+// Geri yüklenen kasayı bu telefonda kullan (otomatik yedek aynı kasaya devam eder)
+export async function adoptVault(vault) {
+  if (!vault) return;
+  await db.setSetting('cloud_v3', vault);
+  await db.setSetting('cloud_pass', null);
+}
+
+// Bulut yedeğini kapat: sunucudaki kasa ve bulucu (ya da eski yedek) silinir
+export async function disableCloud() {
+  const vault = await getVault();
+  if (vault) {
+    await V.vaultDelete(vault.id, vault).catch(() => {});
+    if (vault.locId) await V.locatorDelete(vault.locId, vault).catch(() => {});
+  }
+  const pass = await db.getSetting('cloud_pass');
+  if (pass) await cloudDelete(pass).catch(() => {});
+  for (const k of ['cloud_v3', 'cloud_pass', 'cloud_last', 'cloud_last_counts', 'cloud_hold', 'cloud_loc_refresh']) await db.setSetting(k, null);
+}
+
 // Otomatik yedekte güvenlik: kayıt sayısı bir önceki yedeğe göre yarıdan fazla düştüyse yedekleme durur, kullanıcıya sorulur.
 export function dropCheck(now, prev) {
   if (!prev) return null;
@@ -170,11 +335,10 @@ export function dropCheck(now, prev) {
 // Uygulama açıldığında: son yedekten 24 saat geçtiyse arka planda yedekle
 export async function autoCloudBackup() {
   try {
-    const pass = await db.getSetting('cloud_pass');
-    if (!pass || !cloudSupported() || !navigator.onLine) return;
+    if ((await cloudMode()) === 'off' || !cloudSupported() || !navigator.onLine) return;
     const last = await db.getSetting('cloud_last');
     if (last && Date.now() - Date.parse(last) < 24 * 3600 * 1000) return;
-    await cloudUpload(pass, { guard: true });
+    await backupNow({ guard: true });
   } catch (e) {
     console.warn('bulut yedeği', e);
   }
