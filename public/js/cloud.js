@@ -41,6 +41,33 @@ async function legacyKey(pass, id) {
 async function pipe(bytes, stream) {
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
 }
+// Sıkıştırılmış ve açılmış boyut ayrı ayrı sınırlı ("zip bombası" ve bellek taşmasına karşı)
+export const MAX_COMPRESSED = 25 * 1024 * 1024;
+export const MAX_INFLATED = 250 * 1024 * 1024;
+export async function gunzipLimited(bytes, max = MAX_INFLATED) {
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const parts = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      try {
+        await reader.cancel();
+      } catch {}
+      throw new Error('Yedek açıldığında çok büyük çıkıyor; açılmadı.');
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.byteLength;
+  }
+  return out;
+}
 async function dropLegacy(pass) {
   try {
     await fetch('/api/backup/' + (await legacyId(pass)), { method: 'DELETE' });
@@ -53,10 +80,17 @@ export function passIssue(p) {
   return null;
 }
 
-export async function cloudUpload(pass) {
+export async function cloudUpload(pass, { guard = false } = {}) {
   const { id, key, write } = await secretsFor(pass);
   const withPhotos = await db.getSetting('backup_photos', true);
-  const data = await db.exportAll({ photos: withPhotos });
+  const data = await db.exportAll({ photos: withPhotos }); // okuma hatasında fırlatır: eksik yedek gönderilmez
+  if (guard) {
+    const hold = dropCheck(db.backupCounts(data), await db.getSetting('cloud_last_counts'));
+    if (hold) {
+      await db.setSetting('cloud_hold', { at: new Date().toISOString(), ...hold });
+      return { ok: false, reason: 'dusus', ...hold };
+    }
+  }
   const zipped = await pipe(enc.encode(JSON.stringify(data)), new CompressionStream('gzip'));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('PC02') }, key, zipped));
@@ -74,6 +108,8 @@ export async function cloudUpload(pass) {
   }
   const at = new Date().toISOString();
   await db.setSetting('cloud_last', at);
+  await db.setSetting('cloud_last_counts', db.backupCounts(data));
+  await db.setSetting('cloud_hold', null);
   // eski biçimdeki yedek varsa yeni biçime geçtikten sonra sil
   if (!(await db.getSetting('cloud_v2'))) {
     await dropLegacy(pass);
@@ -89,7 +125,12 @@ async function decode(buf, key, tag) {
   } catch {
     throw new Error('Şifre yanlış ya da yedek bozuk.');
   }
-  return JSON.parse(new TextDecoder().decode(await pipe(new Uint8Array(plain), new DecompressionStream('gzip'))));
+  const json = new TextDecoder().decode(await gunzipLimited(new Uint8Array(plain)));
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error('Yedek bozuk (içerik okunamadı).');
+  }
 }
 
 export async function cloudDownload(pass) {
@@ -103,6 +144,7 @@ export async function cloudDownload(pass) {
   if (res.status === 404) throw new Error('Bu şifreyle bir yedek bulunamadı.');
   if (!res.ok) throw new Error('Sunucuya ulaşılamadı.');
   const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.byteLength > MAX_COMPRESSED) throw new Error('Yedek beklenenden büyük; açılmadı.');
   const tag = new TextDecoder().decode(buf.slice(0, 4));
   if (tag !== (legacy ? 'PC01' : 'PC02')) throw new Error('Yedek biçimi tanınmadı.');
   const data = await decode(buf, legacy ? await legacyKey(pass, await legacyId(pass)) : key, tag);
@@ -115,6 +157,16 @@ export async function cloudDelete(pass) {
   await dropLegacy(pass);
 }
 
+// Otomatik yedekte güvenlik: kayıt sayısı bir önceki yedeğe göre yarıdan fazla düştüyse yedekleme durur, kullanıcıya sorulur.
+export function dropCheck(now, prev) {
+  if (!prev) return null;
+  const sum = (o) => Object.entries(o || {}).filter(([k]) => k !== 'settings' && k !== 'chat_messages').reduce((a, [, v]) => a + (v || 0), 0);
+  const p = sum(prev);
+  const n = sum(now);
+  if (p >= 20 && n < p * 0.5) return { prev: p, now: n };
+  return null;
+}
+
 // Uygulama açıldığında: son yedekten 24 saat geçtiyse arka planda yedekle
 export async function autoCloudBackup() {
   try {
@@ -122,7 +174,7 @@ export async function autoCloudBackup() {
     if (!pass || !cloudSupported() || !navigator.onLine) return;
     const last = await db.getSetting('cloud_last');
     if (last && Date.now() - Date.parse(last) < 24 * 3600 * 1000) return;
-    await cloudUpload(pass);
+    await cloudUpload(pass, { guard: true });
   } catch (e) {
     console.warn('bulut yedeği', e);
   }

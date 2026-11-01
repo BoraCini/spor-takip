@@ -38,6 +38,7 @@ export async function renderPage(root, params, mode = 'profile') {
   const backupPhotos = await db.getSetting('backup_photos', true);
   const cloudPass = await db.getSetting('cloud_pass');
   const cloudLast = await db.getSetting('cloud_last');
+  const cloudHold = await db.getSetting('cloud_hold');
   const inTok = await db.getSetting('inbox_token');
   const inLast = await db.getSetting('inbox_last');
   const stepsMap = (await db.getSetting('daily_steps', {})) || {};
@@ -168,7 +169,7 @@ export async function renderPage(root, params, mode = 'profile') {
         !cloudSupported()
           ? '<p class="small muted" style="margin:0">Bu tarayıcı şifreli yedeği desteklemiyor (iOS 16.4 ve sonrası gerekir).</p>'
           : cloudPass
-          ? `<div class="kv" style="border-top:0"><span class="k">Son bulut yedeği</span><span class="v">${cloudLast ? esc(trDate(cloudLast.slice(0, 10))) + ' ' + esc(new Date(cloudLast).toTimeString().slice(0, 5)) : 'henüz yok'}</span></div>
+          ? `${cloudHold ? `<p class="small warn" style="margin:0 0 8px;line-height:18px">Otomatik yedek durduruldu: telefondaki kayıt sayısı son yedeğe göre çok azaldı (${esc(String(cloudHold.prev))} → ${esc(String(cloudHold.now))}). Eski yedeğin üzerine yazılmadı. Verilerin doğruysa "Şimdi yedekle"ye dokun; bir şeyler kaybolduysa önce "Buluttan geri yükle".</p>` : ''}<div class="kv" style="border-top:0"><span class="k">Son bulut yedeği</span><span class="v">${cloudLast ? esc(trDate(cloudLast.slice(0, 10))) + ' ' + esc(new Date(cloudLast).toTimeString().slice(0, 5)) : 'henüz yok'}</span></div>
              <p class="small muted" style="margin:0 0 6px;line-height:18px">Uygulamayı her gün ilk açışında otomatik yedeklenir. Yeni telefonda Ayarlar › Şifreli bulut yedeği › Buluttan geri yükle'ye aynı şifreyi yazman yeterli.</p>
              <button type="button" class="list-btn" data-act="cloud-now"><span class="k">Şimdi yedekle</span>${icon.chev}</button>
              <button type="button" class="list-btn" data-act="cloud-restore"><span class="k">Buluttan geri yükle</span>${icon.chev}</button>
@@ -677,22 +678,54 @@ export async function renderPage(root, params, mode = 'profile') {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     try {
-      const obj = JSON.parse(await file.text());
-      const ok = await confirmSheet({
-        title: 'Yedeği geri yükle',
-        text: `${obj.exported_at ? trDate(dateStr(new Date(obj.exported_at))) + ' tarihli yedek. ' : ''}Mevcut verilerin bu yedekle değiştirilecek.`,
-        okLabel: 'Geri yükle',
-      });
-      if (!ok) return;
-      await db.importAll(obj);
+      if (file.size > 300 * 1024 * 1024) throw new Error('Dosya çok büyük.');
+      const obj = db.parseBackupText(await file.text());
+      const choice = await restoreSheet(obj);
+      if (!choice) return;
+      await db.importAll(obj, { keepPhotos: choice.keepPhotos });
       toast('Yedek yüklendi');
       applyAccent(await db.getSetting('accent'));
       refresh();
     } catch (err) {
-      toast(err.message || 'Dosya okunamadı');
+      toast(err.message || 'Dosya okunamadı', 4500);
     } finally {
       e.target.value = '';
     }
+  });
+}
+
+// Geri yükleme öncesi özet: doğrulama sonucu, kayıt sayıları, uyarılar ve fotoğraf seçeneği.
+// Doğrulama hatası varsa geri yükleme düğmesi gösterilmez; telefondaki veriye dokunulmaz.
+const STORE_LABELS = { food_logs: 'besin kaydı', workout_sets: 'set', body_logs: 'kilo kaydı', lab_values: 'tahlil değeri', dose_logs: 'doz kaydı', progress_photos: 'fotoğraf', vitals: 'tansiyon/nabız' };
+export async function restoreSheet(obj, { at = null } = {}) {
+  const v = db.validateBackup(obj);
+  const photosHere = (await db.list('progress_photos')).length;
+  const askPhotos = v.ok && !v.photosIncluded && photosHere > 0;
+  const when = at || obj.exported_at;
+  const counts = Object.entries(STORE_LABELS)
+    .filter(([k]) => v.stats[k])
+    .map(([k, l]) => `${v.stats[k]} ${l}`)
+    .join(' · ');
+  return new Promise((resolve) => {
+    let result = null;
+    const s = openSheet({
+      title: v.ok ? 'Yedeği geri yükle' : 'Yedek açılamadı',
+      size: 'auto',
+      leftLabel: 'Vazgeç',
+      body: v.ok
+        ? `<p style="font-size:16px;line-height:22px;margin:4px 4px 10px">${when ? esc(trDate(dateStr(new Date(when)))) + ' tarihli yedek. ' : ''}Bu telefondaki veriler bu yedekle değiştirilecek. API anahtarı, PIN ve bulut ayarların korunur.</p>
+           ${counts ? `<p class="small muted" style="margin:0 4px 10px;line-height:18px">${esc(counts)}</p>` : ''}
+           ${v.warnings.length ? `<p class="small warn" style="margin:0 4px 10px;line-height:18px">${v.warnings.slice(0, 3).map(esc).join('<br>')}</p>` : ''}
+           ${askPhotos ? `<div class="kv" style="border-top:0;margin-bottom:10px"><label class="k" for="rs-keep">Bu yedekte fotoğraf yok. Telefondaki ${photosHere} fotoğraf korunsun</label><span class="switch"><input id="rs-keep" type="checkbox" checked><span></span></span></div>` : ''}
+           <button type="button" class="btn block primary" data-ok>Geri yükle</button>`
+        : `<p style="font-size:16px;line-height:22px;margin:4px 4px 10px">Yedek doğrulamadan geçmedi; telefondaki verilerine dokunulmadı.</p>
+           <p class="small warn" style="margin:0 4px 10px;line-height:18px">${v.errors.slice(0, 5).map(esc).join('<br>')}${v.errors.length > 5 ? `<br>+${v.errors.length - 5} sorun daha` : ''}</p>`,
+      onClose: () => resolve(result),
+    });
+    s.el.querySelector('[data-ok]')?.addEventListener('click', () => {
+      result = { keepPhotos: askPhotos ? s.el.querySelector('#rs-keep').checked : true };
+      s.close();
+    });
   });
 }
 
@@ -717,9 +750,9 @@ function openCloudRestore(savedPass) {
       if (!pass) return toast('Şifreyi yaz');
       try {
         const { data, at } = await cloudDownload(pass);
-        const ok = await confirmSheet({ title: 'Yedeği geri yükle', text: `${at ? trDate(dateStr(new Date(at))) + ' tarihli yedek bulundu. ' : ''}Bu telefondaki veriler bu yedekle değiştirilsin mi?`, okLabel: 'Geri yükle' });
-        if (!ok) return;
-        await db.importAll(data);
+        const choice = await restoreSheet(data, { at });
+        if (!choice) return;
+        await db.importAll(data, { keepPhotos: choice.keepPhotos });
         await db.setSetting('cloud_pass', pass);
         applyAccent(await db.getSetting('accent'));
         api.close();

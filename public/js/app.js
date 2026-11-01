@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '2.0.2';
+export const APP_VERSION = '2.1.0-beta.1';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -415,9 +415,44 @@ function syncTouchIcon() {
 }
 
 // ---------- Başlat ----------
+// Veritabanı açılamazsa normal ekranlar açılmaz; boş günlük ya da yeni kullanıcı gibi gösterilmez.
+const STORAGE_MSG = {
+  STORAGE_UNAVAILABLE: 'Bu tarayıcı veri saklamaya izin vermiyor. Gizli sekmedeysen normal sekmede aç; ayarlardan site verilerini engellediysen izin ver.',
+  STORAGE_BLOCKED: 'Uygulama başka bir sekmede ya da pencerede açık. Onu kapatıp yeniden dene.',
+  STORAGE_MIGRATION_FAILED: 'Veritabanı güncellenemedi. Eski verilerin yerinde duruyor; uygulamayı kapatıp yeniden aç.',
+  STORAGE_QUOTA_EXCEEDED: 'Telefonda yer kalmadı. Biraz yer açıp yeniden dene.',
+};
+function storageErrorScreen(err) {
+  const v = document.getElementById('view');
+  document.body.classList.add('locked');
+  const msg = STORAGE_MSG[err && err.code] || 'Verilerin okunamadı. Hiçbir şey silinmedi.';
+  v.innerHTML = `<div class="empty" style="padding:60px 24px;text-align:center">
+    <p style="font-size:19px;font-weight:600;margin:0 0 10px">Veriler açılamadı</p>
+    <p style="font-size:15px;line-height:21px;margin:0 0 6px">${esc(msg)}</p>
+    <p class="small muted" style="margin:0 0 18px">Hata kodu: ${esc((err && err.code) || 'bilinmiyor')}</p>
+    <button type="button" class="btn primary" data-retry>Yeniden dene</button></div>`;
+  v.querySelector('[data-retry]').addEventListener('click', () => location.reload());
+}
+window.addEventListener('db-versionchange', () => {
+  toast('Uygulamanın yeni sürümü açıldı, yenileniyor…', 2500);
+  setTimeout(() => location.reload(), 1200);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  if (r && r.name === 'StorageError') {
+    toast(r.code === 'STORAGE_QUOTA_EXCEEDED' ? 'Telefonda yer kalmadı; son değişiklik kaydedilemedi.' : 'Kaydedilemedi (' + r.code + '). Yeniden dene.', 4500);
+  }
+});
+
 async function start() {
   syncTouchIcon();
-  await db.init();
+  try {
+    await db.init();
+  } catch (err) {
+    console.error('veritabanı', err);
+    storageErrorScreen(err);
+    return;
+  }
   applyAccent(await db.getSetting('accent'));
   setAvatarCache(await db.getSetting('avatar'));
   registerSW();
