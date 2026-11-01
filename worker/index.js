@@ -192,12 +192,69 @@ async function handleBackup(request, env, id) {
 
 // ---------- Apple Sağlık köprüsü (Kestirmeler) ----------
 // Kestirme günlük adım/kilo değerlerini buraya gönderir; uygulama açılınca alır ve kutuyu boşaltır.
-async function handleInbox(request, env, token) {
-  const key = 'ib:' + token;
+// Yeni yapı: kutu işareti 'ibx:<token>', her kayıt ayrı anahtar 'ibi:<token>:<id>'.
+// Kayıtlar ayrı anahtarda olduğu için gelen yeni kayıt ile onay (ACK) birbirinin üzerine yazamaz.
+// Eski yapı ('ib:<token>' altında tek liste) ilk okumada yeni yapıya taşınır.
+const MAX_INBOX_ITEMS = 120;
+const ibx = (t) => 'ibx:' + t;
+const ibi = (t, id = '') => 'ibi:' + t + ':' + id;
+const ITEM_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+
+async function inboxExists(env, token) {
+  if (await env.PUSH_KV.get(ibx(token))) return true;
+  return !!(await env.PUSH_KV.get('ib:' + token)); // eski yapı
+}
+async function migrateLegacyInbox(env, token) {
+  const legacy = await env.PUSH_KV.get('ib:' + token, 'json');
+  if (!legacy) return;
+  for (const it of Array.isArray(legacy) ? legacy : []) {
+    const id = it.id && ITEM_ID_RE.test(it.id) ? it.id : crypto.randomUUID();
+    await env.PUSH_KV.put(ibi(token, id), JSON.stringify({ ...it, id }), { expirationTtl: INBOX_TTL });
+  }
+  await env.PUSH_KV.put(ibx(token), JSON.stringify({ v: 2 }), { expirationTtl: INBOX_TTL });
+  await env.PUSH_KV.delete('ib:' + token);
+}
+async function inboxItems(env, token) {
+  const out = [];
+  let cursor;
+  do {
+    const r = await env.PUSH_KV.list({ prefix: ibi(token), cursor });
+    for (const k of r.keys) {
+      const v = await env.PUSH_KV.get(k.name, 'json');
+      if (v) out.push(v);
+    }
+    cursor = r.list_complete ? null : r.cursor;
+  } while (cursor && out.length < MAX_INBOX_ITEMS);
+  return out.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+}
+async function inboxCount(env) {
+  const a = await env.PUSH_KV.list({ prefix: 'ibx:', limit: MAX_INBOXES + 1 });
+  const b = await env.PUSH_KV.list({ prefix: 'ib:', limit: MAX_INBOXES + 1 });
+  return a.keys.length + b.keys.length;
+}
+
+async function handleInbox(request, env, token, sub) {
+  const url = new URL(request.url);
+  if (sub === 'ack') {
+    // Yalnızca gönderilen kimlikler silinir; başka hiçbir kayda dokunulmaz
+    if (request.method !== 'POST') return json({ error: 'method' }, 405);
+    if (!(await inboxExists(env, token))) return json({ error: 'kutu yok' }, 404);
+    let body;
+    try {
+      body = JSON.parse((await request.text()).slice(0, 20000));
+    } catch {
+      return json({ error: 'json' }, 400);
+    }
+    const ids = Array.isArray(body && body.ids) ? [...new Set(body.ids.filter((x) => typeof x === 'string' && ITEM_ID_RE.test(x)))].slice(0, MAX_INBOX_ITEMS) : [];
+    for (const id of ids) await env.PUSH_KV.delete(ibi(token, id));
+    return json({ ok: true, removed: ids.length });
+  }
+  if (sub) return json({ error: 'not found' }, 404);
+
   if (request.method === 'POST') {
     // Kutu ancak uygulama bir kez açtıysa vardır; rastgele adreslere veri yığılamaz
-    const cur = await env.PUSH_KV.get(key, 'json');
-    if (!cur) return json({ error: 'kutu yok' }, 404);
+    if (!(await inboxExists(env, token))) return json({ error: 'kutu yok' }, 404);
+    await migrateLegacyInbox(env, token);
     let body;
     const txt = (await request.text()).slice(0, 4000);
     try {
@@ -210,6 +267,7 @@ async function handleInbox(request, env, token) {
       return isFinite(n) ? n : null;
     };
     const item = {
+      id: crypto.randomUUID(),
       date: /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : null,
       steps: num(body.steps),
       weight: num(body.weight),
@@ -218,25 +276,30 @@ async function handleInbox(request, env, token) {
       at: new Date().toISOString(),
     };
     if (item.steps == null && item.weight == null && item.bodyfat == null && item.rhr == null) return json({ error: 'veri yok' }, 400);
-    const list = cur.slice(-59);
-    list.push(item);
-    await env.PUSH_KV.put(key, JSON.stringify(list), { expirationTtl: INBOX_TTL });
-    return json({ ok: true });
+    const existing = await env.PUSH_KV.list({ prefix: ibi(token), limit: MAX_INBOX_ITEMS + 1 });
+    if (existing.keys.length >= MAX_INBOX_ITEMS) return json({ error: 'kutu dolu' }, 507);
+    await env.PUSH_KV.put(ibi(token, item.id), JSON.stringify(item), { expirationTtl: INBOX_TTL });
+    return json({ ok: true, id: item.id });
   }
   if (request.method === 'GET') {
-    const cur = await env.PUSH_KV.get(key, 'json');
-    if (!cur) {
+    // GET hiçbir kaydı silmez (yeni istemciler ACK kullanır)
+    if (!(await inboxExists(env, token))) {
       // uygulama kutuyu ilk kez açıyor
-      const all = await env.PUSH_KV.list({ prefix: 'ib:', limit: MAX_INBOXES + 1 });
-      if (all.keys.length >= MAX_INBOXES) return json({ error: 'dolu' }, 507);
-      await env.PUSH_KV.put(key, '[]', { expirationTtl: INBOX_TTL });
+      if ((await inboxCount(env)) >= MAX_INBOXES) return json({ error: 'dolu' }, 507);
+      await env.PUSH_KV.put(ibx(token), JSON.stringify({ v: 2 }), { expirationTtl: INBOX_TTL });
       return json({ items: [] });
     }
-    if (cur.length && new URL(request.url).searchParams.get('clear') === '1') await env.PUSH_KV.put(key, '[]', { expirationTtl: INBOX_TTL });
-    return json({ items: cur });
+    await migrateLegacyInbox(env, token);
+    await env.PUSH_KV.put(ibx(token), JSON.stringify({ v: 2 }), { expirationTtl: INBOX_TTL }); // kutunun ömrünü uzat
+    const items = await inboxItems(env, token);
+    // Eski sürüm uygulamalar (2.0.x) '?clear=1' gönderir: onlar için eski davranış korunur
+    if (items.length && url.searchParams.get('clear') === '1') for (const it of items) await env.PUSH_KV.delete(ibi(token, it.id));
+    return json({ items });
   }
   if (request.method === 'DELETE') {
-    await env.PUSH_KV.delete(key);
+    for (const it of await inboxItems(env, token)) await env.PUSH_KV.delete(ibi(token, it.id));
+    await env.PUSH_KV.delete(ibx(token));
+    await env.PUSH_KV.delete('ib:' + token);
     return json({ ok: true });
   }
   return json({ error: 'method' }, 405);
@@ -246,8 +309,8 @@ async function handleApi(request, env, url) {
   const path = url.pathname.replace(/\/+$/, '');
   const bk = path.match(/^\/api\/backup\/([a-f0-9]{64})$/);
   if (bk && BK_ID.test(bk[1])) return handleBackup(request, env, bk[1]);
-  const ib = path.match(/^\/api\/inbox\/([A-Za-z0-9_-]+)$/);
-  if (ib && INBOX_RE.test(ib[1])) return handleInbox(request, env, ib[1]);
+  const ib = path.match(/^\/api\/inbox\/([A-Za-z0-9_-]+)(?:\/(ack))?$/);
+  if (ib && INBOX_RE.test(ib[1])) return handleInbox(request, env, ib[1], ib[2] || null);
   if (path === '/api/push/key' && request.method === 'GET') {
     const v = await getVapid(env);
     return json({ publicKey: v.publicKey });

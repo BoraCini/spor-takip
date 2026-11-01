@@ -59,7 +59,51 @@ describe('Önizleme ayrımı', () => {
     const host = 'p0-guvenlik-spor-takip.bora.workers.dev';
     await req('GET', `/api/inbox/${TOKEN}`, { host });
     const keys = [...env.PUSH_KV._map.keys()];
-    expect(keys).toEqual([`pv:ib:${TOKEN}`]);
+    expect(keys).toEqual([`pv:ibx:${TOKEN}`]);
     expect((await req('POST', `/api/inbox/${TOKEN}`, { body: '{"steps":1}' })).status).toBe(404);
+  });
+});
+
+describe('Sağlık kutusu ACK', () => {
+  const open = () => req('GET', `/api/inbox/${TOKEN}`);
+  const post = (b) => req('POST', `/api/inbox/${TOKEN}`, { body: JSON.stringify(b), ip: '10.3.3.' + Math.floor(Math.random() * 250) });
+  const items = async () => (await (await open()).json()).items;
+
+  it('her kayda kimlik verir; ACK yalnızca verilen kimlikleri siler', async () => {
+    await open();
+    const a = await (await post({ steps: 1 })).json();
+    const b = await (await post({ steps: 2 })).json();
+    expect(a.id).toMatch(/^[0-9a-f-]{36}$/);
+    const r = await req('POST', `/api/inbox/${TOKEN}/ack`, { body: JSON.stringify({ ids: [a.id, 'gecersiz kimlik!'] }) });
+    expect((await r.json()).removed).toBe(1);
+    expect((await items()).map((x) => x.id)).toEqual([b.id]);
+  });
+
+  it('açılmamış kutuya ACK 404', async () => {
+    expect((await req('POST', `/api/inbox/${'b'.repeat(40)}/ack`, { body: '{"ids":[]}' })).status).toBe(404);
+  });
+
+  it('eski yapıdaki kutu ilk okumada taşınır, kayıtlara kimlik verilir', async () => {
+    await env.PUSH_KV.put(`ib:${TOKEN}`, JSON.stringify([{ steps: 4000, at: '2026-10-01T08:00:00Z' }]));
+    const list = await items();
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBeTruthy();
+    expect(await env.PUSH_KV.get(`ib:${TOKEN}`)).toBeNull();
+    expect(await env.PUSH_KV.get(`ibx:${TOKEN}`)).toBeTruthy();
+  });
+
+  it('eski uygulamaların ?clear=1 isteği çalışmaya devam eder', async () => {
+    await open();
+    await post({ steps: 1 });
+    const r = await (await req('GET', `/api/inbox/${TOKEN}?clear=1`)).json();
+    expect(r.items).toHaveLength(1);
+    expect(await items()).toEqual([]);
+  });
+
+  it('DELETE kutuyu ve tüm kayıtları siler', async () => {
+    await open();
+    await post({ steps: 1 });
+    await req('DELETE', `/api/inbox/${TOKEN}`);
+    expect([...env.PUSH_KV._map.keys()].filter((k) => k.includes(TOKEN))).toEqual([]);
   });
 });

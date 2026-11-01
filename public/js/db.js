@@ -34,7 +34,7 @@ export const STORES = [
 ];
 
 // Dışa aktarmaya girmeyecek gizli ayarlar
-const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last', 'cloud_v2', '_health', 'cloud_last_counts', 'cloud_hold'];
+const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last', 'cloud_v2', '_health', 'cloud_last_counts', 'cloud_hold', 'inbox_seen'];
 
 // ---------- Hatalar ----------
 // Veritabanı hataları üst katmana anlamlı kodlarla iletilir; hiçbir hata boş liste ya da yeni kullanıcı gibi gösterilmez.
@@ -201,7 +201,7 @@ export async function get(store, id) {
 }
 
 let lastStamp = 0;
-export async function put(store, obj) {
+function stamp(obj) {
   // aynı milisaniyede yazılan kayıtların sırası korunsun diye zaman damgası hep artar
   const ms = Math.max(Date.now(), lastStamp + 1);
   lastStamp = ms;
@@ -211,7 +211,21 @@ export async function put(store, obj) {
   if (!rec.user_id) rec.user_id = USER_ID;
   if (!rec.created_at) rec.created_at = now;
   rec.updated_at = now;
-  return rawPut(store, rec);
+  return rec;
+}
+export async function put(store, obj) {
+  return rawPut(store, stamp(obj));
+}
+
+// Birden çok depoya tek işlemde yazma: ya hepsi kaydedilir ya hiçbiri. entries: [{ store, obj }]
+export async function putAtomic(entries) {
+  const recs = entries.map(({ store, obj }) => ({ store, rec: stamp(obj) }));
+  const stores = [...new Set(recs.map((e) => e.store))];
+  const db = await openIDB();
+  await tx(db, stores, 'readwrite', (t) => {
+    for (const e of recs) t.objectStore(e.store).put(e.rec);
+  });
+  return recs.map((e) => e.rec);
 }
 
 export async function putMany(store, arr) {

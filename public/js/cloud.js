@@ -200,43 +200,80 @@ export async function closeInbox() {
   await db.setSetting('inbox_token', null);
 }
 
-// Kutudaki adım/kilo verisini al, kaydet ve kutuyu boşalt
+// Kutudaki adım/kilo verisini al → doğrula → tek işlemde kaydet → yalnızca kaydedilenleri sunucuya onayla (ACK).
+// Sunucu onaylanmayan kaydı silmez; bağlantı ya da yazma yarıda kalırsa kayıt bir sonraki açılışta yeniden gelir.
+// İşlenen kayıt kimlikleri telefonda tutulur, aynı kayıt ikinci kez yazılmaz.
+const DATE_OK = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(Date.parse(d + 'T00:00:00Z'));
+export function inboxItemValues(it) {
+  const d = DATE_OK(it.date) ? it.date : it.at && DATE_OK(String(it.at).slice(0, 10)) ? String(it.at).slice(0, 10) : today();
+  const steps = typeof it.steps === 'number' && isFinite(it.steps) && it.steps >= 0 && it.steps < 150000 ? Math.round(it.steps) : null;
+  const weight = typeof it.weight === 'number' && isFinite(it.weight) && it.weight > 25 && it.weight < 350 ? Math.round(it.weight * 10) / 10 : null;
+  return { date: d, steps, weight };
+}
+
 export async function pullInbox({ quiet = true } = {}) {
   const t = await inboxToken();
   if (!t || !navigator.onLine) return 0;
   let items = [];
   try {
-    const res = await fetch(inboxUrl(t) + '?clear=1', { cache: 'no-store' });
+    const res = await fetch(inboxUrl(t), { cache: 'no-store' });
     if (!res.ok) return 0;
-    items = (await res.json()).items || [];
+    items = ((await res.json()).items || []).filter((it) => it && typeof it.id === 'string');
   } catch {
-    return 0;
+    return 0; // sunucuya ulaşılamadı: hiçbir şey değişmez, kayıtlar sunucuda bekler
   }
   if (!items.length) return 0;
-  const steps = (await db.getSetting('daily_steps', {})) || {};
-  for (const it of items) {
-    const d = it.date || (it.at ? it.at.slice(0, 10) : today());
-    if (it.steps != null && it.steps >= 0 && it.steps < 150000) steps[d] = Math.round(it.steps);
-    if (it.weight != null && it.weight > 25 && it.weight < 350) {
-      const existing = (await db.list('body_logs', (r) => r.date === d))[0];
-      if (!existing) {
-        await db.put('body_logs', { date: d, weight_kg: Math.round(it.weight * 10) / 10, source: 'saglik' });
+  const seen = { ...((await db.getSetting('inbox_seen', {})) || {}) };
+  const fresh = items.filter((it) => !seen[it.id]);
+  const ackIds = items.filter((it) => seen[it.id]).map((it) => it.id); // önceden işlenmiş ama onayı ulaşmamış
+  let applied = 0;
+  if (fresh.length) {
+    try {
+      const steps = { ...((await db.getSetting('daily_steps', {})) || {}) };
+      const logs = await db.list('body_logs');
+      const entries = [];
+      const weightDates = new Set(logs.map((r) => r.date));
+      for (const it of fresh) {
+        const v = inboxItemValues(it);
+        if (v.steps != null) {
+          steps[v.date] = v.steps;
+          applied++;
+        }
+        if (v.weight != null && !weightDates.has(v.date)) {
+          entries.push({ store: 'body_logs', obj: { date: v.date, weight_kg: v.weight, source: 'saglik', inbox_id: it.id } });
+          weightDates.add(v.date);
+          applied++;
+        }
+        seen[it.id] = today();
       }
+      const cut = addDays(today(), -60);
+      for (const k of Object.keys(steps)) if (k < cut) delete steps[k];
+      for (const k of Object.keys(seen)) if (seen[k] < cut) delete seen[k];
+      entries.push({ store: 'settings', obj: { id: 'daily_steps', value: steps } });
+      entries.push({ store: 'settings', obj: { id: 'inbox_seen', value: seen } });
+      entries.push({ store: 'settings', obj: { id: 'inbox_last', value: new Date().toISOString() } });
+      // son 14 günün ortalama adımı aktivite hesabına girer (en az 5 gün varsa)
+      const recent = Object.entries(steps).filter(([k]) => k >= addDays(today(), -14)).map(([, v]) => v);
+      if (recent.length >= 5) {
+        const p = await db.getProfile();
+        const avg = Math.round(recent.reduce((a, b) => a + b, 0) / recent.length / 100) * 100;
+        entries.push({ store: 'profile', obj: { ...p, id: 'me', act: { ...activityOf(p), steps: avg, steps_src: 'saglik' } } });
+      }
+      await db.putAtomic(entries); // ya hepsi ya hiçbiri
+      ackIds.push(...fresh.map((it) => it.id));
+    } catch (e) {
+      console.warn('Sağlık verisi kaydedilemedi', e);
+      if (!quiet) toast('Sağlık verisi kaydedilemedi; sunucuda bekliyor, sonra yeniden denenecek.', 4000);
+      return 0; // onay gönderilmez: kayıtlar sunucuda kalır
     }
   }
-  // son 60 günü tut
-  const cut = addDays(today(), -60);
-  for (const k of Object.keys(steps)) if (k < cut) delete steps[k];
-  await db.setSetting('daily_steps', steps);
-  // son 14 günün ortalama adımı aktivite hesabına girer (en az 5 gün varsa)
-  const recent = Object.entries(steps).filter(([k]) => k >= addDays(today(), -14)).map(([, v]) => v);
-  if (recent.length >= 5) {
-    const p = await db.getProfile();
-    const avg = Math.round(recent.reduce((a, b) => a + b, 0) / recent.length / 100) * 100;
-    p.act = { ...activityOf(p), steps: avg, steps_src: 'saglik' };
-    await db.saveProfile(p);
+  if (ackIds.length) {
+    try {
+      await fetch(inboxUrl(t) + '/ack', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: ackIds }) });
+    } catch {
+      // onay ulaşmadı: kayıtlar sunucuda kalır, sonraki açılışta işlenmiş olarak tanınıp yeniden onaylanır
+    }
   }
-  if (!quiet) toast(`Apple Sağlık'tan ${items.length} kayıt alındı`);
-  await db.setSetting('inbox_last', new Date().toISOString());
-  return items.length;
+  if (!quiet && applied) toast(`Apple Sağlık'tan ${fresh.length} kayıt alındı`);
+  return fresh.length;
 }
