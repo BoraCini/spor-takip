@@ -159,13 +159,17 @@ export function parseLabLines(rawLines) {
     const key = m ? m.key : r.name.toLocaleLowerCase('tr-TR');
     if (seen.has(key)) continue;
     seen.set(key, true);
+    // Laboratuvarın aralığı varsa o kullanılır ('rapor'); yoksa genel katalog aralığı ('katalog') ve öyle etiketlenir.
+    // Birim raporda yoksa katalogdan varsayılmaz: uyumsuz birimle yanlış kıyaslama yapılmasın.
+    const fromReport = r.ref_low != null || r.ref_high != null;
     values.push({
       marker_key: m ? m.key : null,
       name: m ? m.name : r.name,
       value: r.value,
-      unit: r.unit || (m ? m.unit : ''),
-      ref_low: r.ref_low ?? (r.ref_high == null && m ? m.lo : null),
-      ref_high: r.ref_high ?? (r.ref_low == null && m ? m.hi : null),
+      unit: r.unit || '',
+      ref_low: fromReport ? r.ref_low ?? null : m ? m.lo ?? null : null,
+      ref_high: fromReport ? r.ref_high ?? null : m ? m.hi ?? null : null,
+      ref_source: fromReport ? 'rapor' : m ? 'katalog' : null,
     });
   }
   return { date: findDate(lines), lab_name: findLabName(lines), values };

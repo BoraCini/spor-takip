@@ -1,17 +1,17 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, trDateYear, icon, openSheet, confirmSheet, lineChartSVG, parseDate, MONTHS_SHORT, daysBetween, addDays, swipeDelete, timeStr } from '../util.js';
-import { bpCategory, cycleInfo } from '../context.js';
+import { bpCategory, cycleInfo, cycleContextAt } from '../context.js';
 import { removeWithUndo } from '../undo.js';
 import { syncSoon } from '../push.js';
 import { refresh, go } from '../app.js';
 import { labTests } from '../context.js';
-import { LABS, LAB_CATEGORIES, labByKey, classify, status } from '../data/labs.js';
+import { LABS, LAB_CATEGORIES, labByKey, classify, status, REF_SOURCES, refSourceOf } from '../data/labs.js';
 
 const state = { testId: null, expanded: {}, showNormal: false };
 
-function rangeBar(v) {
-  const lo = v.ref_low;
-  const hi = v.ref_high;
+function rangeBar(v, range) {
+  const lo = range ? range.lo : v.ref_low;
+  const hi = range ? range.hi : v.ref_high;
   const val = v.value;
   let min;
   let max;
@@ -34,12 +34,21 @@ function rangeBar(v) {
   return `<div class="range" aria-hidden="true"><span class="tr"></span><span class="nz" style="left:${nz0}%;width:${Math.max(1, nz1 - nz0)}%"></span><span class="mk ${out ? 'out' : ''}" style="left:${P(val)}%"></span></div>`;
 }
 
+const rangeTxt = (r) => (r.lo != null && r.hi != null ? `${fmt(r.lo, 2)}–${fmt(r.hi, 2)}` : r.hi != null ? `< ${fmt(r.hi, 2)}` : r.lo != null ? `> ${fmt(r.lo, 2)}` : '');
+function refLine(v, c) {
+  const r = c.range || {};
+  if (!r.comparable) {
+    if (r.reason === 'birim') return `Birim (${esc(v.unit)}) genel aralığın birimiyle (${esc(r.catalogUnit)}) uyuşmuyor; otomatik kıyaslanmadı`;
+    if (r.reason === 'birim-yok') return `Birim belirtilmemiş; otomatik kıyaslanmadı (genel aralık ${esc(r.catalogUnit)} cinsinden)`;
+    return 'Referans aralığı yok; otomatik kıyaslanmadı';
+  }
+  if (r.source === 'katalog') return `Genel aralık ${esc(rangeTxt(r))} <span class="ref-src">· raporda aralık yoktu</span>`;
+  return `Referans ${esc(rangeTxt(r))} <span class="ref-src">· ${esc(REF_SOURCES[r.source] || '')}</span>`;
+}
 const refTxt = (v) => (v.ref_low != null && v.ref_high != null ? `${fmt(v.ref_low, 2)}–${fmt(v.ref_high, 2)}` : v.ref_high != null ? `< ${fmt(v.ref_high, 2)}` : v.ref_low != null ? `> ${fmt(v.ref_low, 2)}` : 'referans yok');
 
 export async function render(root) {
   const tests = await labTests();
-  const cycles = await db.list('cycles');
-  const comps = await db.list('compounds', (c) => c.active !== false && c.category !== 'destek');
 
   if (!tests.length) {
     root.innerHTML = `
@@ -70,9 +79,9 @@ export async function render(root) {
   if (!state.testId || !tests.find((x) => x.test.id === state.testId)) state.testId = tests[0].test.id;
   const cur = tests.find((x) => x.test.id === state.testId);
   const date = cur.test.date;
-  const cyc = cycles.filter((c) => c.start_date && c.start_date <= date).pop();
-  const cycWeek = cyc ? Math.floor(daysBetween(cyc.start_date, date) / 7) + 1 : null;
-  const onCycle = !!(cyc && (!cyc.weeks || cycWeek <= cyc.weeks + 4)) || (comps.length > 0 && daysBetween(date, today()) <= 60);
+  // tahlil tarihindeki gerçek kayıtlı bağlam (o tarihte süren kür, bitişten sonraki 4 hafta, son 14 günde doz kaydı)
+  const cycleCtx = await cycleContextAt(date);
+  const cycWeek = cycleCtx.kind === 'kur' ? cycleCtx.week : null;
 
   // trend için: marker → [{date, value}]
   const history = {};
@@ -81,9 +90,10 @@ export async function render(root) {
     (history[k] = history[k] || []).push({ date: t.test.date, value: v.value });
   }
 
-  const groups = { attention: [], expected: [], normal: [] };
+  // Referans dışındaki hiçbir değer dikkat listesinden gizlenmez; beklenen olabilecek etki ayrı not olarak gösterilir
+  const groups = { attention: [], normal: [], unknown: [] };
   for (const v of cur.values) {
-    const c = classify(v, { onCycle });
+    const c = classify(v, { cycle: cycleCtx });
     groups[c.group].push({ v, c });
   }
   const sortCat = (a, b) => LAB_CATEGORIES.indexOf((labByKey(a.v.marker_key) || {}).cat || 'Diğer') - LAB_CATEGORIES.indexOf((labByKey(b.v.marker_key) || {}).cat || 'Diğer');
@@ -97,16 +107,17 @@ export async function render(root) {
     const flag =
       c.st === 'ok'
         ? '<span class="lab-flag ok">Normal</span>'
-        : group === 'expected'
-        ? `<span class="lab-flag exp">${c.st === 'high' ? '↑ Yüksek' : '↓ Düşük'} · ${c.reason === 'kür' ? 'kürle beklenen' : 'antrenmanla beklenen'}</span>`
+        : c.st === 'unknown'
+        ? '<span class="lab-flag unk">Kıyaslanmadı</span>'
         : `<span class="lab-flag">${c.st === 'high' ? '↑ Yüksek' : '↓ Düşük'}</span>`;
     const prevVal = hist.filter((h) => h.date < date).pop();
     return `<button type="button" class="lab-row" data-act="toggle" data-id="${v.id}" aria-expanded="${exp}">
       <div class="lab-top"><span class="lab-name">${esc(v.name)}</span><span class="lab-val">${fmt(v.value, 2)} <small>${esc(v.unit || '')}</small></span></div>
-      <div class="lab-mid">${flag}<span class="muted">Referans ${esc(refTxt(v))}</span></div>
-      ${rangeBar(v)}
+      <div class="lab-mid">${flag}<span class="muted">${refLine(v, c)}</span></div>
+      ${c.range && c.range.comparable ? rangeBar(v, c.range) : ''}
+      ${c.expect ? `<span class="lab-note exp-note">${esc(c.expect.text)}</span>` : ''}
       ${prevVal ? `<span class="lab-note">Önceki (${esc(trDate(prevVal.date))}): ${fmt(prevVal.value, 2)} ${esc(v.unit || '')}</span>` : ''}
-      ${exp && hist.length >= 2 ? lineChartSVG(hist.map((h) => { const d = parseDate(h.date); return { label: `${MONTHS_SHORT[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`, value: h.value }; }), { band: [v.ref_low, v.ref_high], color: c.st === 'ok' ? 'var(--accent)' : 'var(--warn)', unit: v.unit }) : ''}
+      ${exp && hist.length >= 2 ? lineChartSVG(hist.map((h) => { const d = parseDate(h.date); return { label: `${MONTHS_SHORT[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`, value: h.value }; }), { band: c.range && c.range.comparable ? [c.range.lo, c.range.hi] : [null, null], color: c.st === 'ok' ? 'var(--accent)' : 'var(--warn)', unit: v.unit }) : ''}
       ${(exp || group !== 'normal') && meta?.note && c.st !== 'ok' ? `<span class="lab-note">${esc(meta.note)}</span>` : ''}
     </button>`;
   };
@@ -134,9 +145,9 @@ export async function render(root) {
         ${cycWeek && cycWeek > 0 ? `<span class="pill" style="height:28px;font-size:13px;display:inline-flex;align-items:center;color:var(--sub)">Kür haftası ${cycWeek}</span>` : ''}
       </div>
       <div class="stat3">
-        <div><b class="${groups.attention.length ? 'warn' : ''}">${groups.attention.length}</b><span>dikkat</span></div>
-        <div><b>${groups.expected.length}</b><span>beklenen</span></div>
+        <div><b class="${groups.attention.length ? 'warn' : ''}">${groups.attention.length}</b><span>referans dışı</span></div>
         <div><b>${groups.normal.length}</b><span>normal</span></div>
+        <div><b>${groups.unknown.length}</b><span>kıyaslanmadı</span></div>
       </div>
       <div class="btn-row">
         <button type="button" class="btn" data-act="edit">Düzenle</button>
@@ -144,8 +155,8 @@ export async function render(root) {
       </div>
     </section>
 
-    ${groups.attention.length ? `<div class="sec"><h2>Dikkat edilecekler</h2></div><section class="card flush">${groups.attention.map((x) => valueRow(x, 'attention')).join('')}</section>` : ''}
-    ${groups.expected.length ? `<div class="sec"><h2>Kürle / antrenmanla beklenen</h2></div><section class="card flush">${groups.expected.map((x) => valueRow(x, 'expected')).join('')}</section>` : ''}
+    ${groups.attention.length ? `<div class="sec"><h2>Referans dışında</h2></div><section class="card flush">${groups.attention.map((x) => valueRow(x, 'attention')).join('')}</section>` : ''}
+    ${groups.unknown.length ? `<div class="sec"><h2>Otomatik kıyaslanamayanlar</h2></div><section class="card flush">${groups.unknown.map((x) => valueRow(x, 'unknown')).join('')}</section>` : ''}
     ${
       groups.normal.length
         ? `<div class="sec"><h2>Normal aralıkta</h2><button type="button" class="link" data-act="normal">${state.showNormal ? 'Gizle' : `${groups.normal.length} değeri göster`}</button></div>
@@ -153,7 +164,7 @@ export async function render(root) {
         : ''
     }
     ${await healthExtras()}
-    <p class="note">Gruplama uygulamanın kurallarına göre otomatik yapılır ve tıbbi değerlendirme yerine geçmez. Detaylı yorum için "Yorumlat"ı kullan; müdahale gerektiren değerleri doktorunla paylaş. Bir değere dokunursan geçmiş testlerdeki gidişatını görürsün.</p>
+    <p class="note"><b>Tıbbi cihaz değildir.</b> Bu ekran teşhis koymaz, tedavi ya da ilaç dozu önermez. Değerler laboratuvarın kendi aralığıyla kıyaslanır; raporda aralık yoksa genel bir aralık kullanılır ve öyle etiketlenir. Sonuçlarını doktorunla değerlendir. Bir değere dokunursan geçmiş testlerdeki gidişatını görürsün.</p>
   `;
 
   root.onclick = async (e) => {
@@ -437,7 +448,8 @@ function openTest(existing, prefill = null) {
   const st = {
     date: src?.test.date || today(),
     lab: src?.test.lab_name || '',
-    rows: (src?.values || []).map((v) => ({ id: v.id, marker_key: v.marker_key, name: v.name, value: v.value, unit: v.unit, ref_low: v.ref_low, ref_high: v.ref_high })),
+    // ref_source: aralığın kaynağı; kullanıcı aralığı değiştirirse 'manuel' olur (orig ile kıyaslanır)
+    rows: (src?.values || []).map((v) => ({ id: v.id, marker_key: v.marker_key, name: v.name, value: v.value, unit: v.unit, ref_low: v.ref_low, ref_high: v.ref_high, ref_source: refSourceOf(v), orig: [v.ref_low ?? null, v.ref_high ?? null] })),
   };
   const removed = [];
   const s = openSheet({
@@ -451,7 +463,11 @@ function openTest(existing, prefill = null) {
       const test = await db.put('lab_tests', { ...(existing?.test || {}), date: st.date, lab_name: st.lab.trim() });
       for (const id of removed) await db.remove('lab_values', id);
       for (const r of rows) {
-        await db.put('lab_values', { ...(r.id ? { id: r.id } : {}), test_id: test.id, marker_key: r.marker_key || null, name: r.name, value: r.value, unit: r.unit || '', ref_low: r.ref_low ?? null, ref_high: r.ref_high ?? null });
+        const lo = r.ref_low ?? null;
+        const hi = r.ref_high ?? null;
+        const changed = !r.orig || r.orig[0] !== lo || r.orig[1] !== hi;
+        const ref_source = lo == null && hi == null ? null : changed ? 'manuel' : r.ref_source || 'bilinmiyor';
+        await db.put('lab_values', { ...(r.id ? { id: r.id } : {}), test_id: test.id, marker_key: r.marker_key || null, name: r.name, value: r.value, unit: r.unit || '', ref_low: lo, ref_high: hi, ref_source });
       }
       state.testId = test.id;
       api.close();
@@ -521,7 +537,7 @@ function openTest(existing, prefill = null) {
       const used = new Set(st.rows.map((r) => r.marker_key).filter(Boolean));
       const pick = await pickMarker(used);
       if (!pick) return;
-      st.rows.push(pick.custom ? { name: pick.name, value: NaN, unit: '', ref_low: null, ref_high: null } : { marker_key: pick.key, name: pick.name, value: NaN, unit: pick.unit, ref_low: pick.lo, ref_high: pick.hi });
+      st.rows.push(pick.custom ? { name: pick.name, value: NaN, unit: '', ref_low: null, ref_high: null, ref_source: null, orig: [null, null] } : { marker_key: pick.key, name: pick.name, value: NaN, unit: pick.unit, ref_low: pick.lo ?? null, ref_high: pick.hi ?? null, ref_source: 'katalog', orig: [pick.lo ?? null, pick.hi ?? null] });
       draw();
       const last = s.el.querySelector(`#v-${st.rows.length - 1}`);
       if (last) last.focus();

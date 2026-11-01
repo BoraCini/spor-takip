@@ -445,6 +445,9 @@ body.locked .tabbar, body.locked #restbar { display: none; }
 .lab-flag { font-weight: 600; color: var(--warn); }
 .lab-flag.exp { color: var(--sub); }
 .lab-flag.ok { color: var(--sub); font-weight: 500; }
+.lab-flag.unk { color: var(--sub); font-weight: 600; }
+.ref-src { color: var(--sub); opacity: .85; }
+.lab-note.exp-note { color: var(--text); border-left: 3px solid var(--sep); padding-left: 8px; }
 .range { position: relative; height: 12px; }
 .range .tr { position: absolute; left: 0; right: 0; top: 4px; height: 4px; border-radius: 2px; background: var(--fill2); }
 .range .nz { position: absolute; top: 4px; height: 4px; border-radius: 2px; background: var(--track); }

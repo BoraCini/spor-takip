@@ -292,13 +292,15 @@ async function buildCard(name, input) {
   if (name === 'add_lab_results') {
     const values = (input.values || []).map((v) => {
       const m = matchLab(v.name);
+      const fromReport = v.ref_low != null || v.ref_high != null;
       return {
         marker_key: m ? m.key : null,
         name: m ? m.name : v.name,
         value: Number(v.value),
-        unit: v.unit || (m ? m.unit : ''),
-        ref_low: v.ref_low ?? (m ? m.lo : null),
-        ref_high: v.ref_high ?? (m ? m.hi : null),
+        unit: v.unit || '',
+        ref_low: fromReport ? v.ref_low ?? null : m ? m.lo ?? null : null,
+        ref_high: fromReport ? v.ref_high ?? null : m ? m.hi ?? null : null,
+        ref_source: fromReport ? 'rapor' : m ? 'katalog' : null,
       };
     });
     return { type: 'labs', date, lab_name: input.lab_name || '', values };
@@ -387,7 +389,7 @@ export async function commitCard(card) {
     const test = await db.put('lab_tests', { date: card.date, lab_name: card.lab_name || '', source: 'danisman' });
     for (const v of card.values) {
       if (isNaN(v.value)) continue;
-      await db.put('lab_values', { test_id: test.id, marker_key: v.marker_key, name: v.name, value: v.value, unit: v.unit, ref_low: v.ref_low, ref_high: v.ref_high });
+      await db.put('lab_values', { test_id: test.id, marker_key: v.marker_key, name: v.name, value: v.value, unit: v.unit, ref_low: v.ref_low, ref_high: v.ref_high, ref_source: v.ref_source ?? null });
     }
     return `${card.values.length} değer kaydedildi`;
   }
@@ -761,13 +763,15 @@ export async function extractLabs(file) {
     .filter((v) => v && v.name && n(v.value) != null)
     .map((v) => {
       const m = matchLab(v.name);
+      const fromReport = n(v.ref_low) != null || n(v.ref_high) != null;
       return {
         marker_key: m ? m.key : null,
         name: m ? m.name : String(v.name).slice(0, 60),
         value: n(v.value),
-        unit: v.unit || (m ? m.unit : ''),
-        ref_low: n(v.ref_low) ?? (m ? m.lo : null),
-        ref_high: n(v.ref_high) ?? (m ? m.hi : null),
+        unit: v.unit || '',
+        ref_low: fromReport ? n(v.ref_low) : m ? m.lo ?? null : null,
+        ref_high: fromReport ? n(v.ref_high) : m ? m.hi ?? null : null,
+        ref_source: fromReport ? 'rapor' : m ? 'katalog' : null,
       };
     });
   const date = /^\d{4}-\d{2}-\d{2}$/.test(use.input.date || '') ? use.input.date : null;

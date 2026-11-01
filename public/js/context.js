@@ -1,7 +1,7 @@
 // Sayfaların ve Coach'un ortak kullandığı veri yardımcıları
 import * as db from './db.js';
 import { today, weekday, addDays, daysBetween, WD_LONG, round1, weekStart as weekStartOf } from './util.js';
-import { classify } from './data/labs.js';
+import { classify, REF_SOURCES } from './data/labs.js';
 import { EXERCISE_PRESETS } from './data/exercises.js';
 import { musclesOf, REGIONS } from './data/muscles.js';
 
@@ -366,7 +366,6 @@ export async function buildContext() {
   const due = await dueOn(t);
   const injLogs = (await db.list('injection_logs')).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
   const tests = (await labTests()).slice(0, 3);
-  const onCycle = !!cyc.active || comps.some((c) => c.active !== false);
   const weights = (await db.list('body_logs')).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
   const plan = (await db.list('plan_items')).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
   const water = await waterDay(t);
@@ -468,15 +467,23 @@ export async function buildContext() {
       birakilanlar: supps.filter((c) => c.active === false).map((c) => c.name),
       bugun: due.pills.filter((x) => x.compound.category === 'destek').map((x) => `${x.compound.name} (${x.slot}): ${x.done ? 'alındı' : 'alınmadı'}`),
     },
-    son_tahliller: tests.map(({ test, values }) => ({
-      tarih: test.date,
-      laboratuvar: test.lab_name || null,
-      degerler: values.map((v) => {
-        const c = classify(v, { onCycle });
-        const ref = [v.ref_low ?? '', v.ref_high ?? ''].join('–');
-        return `${v.name}: ${v.value} ${v.unit || ''} (ref ${ref}) ${c.st === 'ok' ? '' : c.st === 'high' ? 'YÜKSEK' : 'DÜŞÜK'}`.trim();
-      }),
-    })),
+    son_tahliller: await Promise.all(
+      tests.map(async ({ test, values }) => {
+        const cc = await cycleContextAt(test.date);
+        return {
+          tarih: test.date,
+          laboratuvar: test.lab_name || null,
+          kayitli_kur_baglami: cc.active ? cc.kind : null,
+          degerler: values.map((v) => {
+            const c = classify(v, { cycle: cc });
+            const r = c.range || {};
+            const ref = r.comparable ? `${REF_SOURCES[r.source] || 'aralık'}: ${r.lo ?? ''}–${r.hi ?? ''}` : r.reason === 'birim' || r.reason === 'birim-yok' ? `birim uyuşmuyor, kıyaslanmadı (genel aralık birimi ${r.catalogUnit})` : 'aralık yok';
+            const flag = c.st === 'high' ? 'YÜKSEK' : c.st === 'low' ? 'DÜŞÜK' : '';
+            return `${v.name}: ${v.value} ${v.unit || ''} (${ref}) ${flag}${c.expect ? ` [olası neden: ${c.expect.why === 'kur' ? 'kayıtlı kür bağlamı' : 'antrenman'}]` : ''}`.trim();
+          }),
+        };
+      })
+    ),
     kilo_gecmisi: weights.map((w) => `${w.date}: ${w.weight_kg} kg`),
     bugun_su: `${water.total} / ${wTarget} ml`,
     vucut_olculeri: measures.map((m) => ({ tarih: m.date, ...Object.fromEntries(MEASURES.filter(([k]) => m[k] != null).map(([k, l, u]) => [l, `${m[k]} ${u}`])) })),
@@ -832,4 +839,29 @@ export function splitContext(ctx, share) {
     details.get_medications = { kur: ctx.kur, koruyucu_ilac_ve_vitaminler: ctx.koruyucu_ilac_ve_vitaminler, stok_durumu: ctx.stok_durumu };
   }
   return { summary, details };
+}
+
+// ---------- Tahlil tarihindeki kayıtlı kür bağlamı ----------
+// Yalnızca aktif madde varlığına ya da sabit bir zaman penceresine değil, tahlil tarihindeki gerçek kayıtlara bakar:
+// o tarihte süren bir kür, bitişinden sonraki ilk 4 hafta, ya da tahlilden önceki 14 günde kür dozu kaydı.
+export async function cycleContextAt(date) {
+  const cycles = (await db.list('cycles')).filter((c) => c.start_date);
+  const comps = await db.list('compounds');
+  const kurIds = new Set(comps.filter((c) => c.category !== 'destek').map((c) => c.id));
+  for (const c of cycles) {
+    const end = c.end_date || (c.weeks ? addDays(c.start_date, c.weeks * 7 - 1) : null);
+    if (c.start_date <= date && (!end || date <= end)) {
+      const week = Math.floor(daysBetween(c.start_date, date) / 7) + 1;
+      return { active: true, kind: 'kur', week, text: `Tahlil tarihi kayıtlı kür dönemine denk geliyor (${week}. hafta); bu değer bu dönemde sık görülür. Yine de doktorunla değerlendir.` };
+    }
+    if (end && date > end && daysBetween(end, date) <= 28) {
+      const n = daysBetween(end, date);
+      return { active: true, kind: 'sonrasi', text: `Tahlil, kayıtlı kürün bitişinden ${n} gün sonra; bu değer kür sonrası dönemde de görülebilir. Yine de doktorunla değerlendir.` };
+    }
+  }
+  const from = addDays(date, -14);
+  const inWin = (l) => l.date >= from && l.date <= date && kurIds.has(l.compound_id);
+  const n = (await db.list('dose_logs', inWin)).length + (await db.list('injection_logs', inWin)).length;
+  if (n) return { active: true, kind: 'doz', text: 'Tahlilden önceki 14 günde kür dozu kaydın var; bu değer bununla ilişkili olabilir. Yine de doktorunla değerlendir.' };
+  return { active: false, kind: null, text: '' };
 }

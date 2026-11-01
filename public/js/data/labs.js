@@ -131,19 +131,86 @@ export function status(value, lo, hi) {
   return 'ok';
 }
 
-// Gruplama: 'attention' | 'expected' | 'normal'
-export function classify(v, { onCycle }) {
-  const st = status(v.value, v.ref_low, v.ref_high);
-  if (st === 'ok') return { group: 'normal', st };
+// ---------- Referans kaynağı ve birim ----------
+// Laboratuvarın kendi aralığı önceliklidir. Genel katalog aralığı raporun aralığı gibi gösterilmez.
+export const REF_SOURCES = {
+  rapor: 'Laboratuvar aralığı',
+  katalog: 'Genel aralık',
+  manuel: 'Senin girdiğin aralık',
+  bilinmiyor: 'Aralığın kaynağı bilinmiyor',
+};
+
+// Eski kayıtlarda ref_source yok: katalogla birebir aynı aralık → 'katalog', başka bir aralık → 'bilinmiyor'
+export function refSourceOf(v) {
+  if (v.ref_source && REF_SOURCES[v.ref_source]) return v.ref_source;
+  if (v.ref_low == null && v.ref_high == null) return null;
+  const m = labByKey(v.marker_key);
+  if (m && (v.ref_low ?? null) === (m.lo ?? null) && (v.ref_high ?? null) === (m.hi ?? null)) return 'katalog';
+  return 'bilinmiyor';
+}
+
+// Aynı ölçeği gösteren birim yazımları
+const UNIT_GROUPS = [
+  ['10^3/ul', 'k/ul', '10^9/l', 'thou/ul', '/nl'],
+  ['10^6/ul', 'm/ul', '10^12/l', '/pl'],
+  ['u/l', 'iu/l', 'miu/ml'],
+  ['uiu/ml', 'miu/l', 'mu/l'],
+  ['ug/dl', 'mcg/dl'],
+  ['ug/l', 'ng/ml', 'mcg/l'],
+  ['pg/ml', 'ng/l'],
+  ['%', 'yuzde'],
+];
+export function unitNorm(u) {
+  return String(u || '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[µμ]/g, 'u')
+    .replace(/mcg/g, 'ug')
+    .replace(/⁶/g, '^6')
+    .replace(/³/g, '^3')
+    .replace(/⁹/g, '^9')
+    .replace(/¹²/g, '^12')
+    .replace(/^[x*×]/, '')
+    .replace(/10e(\d+)/g, '10^$1')
+    .replace(/10\*\*(\d+)/g, '10^$1')
+    .replace(/^10(\d+)\//, '10^$1/')
+    .replace(/mm3$/, 'ul');
+}
+export function unitsCompatible(a, b) {
+  const x = unitNorm(a);
+  const y = unitNorm(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  return UNIT_GROUPS.some((g) => g.includes(x) && g.includes(y));
+}
+
+// Değerin kıyaslanacağı aralık. Katalog aralığı yalnızca birim uyuşuyorsa kullanılır.
+export function effectiveRange(v) {
+  const m = labByKey(v.marker_key);
+  const src = refSourceOf(v);
+  if (src && src !== 'katalog') return { lo: v.ref_low ?? null, hi: v.ref_high ?? null, source: src, comparable: true };
+  if (m && (src === 'katalog' || src == null)) {
+    if (!unitsCompatible(v.unit, m.unit)) return { lo: null, hi: null, source: 'katalog', comparable: false, reason: v.unit ? 'birim' : 'birim-yok', catalogUnit: m.unit };
+    return { lo: m.lo ?? null, hi: m.hi ?? null, source: 'katalog', comparable: true };
+  }
+  return { lo: null, hi: null, source: null, comparable: false, reason: 'aralik-yok' };
+}
+
+// Gruplama: 'attention' (referans dışı — hiçbiri gizlenmez) | 'normal' | 'unknown' (otomatik kıyaslanamadı)
+// cycle: tahlil tarihindeki kayıtlı bağlam (cycleContextAt). Beklenen olabilecek etki ayrı not olarak döner.
+export function classify(v, { cycle = null } = {}) {
+  const r = effectiveRange(v);
+  if (!r.comparable) return { group: 'unknown', st: 'unknown', range: r };
+  const st = status(v.value, r.lo, r.hi);
+  if (st === 'ok') return { group: 'normal', st, range: r };
   const meta = labByKey(v.marker_key);
+  let expect = null;
   if (meta) {
-    if (onCycle && meta.cycle === st) return { group: 'expected', st, reason: 'kür' };
-    if (meta.training === st) {
-      // antrenmanla beklenen ama aşırı yüksekse yine dikkat
-      const hi = v.ref_high;
-      const tooHigh = hi != null && v.value > hi * (meta.key === 'ck' ? 5 : 2);
-      if (!tooHigh) return { group: 'expected', st, reason: 'antrenman' };
+    if (cycle && cycle.active && meta.cycle === st) expect = { why: 'kur', text: cycle.text };
+    else if (meta.training === st) {
+      const tooHigh = r.hi != null && v.value > r.hi * (meta.key === 'ck' ? 5 : 2);
+      if (!tooHigh) expect = { why: 'antrenman', text: 'Yoğun antrenmanla bu yönde değişebilir.' };
     }
   }
-  return { group: 'attention', st };
+  return { group: 'attention', st, range: r, expect };
 }
