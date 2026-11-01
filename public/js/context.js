@@ -726,3 +726,110 @@ export async function monthlyReport(ym) {
     vitals: { n: vit.length, sys: avgV('sys'), dia: avgV('dia'), hr: avgV('hr') },
   };
 }
+
+// ---------- Coach gizlilik: hangi veri kategorileri paylaşılır ----------
+// [anahtar, ad, açıklama, yeni kurulumda varsayılan]
+export const AI_CATEGORIES = [
+  ['profil', 'Profil ve hedefler', 'Yaş, boy, kilo, hedef, dönem, sakatlık notları, Coach\'a hatırlattıkların', true],
+  ['beslenme', 'Beslenme', 'Bugünkü yediklerin, beslenme planın, su, gerçek harcama tahmini', true],
+  ['antrenman', 'Antrenman', 'Programın, son antrenmanların, rekorlar, kas bölgesi setleri', true],
+  ['vucut', 'Vücut ölçüleri ve kilo', 'Kilo geçmişi ve eğilimi, çevre ölçüleri', true],
+  ['tahlil', 'Kan tahlilleri', 'Tahlil sonuçların ve sonraki tahlil tarihi', false],
+  ['tansiyon', 'Tansiyon ve nabız', 'Tansiyon ve nabız ölçümlerin', false],
+  ['ilac', 'İlaç, kür ve takviyeler', 'Kür maddelerin, doz/enjeksiyon kayıtların, koruyucu ilaç ve vitaminler, stok', false],
+];
+export const AI_CAT_LABEL = Object.fromEntries(AI_CATEGORIES.map(([k, l]) => [k, l]));
+
+// Ayar yoksa: önceden Coach'u kullanan kurulumda bugünkü davranış bozulmasın diye hepsi açık (bir kerelik bilgi gösterilir);
+// yeni kurulumda tahlil, tansiyon ve ilaç/kür kapalı.
+export async function aiShare() {
+  let s = await db.getSetting('ai_share');
+  if (s && typeof s === 'object') return { ...Object.fromEntries(AI_CATEGORIES.map(([k, , , d]) => [k, d])), ...s };
+  const existing = !!(await db.getSetting('api_key')) || (await db.list('chat_messages')).length > 0;
+  s = Object.fromEntries(AI_CATEGORIES.map(([k, , , d]) => [k, existing ? true : d]));
+  await db.setSetting('ai_share', s);
+  if (existing) await db.setSetting('ai_share_notice', true);
+  return s;
+}
+
+// Okuma araçları: ağır kategoriler bağlama gömülmez, Coach gerektiğinde ister.
+export const READ_TOOL_CAT = {
+  get_workout_history: 'antrenman',
+  get_body_history: 'vucut',
+  get_lab_results: 'tahlil',
+  get_vitals: 'tansiyon',
+  get_medications: 'ilac',
+};
+
+// Tam bağlamı izinlere göre böler: her mesajda giden kısa özet + araçla istenebilen ayrıntılar.
+// İzin verilmeyen kategorinin hiçbir verisi ikisine de girmez.
+export function splitContext(ctx, share) {
+  const on = (k) => !!share[k];
+  const summary = { bugun: ctx.bugun };
+  const details = {};
+  if (on('profil')) {
+    summary.profil = ctx.profil;
+    summary.gunluk_hedefler = ctx.gunluk_hedefler;
+    summary.danisman_notlari = ctx.danisman_notlari;
+  }
+  if (on('beslenme')) {
+    summary.bugun_beslenme = ctx.bugun_beslenme;
+    summary.beslenme_plani = ctx.beslenme_plani;
+    summary.bugun_su = ctx.bugun_su;
+    summary.gercek_harcama_tahmini = ctx.gercek_harcama_tahmini;
+  }
+  // haftalık özet karışık: her alan kendi kategorisine göre
+  const week = (w) =>
+    w && {
+      start: w.start,
+      end: w.end,
+      ...(on('beslenme') ? { nutrition: w.nutrition, water: w.water } : {}),
+      ...(on('antrenman') ? { training: w.training } : {}),
+      ...(on('vucut') ? { weight: w.weight } : {}),
+      ...(on('ilac') ? { doses: w.doses } : {}),
+    };
+  summary.bu_hafta_ozet = week(ctx.bu_hafta_ozet);
+  if (on('antrenman')) {
+    summary.haftalik_program = ctx.haftalik_program;
+    summary.rutinler = ctx.rutinler;
+    details.get_workout_history = {
+      son_antrenmanlar: ctx.son_antrenmanlar,
+      son_seanslar: ctx.son_seanslar,
+      bu_hafta_kas_bolgesi_setleri: ctx.bu_hafta_kas_bolgesi_setleri,
+      gecen_hafta_ozet: week(ctx.gecen_hafta_ozet),
+    };
+  }
+  // aylık özet karışık: her alan kendi kategorisine göre
+  const month = (m) =>
+    m && {
+      ay: m.ay,
+      ...(on('antrenman') ? { antrenman: m.antrenman, calisma_seti: m.calisma_seti, hacim_kg: m.hacim_kg, rekorlar: m.rekorlar } : {}),
+      ...(on('vucut') ? { kilo_egilimi: m.kilo_egilimi } : {}),
+      ...(on('beslenme') ? { beslenme: m.beslenme } : {}),
+      ...(on('ilac') ? { doz_uyumu: m.doz_uyumu } : {}),
+      ...(on('tansiyon') ? { tansiyon_ort: m.tansiyon_ort } : {}),
+    };
+  if (ctx.aylik_ozet) summary.aylik_ozet = { bu_ay: month(ctx.aylik_ozet.bu_ay), gecen_ay: month(ctx.aylik_ozet.gecen_ay) };
+  if (on('vucut')) {
+    summary.kilo_egilimi = ctx.kilo_egilimi;
+    details.get_body_history = { kilo_gecmisi: ctx.kilo_gecmisi, vucut_olculeri: ctx.vucut_olculeri };
+  }
+  if (on('tahlil')) {
+    const n = (ctx.son_tahliller || []).length;
+    summary.tahliller = n ? `${n} tahlil kayıtlı (son: ${ctx.son_tahliller[0]?.tarih || '?'}); ayrıntı için get_lab_results` : 'kayıtlı tahlil yok';
+    details.get_lab_results = { son_tahliller: ctx.son_tahliller, sonraki_tahlil: ctx.sonraki_tahlil };
+  }
+  if (on('tansiyon')) {
+    const n = (ctx.tansiyon_nabiz_son || []).length;
+    summary.tansiyon = n ? `${n} ölçüm kayıtlı; ayrıntı için get_vitals` : 'kayıtlı ölçüm yok';
+    details.get_vitals = { tansiyon_nabiz_son: ctx.tansiyon_nabiz_son };
+  }
+  if (on('ilac')) {
+    const k = ctx.kur || {};
+    // günlük işaretleme için bugünkü liste özette; madde ayrıntıları araçta
+    summary.kur_ozet = { durum: k.durum, su_anki_hafta: k.su_anki_hafta, kalan_gun: k.kalan_gun, bugun: k.bugun };
+    summary.koruyucu_bugun = (ctx.koruyucu_ilac_ve_vitaminler || {}).bugun;
+    details.get_medications = { kur: ctx.kur, koruyucu_ilac_ve_vitaminler: ctx.koruyucu_ilac_ve_vitaminler, stok_durumu: ctx.stok_durumu };
+  }
+  return { summary, details };
+}

@@ -3,8 +3,9 @@ import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, openSheet
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
 import { monthUsage } from '../ai.js';
-import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate } from '../context.js';
+import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate, AI_CATEGORIES } from '../context.js';
 import * as push from '../push.js';
+import { sharedLabels, openAiShareSheet } from '../aishare.js';
 import { cloudSupported, cloudMode, enableVault, upgradeToVault, backupNow, findBackup, adoptVault, disableCloud, recoveryCode, passIssue, inboxToken, inboxUrl, pullInbox, closeInbox } from '../cloud.js';
 
 
@@ -37,6 +38,7 @@ export async function renderPage(root, params, mode = 'profile') {
   const pushDiag = [`ana ekran: ${standalone ? 'evet' : 'hayır'}`, `push: ${'PushManager' in window ? 'var' : 'yok'}`, `bildirim: ${'Notification' in window ? 'var' : 'yok'}`, `sw: ${'serviceWorker' in navigator ? 'var' : 'yok'}`].join(' · ');
   const backupPhotos = await db.getSetting('backup_photos', true);
   const cloudM = await cloudMode();
+  const aiShared = await sharedLabels();
   const vault = await db.getSetting('cloud_v3');
   const cloudLast = await db.getSetting('cloud_last');
   const cloudHold = await db.getSetting('cloud_hold');
@@ -83,7 +85,7 @@ export async function renderPage(root, params, mode = 'profile') {
 
     <div class="sec"><h2>Coach (yapay zekâ)</h2></div>
     <section class="card">
-      <p class="small muted" style="margin:0 0 10px;line-height:18px">Coach, Anthropic'in Claude modelini kullanır. Bunun için Claude Console'dan aldığın bir API anahtarı gerekir. Anahtar yalnızca bu telefonda saklanır ve yedeğe dahil edilmez.</p>
+      <p class="small muted" style="margin:0 0 10px;line-height:18px">Coach, Anthropic'in Claude modelini kullanır. Bunun için Claude Console'dan aldığın bir API anahtarı gerekir. Anahtar yalnızca bu telefonda (uygulama verisinde, ayrıca şifrelenmeden) saklanır, yedeğe dahil edilmez ve doğrudan Anthropic'e gönderilir.</p>
       <div class="field"><label for="api-key">API anahtarı</label>
         <input id="api-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-..." value="${apiKey ? '••••••••••••' : ''}">
       </div>
@@ -95,6 +97,7 @@ export async function renderPage(root, params, mode = 'profile') {
       <div class="kv"><span class="k">Bu ay mesaj</span><span class="v">${fmt(usage.calls)}</span></div>
       ${usage.saved > 0.005 ? `<div class="kv"><span class="k">Önbellekle tasarruf</span><span class="v">$${usage.saved.toFixed(2)}</span></div>` : ''}
       <p class="small muted" style="margin:6px 0 0;line-height:18px">Console'da aylık harcama limiti koymanı öneririm; limit aşılırsa Coach durur, uygulamanın geri kalanı çalışmaya devam eder.</p>
+      <button type="button" class="list-btn" data-act="ai-share" style="margin-top:6px"><span class="k" style="display:flex;flex-direction:column;gap:2px"><span>Coach neleri görebilir</span><span class="small muted">${esc(aiShared.length === AI_CATEGORIES.length ? 'Tüm kategoriler' : aiShared.length ? aiShared.join(', ') : 'Hiçbiri')}</span></span>${icon.chev}</button>
     </section>
 
     <div class="sec"><h2>Bildirimler</h2></div>
@@ -566,6 +569,8 @@ export async function renderPage(root, params, mode = 'profile') {
       await disableFaceId();
       toast('PIN kilidi kapatıldı');
       refresh();
+    } else if (act === 'ai-share') {
+      openAiShareSheet(() => refresh());
     } else if (act === 'cloud-on') {
       const name = root.querySelector('#cl-name').value;
       const a = root.querySelector('#cl-pass').value;

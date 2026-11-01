@@ -1,7 +1,7 @@
 // Coach: Claude API bağlantısı (canlı akış + önbellek), model seçimi, araçlar (onay kartları) ve harcama takibi
 import * as db from './db.js';
 import { today, round1 } from './util.js';
-import { buildContext, findOrCreateExercise, dueOn, MEALS, slotLabel, MEASURES } from './context.js';
+import { buildContext, findOrCreateExercise, dueOn, MEALS, slotLabel, MEASURES, aiShare, splitContext, READ_TOOL_CAT, AI_CATEGORIES } from './context.js';
 import { FOODS, findFood, bestMatch, nutrientsFor } from './data/foods.js';
 import { matchLab, labByKey } from './data/labs.js';
 
@@ -76,9 +76,27 @@ ${foodList}`;
   return STATIC_PROMPT;
 }
 
-function dynamicPrompt(ctx, custom) {
-  const mine = custom.length ? `\n\nKULLANICININ KENDİ BESİNLERİ (food_id: ad — 100 g kcal):\n${custom.map((c) => `${c.id}: ${c.name} — ${c.k} kcal${c.overrides ? ` (kullanıcı ${c.overrides} değerlerini düzeltti; onun yerine bunu kullan)` : ''}`).join('\n')}` : '';
-  return `KULLANICININ GÜNCEL VERİLERİ (uygulamadan otomatik eklenir, kullanıcı her seferinde anlatmak zorunda kalmasın diye kullan):\n${JSON.stringify(ctx)}${mine}`;
+function dynamicPrompt(ctx, custom, share) {
+  const mine = custom.length && share.beslenme !== false ? `\n\nKULLANICININ KENDİ BESİNLERİ (food_id: ad — 100 g kcal):\n${custom.map((c) => `${c.id}: ${c.name} — ${c.k} kcal${c.overrides ? ` (kullanıcı ${c.overrides} değerlerini düzeltti; onun yerine bunu kullan)` : ''}`).join('\n')}` : '';
+  const shared = AI_CATEGORIES.filter(([k]) => share[k]).map(([, l]) => l);
+  const hidden = AI_CATEGORIES.filter(([k]) => !share[k]).map(([, l]) => l);
+  const access = `\n\nVERİ ERİŞİMİ: Kullanıcı şu kategorileri seninle paylaşıyor: ${shared.join(', ') || 'hiçbiri'}.${hidden.length ? ` Paylaşmadıkları: ${hidden.join(', ')} — bunlar hakkında hiçbir verin yok; sorarsa Ayarlar › Coach › "Coach neleri görebilir" bölümünden açabileceğini söyle, tahmin yürütme.` : ''} Aşağıdaki veriler özettir; ayrıntı gerekiyorsa (geçmiş antrenmanlar, kilo geçmişi, tahlil değerleri, tansiyon ölçümleri, kür/ilaç ayrıntıları) ilgili get_ aracını çağır. Soruyu cevaplamak için gerekmeyen veriyi isteme.`;
+  return `KULLANICININ GÜNCEL VERİLERİ (uygulamadan otomatik eklenir, kullanıcı her seferinde anlatmak zorunda kalmasın diye kullan):\n${JSON.stringify(ctx)}${mine}${access}`;
+}
+
+// Okuma araçları: yalnızca izin verilen kategoriler için tanımlanır
+const READ_TOOLS = [
+  { name: 'get_workout_history', description: 'Son 3 haftanın antrenman ayrıntıları (setler, ağırlıklar), seanslar, bu haftanın kas bölgesi setleri ve geçen haftanın özeti. Antrenman analizi veya ilerleme sorularında kullan.' },
+  { name: 'get_body_history', description: 'Kilo geçmişi ve vücut çevre ölçüleri. Kilo/ölçü değişimi sorularında kullan.' },
+  { name: 'get_lab_results', description: 'Kayıtlı kan tahlili sonuçları (değer, birim, referans) ve sonraki tahlil tarihi. Tahlil yorumunda kullan.' },
+  { name: 'get_vitals', description: 'Tansiyon ve nabız ölçümleri.' },
+  { name: 'get_medications', description: 'Kür maddeleri ve takvimi, son enjeksiyonlar, koruyucu ilaç ve vitaminler, stok durumu.' },
+].map((t) => ({ ...t, input_schema: { type: 'object', properties: {} } }));
+
+export function toolsFor(share) {
+  const reads = READ_TOOLS.filter((t) => share[READ_TOOL_CAT[t.name]]);
+  const writes = TOOLS.filter((t) => t.name !== 'mark_doses' || share.ilac);
+  return [...writes, ...reads];
 }
 
 // ---------- Araçlar ----------
@@ -543,11 +561,15 @@ export async function runTurn({ text, image, attachments = [], onModel, onText }
   if (image) attachments = [{ kind: 'image', ...image }, ...attachments];
   const model = chooseModel(text, attachments.length > 0);
   onModel && onModel(model);
-  const ctx = await buildContext();
+  // Gizlilik: yalnızca izin verilen kategoriler; ağır veriler araçla, gerekirse
+  const share = await aiShare();
+  const { summary, details } = splitContext(await buildContext(), share);
+  const tools = toolsFor(share);
+  const looked = [];
   const custom = await db.list('custom_foods');
   const system = [
     { type: 'text', text: staticPrompt(), cache_control: { type: 'ephemeral' } },
-    { type: 'text', text: dynamicPrompt(ctx, custom) },
+    { type: 'text', text: dynamicPrompt(summary, custom, share) },
   ];
   const history = await historyMessages(); // son kullanıcı mesajı zaten kaydedildiği için geçmişte var
   if (history.length && history[history.length - 1].role === 'user') history.pop();
@@ -565,9 +587,9 @@ export async function runTurn({ text, image, attachments = [], onModel, onText }
   const cards = [];
   let finalText = '';
   let live = '';
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     live = '';
-    const data = await callAPIStream(apiKey, { model: model.id, max_tokens: model.maxTokens, system, messages, tools: TOOLS }, (delta) => {
+    const data = await callAPIStream(apiKey, { model: model.id, max_tokens: model.maxTokens, system, messages, tools }, (delta) => {
       live += delta;
       onText && onText(live);
     });
@@ -580,6 +602,13 @@ export async function runTurn({ text, image, attachments = [], onModel, onText }
     messages.push({ role: 'assistant', content: blocks });
     const results = [];
     for (const u of uses) {
+      if (READ_TOOL_CAT[u.name]) {
+        const cat = READ_TOOL_CAT[u.name];
+        const allowed = share[cat] && details[u.name];
+        if (allowed && !looked.includes(cat)) looked.push(cat);
+        results.push({ type: 'tool_result', tool_use_id: u.id, content: allowed ? JSON.stringify(details[u.name]) : 'Kullanıcı bu kategoriyi paylaşmıyor.' });
+        continue;
+      }
       let card = null;
       try {
         card = await buildCard(u.name, u.input || {});
@@ -594,7 +623,7 @@ export async function runTurn({ text, image, attachments = [], onModel, onText }
     finalText = ''; // aracı çağırdıktan sonraki son metni gösterelim
     onText && onText('');
   }
-  return { text: finalText.trim(), cards, model };
+  return { text: finalText.trim(), cards, model, looked };
 }
 
 
