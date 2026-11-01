@@ -48,3 +48,11 @@ test('bulut yedeği arayüzden açılır ve başka cihazda geri yüklenir', asyn
   expect(errors).toEqual([]);
   await ctx2.close();
 });
+
+test('ilk açılışta service worker kurulunca sayfa yenilenmez (kurulum yarıda kalmaz)', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => (window.__isaret = 1));
+  await page.waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller, null, { timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  expect(await page.evaluate(() => window.__isaret)).toBe(1);
+});

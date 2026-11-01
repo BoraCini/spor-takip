@@ -394,9 +394,12 @@ function registerSW() {
       });
     })
     .catch((e) => console.warn('SW kaydı başarısız', e));
+  // Yalnızca güncellemede yenile. İlk kurulumda (önceden kontrol eden service worker yokken) yenileme yapılmaz;
+  // yoksa yeni kullanıcı kurulum ekranındayken sayfa kendiliğinden yenilenip kurulum baştan başlar.
+  const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloaded) return;
+    if (!hadController || reloaded) return;
     reloaded = true;
     location.reload();
   });
