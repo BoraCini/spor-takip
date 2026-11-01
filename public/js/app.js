@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '2.1.0-beta.6';
+export const APP_VERSION = '2.1.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -370,6 +370,7 @@ async function onboarding() {
 }
 
 // ---------- Service worker ----------
+let updateRequested = false;
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
@@ -383,6 +384,7 @@ function registerSW() {
         b.setAttribute('role', 'status');
         b.innerHTML = `<span>Yeni sürüm hazır.</span><button type="button" class="btn primary">Yenile</button>`;
         b.querySelector('button').addEventListener('click', () => {
+          updateRequested = true;
           worker.postMessage('skipWaiting');
         });
         document.body.appendChild(b);
@@ -402,10 +404,11 @@ function registerSW() {
     .catch((e) => console.warn('SW kaydı başarısız', e));
   // Yalnızca güncellemede yenile. İlk kurulumda (önceden kontrol eden service worker yokken) yenileme yapılmaz;
   // yoksa yeni kullanıcı kurulum ekranındayken sayfa kendiliğinden yenilenip kurulum baştan başlar.
+  // Kullanıcı "Yenile"ye bastıysa (updateRequested) ilk ziyaret oturumunda da yenilenir.
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!hadController || reloaded) return;
+    if ((!hadController && !updateRequested) || reloaded) return;
     reloaded = true;
     location.reload();
   });
