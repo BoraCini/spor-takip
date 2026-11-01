@@ -1,0 +1,22 @@
+{
+  "name": "spor-takip",
+  "private": true,
+  "type": "module",
+  "description": "Pro Coach — geliştirme ve test araçları. Uygulama build gerektirmez; public/ olduğu gibi yayınlanır.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "dev": "wrangler dev --port 8787",
+    "lint": "eslint public/js worker tests"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "eslint": "9.39.5",
+    "fake-indexeddb": "6.0.1",
+    "globals": "16.3.0",
+    "happy-dom": "18.0.1",
+    "vitest": "3.2.4",
+    "wrangler": "4.154.0"
+  }
+}

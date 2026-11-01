@@ -47,3 +47,17 @@ Yeni sürüm yayınlarken `public/sw.js` içindeki `CACHE` adını artır.
 Temel besin değerleri: USDA FoodData Central (SR Legacy), [TempoLife](https://tempolife.app) derlemesi (`tempo-food-db`) üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar bu projede eklendi. Paketli ürünler: Open Food Facts (ODbL).
 
 Tahlil PDF'leri telefonda [pdf.js](https://mozilla.github.io/pdf.js/) (Apache-2.0, `public/vendor/pdfjs`) ile okunur; yapay zekâ kullanılmaz.
+
+## Geliştirme ve testler
+
+Uygulama build gerektirmez; `package.json` yalnızca geliştirme araçları içindir.
+
+```
+npm install
+npm test            # birim + Worker testleri (Vitest, fake-indexeddb)
+npm run test:e2e    # uçtan uca testler (Playwright, yerel wrangler dev üzerinde)
+npm run lint
+```
+
+Önizleme sürümleri (`<dal>-spor-takip.<hesap>.workers.dev`) üretimle aynı KV'yi kullanır; Worker bu adreslerde
+tüm anahtarları `pv:` önekiyle ayırır, böylece önizleme denemeleri gerçek yedeklere dokunmaz.

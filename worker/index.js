@@ -40,6 +40,30 @@ export function rateOk(ip, kind, now = Date.now()) {
   return h.n <= max;
 }
 
+// Önizleme sürümleri (ör. p0-guvenlik-spor-takip.<hesap>.workers.dev) üretimle aynı KV'yi kullanır.
+// Önizlemede yapılan denemeler gerçek yedeklerin üzerine yazmasın diye tüm anahtarlar 'pv:' önekiyle ayrılır.
+export function isPreviewHost(host) {
+  return /^[a-z0-9-]+-spor-takip\./.test(host || '');
+}
+export function prefixedKV(kv, pre) {
+  return {
+    get: (k, t) => kv.get(pre + k, t),
+    getWithMetadata: (k, t) => kv.getWithMetadata(pre + k, t),
+    put: (k, v, o) => kv.put(pre + k, v, o),
+    delete: (k) => kv.delete(pre + k),
+    list: async (o = {}) => {
+      const r = await kv.list({ ...o, prefix: pre + (o.prefix || '') });
+      return { ...r, keys: r.keys.map((x) => ({ ...x, name: x.name.slice(pre.length) })) };
+    },
+  };
+}
+function envFor(env, host) {
+  return isPreviewHost(host) ? { ...env, PUSH_KV: prefixedKV(env.PUSH_KV, 'pv:') } : env;
+}
+export function _resetRateLimits() {
+  hits.clear();
+}
+
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -61,7 +85,7 @@ export default {
       const kind = request.method === 'GET' || request.method === 'HEAD' ? 'read' : 'write';
       if (!rateOk(ip, kind)) return json({ error: 'sik' }, 429);
       try {
-        return await handleApi(request, env, url);
+        return await handleApi(request, envFor(env, url.hostname), url);
       } catch (e) {
         console.error('api error', e && e.stack ? e.stack : e);
         return json({ error: 'server' }, 500);
