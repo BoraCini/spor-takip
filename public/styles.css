@@ -1067,3 +1067,6 @@ input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webk
 .share-line { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 2px 18px 6px; font: inherit; font-size: 12.5px; line-height: 16px; color: var(--sub); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .share-line .sl-k { font-weight: 600; }
 .share-line .sl-att { color: var(--accent); }
+
+/* PIN: yanlış denemelerden sonra bekleme */
+.lock.pin-wait .keypad button[data-k], .lock.pin-wait .keypad button[data-del] { opacity: .35; }

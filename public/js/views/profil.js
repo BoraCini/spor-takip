@@ -1,7 +1,7 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, openSheet, downloadOrShare, lineChartSVG, trendChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
-import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
+import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId, pinLength, faceIdNeedsReenroll } from '../lock.js';
 import { monthUsage } from '../ai.js';
 import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate, AI_CATEGORIES } from '../context.js';
 import * as push from '../push.js';
@@ -25,6 +25,8 @@ export async function renderPage(root, params, mode = 'profile') {
   const pin = await hasPin();
   const faceAvail = pin && (await faceIdAvailable());
   const faceOn = await hasFaceId();
+  const pinLen = await pinLength();
+  const faceOld = await faceIdNeedsReenroll();
   const dailyWeight = await db.getSetting('daily_weight_prompt', true);
   const apiKey = await db.getSetting('api_key', '');
   const usage = await monthUsage();
@@ -157,6 +159,8 @@ export async function renderPage(root, params, mode = 'profile') {
             : `<button type="button" class="list-btn" data-act="pin-set"><span class="k">PIN kilidi belirle</span>${icon.chev}</button>`
         }
       </div>
+      ${pin && pinLen < 6 ? `<p class="small warn" style="margin:6px 0 4px;line-height:18px">PIN'in ${pinLen} haneli. Daha güvenli olması için 6 haneli bir PIN'e geçmeni öneririm ("PIN'i değiştir").</p>` : ''}
+      ${pin && faceOld ? `<p class="small warn" style="margin:6px 0 4px;line-height:18px">Face ID güvenlik güncellemesi nedeniyle kapatıldı. Aşağıdan yeniden açabilirsin.</p>` : ''}
       ${
         pin
           ? faceAvail || faceOn
@@ -164,7 +168,7 @@ export async function renderPage(root, params, mode = 'profile') {
             : `<p class="small muted" style="margin:6px 0 0;line-height:18px">Face ID, uygulama ana ekrandan açıldığında kullanılabilir.</p>`
           : `<p class="small muted" style="margin:6px 0 0;line-height:18px">Face ID ile açmak için önce PIN belirle (Face ID olmazsa PIN yedek olarak kullanılır).</p>`
       }
-      <p class="small muted" style="margin:6px 0 0;line-height:18px">PIN bir ekran kilididir; telefonunun kendi şifresi asıl korumadır.</p>
+      <p class="small muted" style="margin:6px 0 0;line-height:18px">PIN ve Face ID uygulamayı açmayı kilitler; telefondaki verileri şifrelemez. Verilerini asıl koruyan, telefonunun kendi kilidi ve şifresidir. Art arda 5 yanlış PIN'den sonra bekleme süresi başlar ve giderek uzar; veriler hiçbir zaman otomatik silinmez.</p>
     </section>
 
     <div class="sec"><h2>Şifreli bulut yedeği</h2>${cloudM !== 'off' ? '<span class="meta">açık</span>' : ''}</div>

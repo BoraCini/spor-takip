@@ -1,10 +1,10 @@
 import * as db from './db.js';
-import { showLock, hasPin, setupPinFlow, faceIdAvailable, enableFaceId } from './lock.js';
+import { showLock, hasPin, setupPinFlow, faceIdAvailable, enableFaceId, pinLength, NEW_PIN_LEN } from './lock.js';
 import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '2.1.0-beta.5';
+export const APP_VERSION = '2.1.0-beta.6';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -190,6 +190,12 @@ async function lockIfNeeded() {
   locking = true;
   await showLock({ onForgot: forgotPin });
   locking = false;
+  // Eski 4 haneli PIN: bir kez 6 haneye geçiş öner
+  if ((await pinLength()) < NEW_PIN_LEN && !(await db.getSetting('pin_upgrade_asked'))) {
+    await db.setSetting('pin_upgrade_asked', true);
+    const ok = await confirmSheet({ title: 'PIN\'ini güçlendir', text: 'PIN\'in 4 haneli. 6 haneli bir PIN tahmin edilmeye karşı 100 kat daha dayanıklı. Şimdi değiştirmek ister misin?', okLabel: '6 haneli PIN belirle' });
+    if (ok && (await setupPinFlow({ title: 'Yeni PIN' }))) toast('PIN güncellendi');
+  }
 }
 
 function watchBackground() {
@@ -291,7 +297,7 @@ function lockChoice() {
       <div class="choice-list">
         <button type="button" class="choice" data-pin>
           <span class="choice-ic">${lockIcon}</span>
-          <span class="choice-t"><b>Şifreli başla</b><small>4 haneli PIN belirle; destekleyen telefonda Face ID ile de açılır</small></span>
+          <span class="choice-t"><b>Şifreli başla</b><small>6 haneli PIN belirle; destekleyen telefonda Face ID ile de açılır</small></span>
         </button>
         <button type="button" class="choice" data-nopin>
           <span class="choice-ic muted-ic">${openIcon}</span>
@@ -350,7 +356,7 @@ async function onboarding() {
   while (await lockChoice()) {
     set = await setupPinFlow({
       title: 'PIN belirle',
-      text: '4 haneli bir PIN seç. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldığında sorulur.',
+      text: '6 haneli bir PIN seç. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldığında sorulur.',
       cancelLabel: 'Geri',
     });
     if (set) break;
