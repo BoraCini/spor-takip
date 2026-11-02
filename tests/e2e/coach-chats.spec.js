@@ -3,11 +3,14 @@ import { onboard, go } from './helpers.js';
 
 // Anthropic API'yi taklit et: her soruya "Cevap: <soru>" döner
 async function mockClaude(page) {
+  // Safari (WebKit) başka alan adına giden istekte CORS başlıklarını şart koşar; gerçek API bunları döner
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
   await page.route('https://api.anthropic.com/**', async (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
     const body = JSON.parse(route.request().postData());
     const last = body.messages[body.messages.length - 1];
     const q = (Array.isArray(last.content) ? last.content.filter((c) => c.type === 'text').map((c) => c.text).join(' ') : last.content) || '';
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ content: [{ type: 'text', text: 'Cevap: ' + q }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }) });
+    await route.fulfill({ contentType: 'application/json', headers: cors, body: JSON.stringify({ content: [{ type: 'text', text: 'Cevap: ' + q }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }) });
   });
 }
 const ask = async (page, q) => {
