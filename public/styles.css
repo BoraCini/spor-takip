@@ -1070,3 +1070,14 @@ input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webk
 
 /* PIN: yanlış denemelerden sonra bekleme */
 .lock.pin-wait .keypad button[data-k], .lock.pin-wait .keypad button[data-del] { opacity: .35; }
+
+/* Coach sohbetleri */
+body.conv-open .chat-top .chips { display: none; }
+.conv-bar { display: flex; align-items: center; gap: 8px; padding: 2px 12px 8px; }
+.conv-btn { display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px 0 8px; border: 0; border-radius: 18px; background: var(--card); color: var(--accent); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; flex: none; }
+.conv-btn svg { width: 18px; height: 18px; }
+.conv-title { flex: 1; min-width: 0; text-align: center; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-list { margin: 0 4px 8px; }
+.conv-row-t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-all-row { display: flex; align-items: center; gap: 8px; }
+.chat-list:has(.conv-list) .coach-empty { min-height: 160px; }
