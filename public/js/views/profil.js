@@ -649,6 +649,7 @@ export async function renderPage(root, params, mode = 'profile') {
     } else if (act === 'clear-chat') {
       if (await confirmSheet({ title: 'Sohbeti temizle', text: 'Coach ile tüm konuşma geçmişi silinir. Kayıtlı verilerin (beslenme, antrenman, kür, tahliller) etkilenmez.', okLabel: 'Temizle', danger: true })) {
         await db.clearStore('chat_messages');
+        await db.setSetting('chat_current', null);
         toast('Sohbet temizlendi');
       }
     } else if (act === 'wipe') {

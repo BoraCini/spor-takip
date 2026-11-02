@@ -128,3 +128,22 @@ describe('Coach isteği — yalnızca gereken veri', () => {
     expect(send(await db.exportAll())).not.toContain('sk-ant-test');
   });
 });
+
+describe('Coach sohbetleri', () => {
+  it('Coach yalnızca açık sohbetin geçmişini görür', async () => {
+    const db = await seeded({ existing: true });
+    await db.put('chat_messages', { conv_id: 'A', role: 'user', text: 'ESKISOHBETSORUSU' });
+    await db.put('chat_messages', { conv_id: 'A', role: 'assistant', text: 'ESKISOHBETCEVABI' });
+    await db.put('chat_messages', { role: 'user', text: 'ETIKETSIZESKI' }); // 2.1.0 öncesi mesaj
+    await db.put('chat_messages', { conv_id: 'B', role: 'user', text: 'YENISOHBETILK' });
+    await db.put('chat_messages', { conv_id: 'B', role: 'assistant', text: 'YENISOHBETCEVAP' });
+    await db.put('chat_messages', { conv_id: 'B', role: 'user', text: 'şimdiki soru' });
+    const bodies = mockClaude([]);
+    const { runTurn } = await import('../../public/js/ai.js');
+    await runTurn({ text: 'şimdiki soru', convId: 'B' });
+    const msgs = send(bodies[0].messages);
+    expect(msgs).toContain('YENISOHBETILK');
+    expect(msgs).not.toContain('ESKISOHBET');
+    expect(msgs).not.toContain('ETIKETSIZESKI');
+  });
+});
