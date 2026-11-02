@@ -238,7 +238,10 @@ export function reviewFood(food, notFound = false) {
         const k = g('#rf-k');
         if (!name || isNaN(k)) return toast('Ad ve kalori gerekli');
         const pg = g('#rf-pg');
+        // kayıtlı besinin diğer alanları (porsiyonlar, varsayılan porsiyon, kategori, etiketler…) korunur
+        const { custom: _c, ...keep } = food;
         saved = await db.put('custom_foods', {
+          ...keep,
           ...(food.id ? { id: food.id } : {}),
           ...(food.overrides ? { overrides: food.overrides } : {}),
           barcode: food.barcode || null,

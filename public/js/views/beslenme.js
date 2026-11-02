@@ -4,7 +4,8 @@ import { refresh, go } from '../app.js';
 import { removeWithUndo } from '../undo.js';
 import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpenditure, macrosFor } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
-import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION } from '../data/foods.js';
+import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
+import { FOOD_CATEGORIES } from '../data/food_categories.js';
 
 let state = { tab: 'log', date: today(), collapsed: null };
 const WD = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
@@ -151,7 +152,7 @@ export async function render(root, params) {
                   .map(
                     (e) => `<button type="button" class="row meal-row" data-act="edit-entry" data-id="${e.id}">
                       <span class="row-main"><span class="row-title normal">${esc(e.name)}${e.estimated ? '<span class="est">tahmini</span>' : ''}</span>
-                      <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams)) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
+                      <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams, e.base || 'g')) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
                       <span class="row-end">${fmt(e.kcal)}</span></button>`
                   )
                   .join('')}</div>`
@@ -395,6 +396,24 @@ function srcLine(f) {
   return 'Kaynak: USDA ortalamaları';
 }
 
+// Günlük kayıt: besin değerleri kayıt anında kopyalanır (snapshot); besin/tarif sonradan değişse de bu kayıt değişmez
+function logRecord(food, sv, { date, meal, source = 'manuel', existing = null } = {}) {
+  return {
+    ...(existing || {}),
+    date,
+    meal,
+    food_id: food.id,
+    name: cleanName(food.name),
+    grams: sv.grams,
+    unit: sv.unit,
+    qty: sv.qty,
+    ...(baseUnit(food) === 'ml' ? { base: 'ml' } : {}),
+    estimated: false,
+    source,
+    ...nutrientsFor(food, sv.grams),
+  };
+}
+
 async function openAddFood(meal, startTab = null) {
   const custom = markCustom(await db.list('custom_foods'));
   const hist = await foodHistory(custom);
@@ -453,7 +472,7 @@ async function openAddFood(meal, startTab = null) {
     return `<div class="row frow">
       <button type="button" class="row-main" data-open="${esc(f.id)}" style="text-align:left">
         <span class="row-title normal">${esc(cleanName(f.name))}${tag ? ` <span class="tag">${tag}</span>` : ''}</span>
-        <span class="row-sub"><span data-sv>${esc(servingText(sv.unit, sv.qty, sv.grams))}</span> · <b class="num" data-kc>${fmt(n.kcal)} kcal</b></span>
+        <span class="row-sub"><span data-sv>${esc(servingText(sv.unit, sv.qty, sv.grams, baseUnit(f)))}</span> · <b class="num" data-kc>${fmt(n.kcal)} kcal</b></span>
         <span class="row-sub num" data-mc>P ${fmt(n.protein_g, 1)} · K ${fmt(n.carb_g, 1)} · Y ${fmt(n.fat_g, 1)}</span>
       </button>
       <button type="button" class="check-btn" aria-pressed="${on}" data-pick="${esc(f.id)}" aria-label="${esc(cleanName(f.name))}: ${on ? 'seçimi kaldır' : 'seç'}"><span class="check">${icon.check}</span></button>
@@ -504,7 +523,7 @@ async function openAddFood(meal, startTab = null) {
     const sv = serv(f);
     const n = nutrientsFor(f, sv.grams);
     s.el.querySelectorAll(`[data-open="${CSS.escape(id)}"]`).forEach((b) => {
-      b.querySelector('[data-sv]').textContent = servingText(sv.unit, sv.qty, sv.grams);
+      b.querySelector('[data-sv]').textContent = servingText(sv.unit, sv.qty, sv.grams, baseUnit(f));
       b.querySelector('[data-kc]').textContent = `${fmt(n.kcal)} kcal`;
       b.querySelector('[data-mc]').textContent = `P ${fmt(n.protein_g, 1)} · K ${fmt(n.carb_g, 1)} · Y ${fmt(n.fat_g, 1)}`;
     });
@@ -524,19 +543,7 @@ async function openAddFood(meal, startTab = null) {
     ft.innerHTML = `<button type="button" class="btn primary block" data-addall>${picked.size} besini ekle · ${fmt(tot)} kcal</button>`;
   };
 
-  const logOne = (food, sv, src = 'manuel') =>
-    db.put('food_logs', {
-      date: state.date,
-      meal: selMeal,
-      food_id: food.id,
-      name: cleanName(food.name),
-      grams: sv.grams,
-      unit: sv.unit,
-      qty: sv.qty,
-      estimated: false,
-      source: src,
-      ...nutrientsFor(food, sv.grams),
-    });
+  const logEntry = (food, sv, src = 'manuel') => logRecord(food, sv, { date: state.date, meal: selMeal, source: src });
 
   draw();
   inp.addEventListener('input', draw);
@@ -585,7 +592,13 @@ async function openAddFood(meal, startTab = null) {
       if (b.disabled) return;
       b.disabled = true; // art arda basınca iki kez eklenmesin
       const items = [...picked.values()];
-      for (const x of items) await logOne(x.food, x, 'coklu');
+      try {
+        // hepsi ya da hiçbiri: yarıda kalırsa kısmi kayıt oluşmaz
+        await db.putAtomic(items.map((x) => ({ store: 'food_logs', obj: logEntry(x.food, x, 'coklu') })));
+      } catch (err) {
+        b.disabled = false;
+        return toast('Eklenemedi: ' + (err.message || err), 4000);
+      }
       toast(`${items.length} besin eklendi`);
       s.close();
       refresh();
@@ -837,8 +850,24 @@ async function openSayAdd(meal, { text = '', listen: startListen = false } = {})
 }
 
 // Porsiyon seçimi ve besin detayı
-async function openAmount(food, meal, existing = null, opts = {}) {
-  const portions = [...(food.portions || []), ['gram', 1]];
+// Eski bir kaydı açarken hesap, kaydın KENDİ değerleriyle yapılır (geçmiş sessizce değişmesin).
+// Besinin güncel değerleri farklıysa kullanıcı isterse onlara geçebilir.
+function snapshotFood(food, entry) {
+  const g = entry.grams;
+  const per = (x) => (x == null ? null : (Number(x) / g) * 100);
+  return { ...food, k: per(entry.kcal), p: per(entry.protein_g), c: per(entry.carb_g), f: per(entry.fat_g), fb: per(entry.fiber_g), na: per(entry.sodium_mg), ka: per(entry.potassium_mg) };
+}
+function differs(a, b) {
+  return ['k', 'p', 'c', 'f'].some((k) => Math.abs((Number(a[k]) || 0) - (Number(b[k]) || 0)) > Math.max(1, Math.abs(Number(b[k]) || 0) * 0.02));
+}
+
+async function openAmount(liveFood, meal, existing = null, opts = {}) {
+  const snap = existing && existing.grams > 0 && existing.kcal != null ? snapshotFood(liveFood, existing) : null;
+  let useLive = !snap;
+  const changed = snap ? differs(snap, liveFood) : false;
+  let food = useLive ? liveFood : snap;
+  const base = baseUnit(liveFood);
+  const portions = [...portionsOf(liveFood), ['gram', 1]];
   let sv;
   if (existing) {
     sv =
@@ -866,26 +895,17 @@ async function openAmount(food, meal, existing = null, opts = {}) {
     rightLabel: selecting ? 'Seç' : existing ? 'Kaydet' : 'Ekle',
     onRight: async (api) => {
       const g = grams();
-      if (!g || g <= 0) return toast('Miktar gir');
+      if (!validAmount(g)) return toast('Sıfırdan büyük bir miktar gir');
       if (selecting) {
         opts.onSelect && opts.onSelect({ unit, qty, grams: g });
         api.close();
         return;
       }
-      const n = nutrientsFor(food, g);
-      await db.put('food_logs', {
-        ...(existing || {}),
-        date: existing ? existing.date : state.date,
-        meal: selMeal,
-        food_id: food.id,
-        name: cleanName(food.name),
-        grams: g,
-        unit,
-        qty,
-        estimated: false,
-        source: existing ? existing.source || 'manuel' : 'manuel',
-        ...n,
-      });
+      try {
+        await db.put('food_logs', logRecord({ ...food, id: liveFood.id, name: liveFood.name }, { unit, qty, grams: g }, { date: existing ? existing.date : state.date, meal: selMeal, source: existing ? existing.source || 'manuel' : 'manuel', existing }));
+      } catch (err) {
+        return toast('Kaydedilemedi: ' + (err.message || err), 4000);
+      }
       api.close();
       opts.onLogged && opts.onLogged();
       toast(existing ? 'Güncellendi' : `${cleanName(food.name)} eklendi`);
@@ -900,7 +920,7 @@ async function openAmount(food, meal, existing = null, opts = {}) {
     const pc = (x) => (tot ? Math.round((x / tot) * 100) : 0);
     return `
       <div class="fs-head">
-        <div class="fs-kcal"><span class="big-num">${fmt(n.kcal)}</span><span class="small muted">kcal · ${fmt(g)} g</span></div>
+        <div class="fs-kcal"><span class="big-num">${fmt(n.kcal)}</span><span class="small muted">kcal · ${fmt(g)} ${base}</span></div>
         <div class="fs-macs">
           <div class="fs-mac"><span class="lbl"><i class="dot c"></i>Karb.</span><span class="val">${fmt(n.carb_g, 1)} g</span><span class="small muted">%${pc(ek.c)}</span></div>
           <div class="fs-mac"><span class="lbl"><i class="dot f"></i>Yağ</span><span class="val">${fmt(n.fat_g, 1)} g</span><span class="small muted">%${pc(ek.f)}</span></div>
@@ -916,13 +936,13 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       ['Kalori', `${fmt(n.kcal)} kcal`],
       ['Protein', `${fmt(n.protein_g, 1)} g`],
       ['Karbonhidrat', `${fmt(n.carb_g, 1)} g`],
-      ['Lif', `${fmt(n.fiber_g, 1)} g`],
+      ['Lif', food.fb == null ? '– (bilinmiyor)' : `${fmt(n.fiber_g, 1)} g`],
       ['Yağ', `${fmt(n.fat_g, 1)} g`],
-      ['Sodyum', food.na == null ? '–' : `${fmt(n.sodium_mg)} mg`],
+      ['Sodyum', food.na == null ? '– (bilinmiyor)' : `${fmt(n.sodium_mg)} mg`],
     ];
     if (food.ka) rows.push(['Potasyum', `${fmt(n.potassium_mg)} mg`]);
     return rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('') +
-      `<p class="small muted" style="margin:8px 0 0">100 g: ${fmt(food.k)} kcal · P ${fmt(food.p, 1)} · K ${fmt(food.c, 1)} · Y ${fmt(food.f, 1)}</p>`;
+      `<p class="small muted" style="margin:8px 0 0">100 ${base}: ${fmt(food.k)} kcal · P ${fmt(food.p, 1)} · K ${fmt(food.c, 1)} · Y ${fmt(food.f, 1)}</p>`;
   };
   const refreshNums = () => {
     s.el.querySelector('#fs-sum').innerHTML = sumHTML();
@@ -930,13 +950,14 @@ async function openAmount(food, meal, existing = null, opts = {}) {
   };
   const draw = () => {
     s.setBody(`
-      <p class="small muted" style="margin:-2px 4px 10px;text-align:center">${esc(srcLine(food))}</p>
+      <p class="small muted" style="margin:-2px 4px 10px;text-align:center">${esc(srcLine(liveFood))}</p>
+      ${snap && changed ? `<div class="card" style="padding:10px 14px;margin-bottom:10px"><p class="small" style="margin:0 0 8px;line-height:18px">${useLive ? 'Besinin güncel değerleri kullanılıyor.' : 'Bu kayıt, eklendiği andaki değerlerle açıldı. Besin ya da tarif sonradan değişmiş.'}</p><button type="button" class="btn block" data-live>${useLive ? 'Kaydın kendi değerlerine dön' : 'Güncel değerlerle hesapla'}</button></div>` : ''}
       <div class="card" id="fs-sum">${sumHTML()}</div>
       <div class="field"><span class="lbl">Porsiyon</span>
         <div class="toggle-row">${portions
-          .map(([l, gr]) => `<button type="button" class="tog" aria-pressed="${unit === l}" data-unit="${esc(l)}">${esc(l)}${gr !== 1 ? ` · ${fmt(gr)} g` : ''}</button>`)
+          .map(([l, gr]) => `<button type="button" class="tog" aria-pressed="${unit === l}" data-unit="${esc(l)}">${l === 'gram' ? base : `${esc(l)} · ${fmt(gr)} ${base}`}</button>`)
           .join('')}</div></div>
-      <div class="field"><label for="qty">Miktar (${esc(unit)})</label>
+      <div class="field"><label for="qty">Miktar (${esc(unit === 'gram' ? base : unit)})</label>
         <div class="stepper">
           <button type="button" data-step="-1" aria-label="Azalt">−</button>
           <input id="qty" inputmode="decimal" value="${typed ? String(qty).replace('.', ',') : ''}" placeholder="${String(qty).replace('.', ',')}">
@@ -972,7 +993,11 @@ async function openAmount(food, meal, existing = null, opts = {}) {
   s.el.addEventListener('click', async (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.unit) {
+    if (b.hasAttribute('data-live')) {
+      useLive = !useLive;
+      food = useLive ? liveFood : snap;
+      draw();
+    } else if (b.dataset.unit) {
       const g = grams();
       unit = b.dataset.unit;
       const u = portions.find((p) => p[0] === unit);
@@ -1003,14 +1028,11 @@ async function openAmount(food, meal, existing = null, opts = {}) {
       openRecipe(food, () => (opts.onChanged ? opts.onChanged() : refresh()));
     } else if (b.hasAttribute('data-edit-food')) {
       s.close();
-      const { custom: _c, ...raw } = food;
-      const saved = await reviewFood(raw);
-      if (saved) toast('Besin güncellendi');
-      opts.onChanged && opts.onChanged();
+      openCustomFood(selMeal, liveFood, () => opts.onChanged && opts.onChanged());
     } else if (b.hasAttribute('data-fix')) {
       s.close();
-      const { custom: _c, id: origId, ...raw } = food;
-      const saved = await reviewFood({ ...raw, name: cleanName(food.name), overrides: origId, source: 'düzeltme' });
+      const { custom: _c, id: origId, ...raw } = liveFood;
+      const saved = await reviewFood({ ...raw, name: cleanName(liveFood.name), overrides: origId, source: 'düzeltme' });
       if (saved) toast('Değerler kaydedildi');
       if (opts.onChanged) opts.onChanged();
       else if (saved) refresh();
@@ -1433,48 +1455,165 @@ async function openProductSearch(meal, q = '') {
   if (q.length >= 2) run();
 }
 
-function openCustomFood(meal) {
+// ---------- Kişisel besin: oluştur / düzenle (çoklu porsiyon) ----------
+// Porsiyon satırı: miktar × ölçü = gram (ör. 0,5 ölçek = 15 g, 250 ml = 258 g). Gram karşılığı kullanıcıdan alınır;
+// ölçüler arası otomatik dönüşüm yapılmaz.
+function openCustomFood(meal, existing = null, after = null) {
+  const e = existing || {};
+  const val = (x) => (x == null || x === '' ? '' : String(x).replace('.', ','));
+  const defLabel = portionsOf(e)[0] ? portionsOf(e)[0][0] : null;
+  // mevcut porsiyonları satırlara çevir ("0,5 ölçek" → miktar 0,5 + ölçü ölçek)
+  const toRow = ([label, grams]) => {
+    const m = /^(\d+(?:[.,]\d+)?)\s+(.+)$/.exec(label);
+    const q = m ? m[1] : '1';
+    const u = m ? m[2] : label;
+    const known = UNIT_TYPES.includes(u);
+    return { qty: q.replace('.', ','), unit: known ? u : 'ozel', custom: known ? '' : u, grams: val(grams), def: label === defLabel };
+  };
+  let rows = (e.portions || []).filter((p) => Array.isArray(p) && p[0] && Number(p[1]) > 0).map(toRow);
+  if (!rows.length) rows = [{ qty: '1', unit: 'porsiyon', custom: '', grams: '', def: true }];
+  let base = e.base === 'ml' ? 'ml' : 'g';
+  let busySave = false;
+
   const s = openSheet({
-    title: 'Kendi besinin',
+    title: existing ? 'Besini düzenle' : 'Kendi besinin',
     leftLabel: 'Vazgeç',
     rightLabel: 'Kaydet',
     body: `
-      <div class="field"><label for="cf-name">Ad</label><input id="cf-name" class="input" placeholder="Örn. Annemin mercimek köftesi"></div>
-      <p class="small muted" style="margin:0 0 10px">100 g için değerler (paketin üzerindeki tablodan alabilirsin):</p>
+      <div class="field"><label for="cf-name">Ad</label><input id="cf-name" class="input" value="${esc(e.name ? cleanName(e.name) : '')}" placeholder="Örn. Whey protein (çikolatalı)"></div>
+      <div class="field"><span class="lbl">Değerler hangi miktar için?</span>
+        <div class="toggle-row" role="group" aria-label="Temel birim"><button type="button" class="tog" data-base="g" aria-pressed="${base === 'g'}">100 g</button><button type="button" class="tog" data-base="ml" aria-pressed="${base === 'ml'}">100 ml</button></div></div>
       <div class="grid2">
-        <div class="field"><label for="cf-k">Kalori (kcal)</label><input id="cf-k" class="input" inputmode="decimal"></div>
-        <div class="field"><label for="cf-p">Protein (g)</label><input id="cf-p" class="input" inputmode="decimal"></div>
-        <div class="field"><label for="cf-c">Karbonhidrat (g)</label><input id="cf-c" class="input" inputmode="decimal"></div>
-        <div class="field"><label for="cf-f">Yağ (g)</label><input id="cf-f" class="input" inputmode="decimal"></div>
-        <div class="field"><label for="cf-fb">Lif (g) – isteğe bağlı</label><input id="cf-fb" class="input" inputmode="decimal"></div>
-        <div class="field"><label for="cf-na">Sodyum (mg) – isteğe bağlı</label><input id="cf-na" class="input" inputmode="decimal"></div>
+        <div class="field"><label for="cf-k">Kalori (kcal)</label><input id="cf-k" class="input" inputmode="decimal" value="${val(e.k)}"></div>
+        <div class="field"><label for="cf-p">Protein (g)</label><input id="cf-p" class="input" inputmode="decimal" value="${val(e.p)}"></div>
+        <div class="field"><label for="cf-c">Karbonhidrat (g)</label><input id="cf-c" class="input" inputmode="decimal" value="${val(e.c)}"></div>
+        <div class="field"><label for="cf-f">Yağ (g)</label><input id="cf-f" class="input" inputmode="decimal" value="${val(e.f)}"></div>
+        <div class="field"><label for="cf-fb">Lif (g) – isteğe bağlı</label><input id="cf-fb" class="input" inputmode="decimal" value="${val(e.fb)}"></div>
+        <div class="field"><label for="cf-na">Sodyum (mg) – isteğe bağlı</label><input id="cf-na" class="input" inputmode="decimal" value="${val(e.na)}"></div>
       </div>
-      <div class="grid2">
-        <div class="field"><label for="cf-pl">Porsiyon adı – isteğe bağlı</label><input id="cf-pl" class="input" placeholder="adet, kase…"></div>
-        <div class="field"><label for="cf-pg">Porsiyon (g)</label><input id="cf-pg" class="input" inputmode="decimal"></div>
-      </div>`,
+      <p class="small muted" style="margin:-4px 4px 12px;line-height:17px">Boş bıraktığın değerler "bilinmiyor" olarak kalır, sıfır sayılmaz.</p>
+      <div class="sec" style="padding:4px 4px 6px"><h2>Porsiyonlar</h2><span class="meta" id="cf-pcount"></span></div>
+      <div id="cf-portions"></div>
+      <button type="button" class="btn block" data-padd style="margin:6px 0 4px">+ Porsiyon ekle</button>
+      <p class="small muted" style="margin:0 4px 12px;line-height:17px">Her ölçünün bu besindeki gram karşılığını yaz (ör. 1 ölçek = 30 g). Yuvarlak işaretli porsiyon, eklerken ilk seçili gelir.</p>
+      <div class="field"><label for="cf-cat">Kategori</label><select id="cf-cat" class="input">${FOOD_CATEGORIES.map(([k, l]) => `<option value="${k}" ${(e.category || 'diger') === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+      <div class="field"><label for="cf-desc">Açıklama – isteğe bağlı</label><textarea id="cf-desc" class="input" rows="2" placeholder="Marka, tat, nereden aldığın…">${esc(e.description || '')}</textarea></div>
+      <div class="field"><label for="cf-tags">Etiketler – isteğe bağlı</label><input id="cf-tags" class="input" value="${esc((e.tags || []).join(', '))}" placeholder="virgülle ayır: kahvaltı, antrenman sonrası"></div>`,
     onRight: async (api) => {
-      const v = (id) => parseNum(s.el.querySelector(id).value);
+      if (busySave) return;
+      syncRows();
+      const v = (id) => {
+        const t = s.el.querySelector(id).value.trim();
+        return t === '' ? null : parseNum(t);
+      };
       const name = s.el.querySelector('#cf-name').value.trim();
       const k = v('#cf-k');
-      if (!name || isNaN(k)) return toast('Ad ve kalori gerekli');
-      const pl = s.el.querySelector('#cf-pl').value.trim();
-      const pg = v('#cf-pg');
-      const food = await db.put('custom_foods', {
-        name,
-        alias: '',
-        k,
-        p: v('#cf-p') || 0,
-        c: v('#cf-c') || 0,
-        f: v('#cf-f') || 0,
-        fb: v('#cf-fb') || 0,
-        na: v('#cf-na') || 0,
-        ka: 0,
-        portions: pl && pg ? [[pl, pg]] : [],
-      });
+      if (!name) return toast('Besine bir ad ver');
+      if (k == null || isNaN(k) || k < 0) return toast('Kalori gerekli');
+      for (const id of ['#cf-p', '#cf-c', '#cf-f', '#cf-fb', '#cf-na']) {
+        const x = v(id);
+        if (x != null && (isNaN(x) || x < 0)) return toast('Değerler sıfır ya da pozitif sayı olmalı');
+      }
+      const pr = parsePortionRows(rows);
+      if (pr.error) return toast(pr.error, 3500);
+      busySave = true;
+      const tags = s.el.querySelector('#cf-tags').value.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 10);
+      let saved;
+      try {
+        const { custom: _c, ...keep } = e;
+        saved = await db.put('custom_foods', {
+          ...keep,
+          name,
+          alias: e.alias || '',
+          k,
+          p: v('#cf-p') ?? 0,
+          c: v('#cf-c') ?? 0,
+          f: v('#cf-f') ?? 0,
+          fb: v('#cf-fb'),
+          na: v('#cf-na'),
+          ka: e.ka ?? null,
+          base,
+          portions: pr.portions,
+          default_portion: pr.default_portion,
+          category: s.el.querySelector('#cf-cat').value,
+          description: s.el.querySelector('#cf-desc').value.trim().slice(0, 300),
+          tags,
+          source: e.source || 'manuel',
+        });
+      } catch (err) {
+        busySave = false;
+        return toast('Kaydedilemedi: ' + (err.message || err), 4000);
+      }
       api.close();
-      openAmount({ ...food, custom: true }, meal);
+      toast(existing ? 'Besin güncellendi' : `${name} kaydedildi`);
+      if (after) after(saved);
+      else if (!existing) openAmount({ ...saved, custom: true }, meal);
     },
+  });
+  const box = s.el.querySelector('#cf-portions');
+  const unitOpts = (sel) => [...UNIT_TYPES.map((u) => `<option value="${esc(u)}" ${sel === u ? 'selected' : ''}>${esc(u)}</option>`), `<option value="ozel" ${sel === 'ozel' ? 'selected' : ''}>özel ölçü…</option>`].join('');
+  const drawRows = () => {
+    box.innerHTML = rows
+      .map(
+        (r, i) => `<div class="card portion-row" data-prow="${i}" style="padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="sr-only" for="pq-${i}">Miktar</label><input id="pq-${i}" class="input num" data-pf="qty" inputmode="decimal" value="${esc(r.qty)}" style="width:62px;flex:none;text-align:center;min-height:40px;padding:6px">
+            <label class="sr-only" for="pu-${i}">Ölçü</label><select id="pu-${i}" class="input" data-pf="unit" style="flex:1;min-width:0;min-height:40px;padding:6px 10px">${unitOpts(r.unit)}</select>
+            <button type="button" class="icon-btn" data-prm="${i}" aria-label="Porsiyonu sil" style="flex:none;color:var(--sub)">${icon.close}</button>
+          </div>
+          ${r.unit === 'ozel' ? `<label class="sr-only" for="pc-${i}">Özel ölçü adı</label><input id="pc-${i}" class="input" data-pf="custom" value="${esc(r.custom)}" placeholder="Ölçünün adı (ör. bar, kapak)" style="margin-top:8px;min-height:40px">` : ''}
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+            <span class="small muted" style="flex:none">=</span>
+            <label class="sr-only" for="pg-${i}">Gram karşılığı</label><input id="pg-${i}" class="input num" data-pf="grams" inputmode="decimal" value="${esc(r.grams)}" placeholder="gram" style="flex:1;min-width:0;min-height:40px;padding:6px 10px">
+            <span class="small muted" style="flex:none">${base}</span>
+            <label class="pdef" style="display:flex;align-items:center;gap:6px;flex:none;font-size:14px"><input type="radio" name="pdef" data-pdef="${i}" ${r.def ? 'checked' : ''}>Varsayılan</label>
+          </div>
+        </div>`
+      )
+      .join('');
+    s.el.querySelector('#cf-pcount').textContent = `${rows.length} / ${MAX_PORTIONS}`;
+    s.el.querySelector('[data-padd]').disabled = rows.length >= MAX_PORTIONS;
+  };
+  const syncRows = () => {
+    box.querySelectorAll('[data-prow]').forEach((el) => {
+      const r = rows[Number(el.dataset.prow)];
+      for (const f of ['qty', 'unit', 'custom', 'grams']) {
+        const inp = el.querySelector(`[data-pf="${f}"]`);
+        if (inp) r[f] = inp.value;
+      }
+    });
+  };
+  drawRows();
+  s.el.addEventListener('change', (ev) => {
+    if (ev.target.dataset.pf === 'unit') {
+      syncRows();
+      drawRows();
+    } else if (ev.target.dataset.pdef != null) {
+      rows.forEach((r, i) => (r.def = i === Number(ev.target.dataset.pdef)));
+    }
+  });
+  s.el.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    if (b.dataset.base) {
+      base = b.dataset.base;
+      s.el.querySelectorAll('[data-base]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.base === base));
+      syncRows();
+      drawRows();
+    } else if (b.hasAttribute('data-padd')) {
+      syncRows();
+      if (rows.length >= MAX_PORTIONS) return;
+      rows.push({ qty: '1', unit: 'adet', custom: '', grams: '', def: !rows.length });
+      drawRows();
+      box.querySelector(`#pg-${rows.length - 1}`)?.focus();
+    } else if (b.dataset.prm != null) {
+      syncRows();
+      const i = Number(b.dataset.prm);
+      const wasDef = rows[i].def;
+      rows.splice(i, 1);
+      if (wasDef && rows[0]) rows[0].def = true;
+      drawRows();
+    }
   });
 }
 

@@ -1070,3 +1070,6 @@ input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webk
 
 /* PIN: yanlış denemelerden sonra bekleme */
 .lock.pin-wait .keypad button[data-k], .lock.pin-wait .keypad button[data-del] { opacity: .35; }
+
+/* Beslenme: porsiyon düzenleyici */
+.pdef input, .portion-row input[type="radio"] { accent-color: var(--accent); width: 18px; height: 18px; }
