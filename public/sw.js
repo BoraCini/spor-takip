@@ -42,6 +42,7 @@ const SHELL = [
   'js/views/ayarlar.js',
   'js/data/labs.js',
   'js/data/food_categories.js',
+  'js/recipes.js',
   'js/data/exercises.js',
   'js/views/danisman.js',
   'js/views/beslenme.js',

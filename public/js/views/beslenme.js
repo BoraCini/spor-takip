@@ -6,6 +6,7 @@ import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpendit
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
 import { FOOD_CATEGORIES } from '../data/food_categories.js';
+import { RECIPE_CATEGORIES, RECIPE_CAT_LABEL, RECIPE_TAGS, normalizeRecipe, resolveItem, recipeTotals, recipeNutrition, scaleItems, itemGrams } from '../recipes.js';
 
 let state = { tab: 'log', date: today(), collapsed: null };
 const WD = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
@@ -572,6 +573,10 @@ async function openAddFood(meal, startTab = null) {
     if (b.dataset.open) {
       const f = byId.get(b.dataset.open);
       if (!f) return;
+      if (f.recipe && !picked.size) {
+        s.close();
+        return openRecipeDetail(f, selMeal, () => openAddFood(selMeal, tab));
+      }
       openAmount(f, selMeal, null, {
         serving: serv(f),
         selecting: picked.size > 0,
@@ -973,7 +978,7 @@ async function openAmount(liveFood, meal, existing = null, opts = {}) {
       }
       <div class="sec" style="padding:4px 14px 6px"><h2>Besin değerleri</h2></div>
       <div class="card" id="fs-tbl">${tblHTML()}</div>
-      ${food.recipe ? `<button type="button" class="btn block" data-edit-recipe style="margin-top:4px">Tarifi düzenle</button>` : food.custom && !existing ? `<button type="button" class="btn block" data-edit-food style="margin-top:4px">Besini düzenle</button>` : ''}
+      ${liveFood.recipe ? `<div class="btn-row" style="margin-top:4px"><button type="button" class="btn" data-recipe-detail>Tarif ayrıntıları</button><button type="button" class="btn" data-edit-recipe>Tarifi düzenle</button></div>` : food.custom && !existing ? `<button type="button" class="btn block" data-edit-food style="margin-top:4px">Besini düzenle</button>` : ''}
       ${!food.custom && !existing ? `<button type="button" class="btn block" data-fix style="margin-top:4px">Değerleri düzelt</button>` : ''}
       ${food.custom && !existing ? `<button type="button" class="btn danger block" data-del-food style="margin-top:4px">${food.overrides ? 'Orijinal değerlere dön' : 'Listemden sil'}</button>` : ''}
       ${existing ? `<button type="button" class="btn danger block" data-del style="margin-top:12px">Kaydı sil</button>` : ''}`);
@@ -1025,7 +1030,10 @@ async function openAmount(liveFood, meal, existing = null, opts = {}) {
       refresh();
     } else if (b.hasAttribute('data-edit-recipe')) {
       s.close();
-      openRecipe(food, () => (opts.onChanged ? opts.onChanged() : refresh()));
+      openRecipe(liveFood, () => (opts.onChanged ? opts.onChanged() : refresh()));
+    } else if (b.hasAttribute('data-recipe-detail')) {
+      s.close();
+      openRecipeDetail(liveFood, selMeal, () => (opts.onChanged ? opts.onChanged() : refresh()));
     } else if (b.hasAttribute('data-edit-food')) {
       s.close();
       openCustomFood(selMeal, liveFood, () => opts.onChanged && opts.onChanged());
@@ -1100,77 +1108,110 @@ function openQuickAdd(meal) {
 }
 
 // Tarif oluşturucu: malzemeleri gir, porsiyon başına değerleri hesapla
-async function openRecipe(existing, after) {
+// ---------- Tarifler ----------
+// Tarif custom_foods'ta normal bir besin olarak durur (aramada, Tarifler sekmesinde, günlüğe eklenebilir).
+// Hesap gram üzerinden; her malzemenin 100 g değerleri anlık görüntü olarak tarifte de saklanır, böylece
+// malzeme sonradan silinse bile tarif bozulmaz. Pişmiş son ağırlık girilirse 100 g ve porsiyon ona göre hesaplanır.
+const trq = (n) => String(Math.round(Number(n) * 100) / 100).replace('.', ',');
+const nutLine = (t, sv = 1, d = 1) => `P ${fmt(t.p / sv, d)} · K ${fmt(t.c / sv, d)} · Y ${fmt(t.f / sv, d)} g`;
+const optTxt = (v, sv, unit, d = 0) => (v == null ? 'bilinmiyor' : `${fmt(v / sv, d)} ${unit}`);
+
+async function openRecipe(existing, after, { copy = false } = {}) {
   const custom = markCustom(await db.list('custom_foods'));
-  const pool = custom.filter((c) => !existing || c.id !== existing.id);
-  const ingr = existing
-    ? existing.recipe.items.map((it) => ({ ...it, typed: true, food: findFood(it.food_id, pool) })).filter((x) => x.food)
-    : [];
-  let servings = existing ? existing.recipe.servings : 4;
+  const pool = custom.filter((c) => !existing || copy || c.id !== existing.id);
+  const R = normalizeRecipe(existing);
+  // malzemeler: { food_id, name, grams, unit, qty, snap, food, per100, status }
+  let ingr = R.items.map((it) => resolveItem({ ...it, unit: it.unit || 'gram', qty: it.qty ?? it.grams }, pool));
+  let servings = R.servings;
+  let scaleOn = true;
+  let steps = [...R.steps];
+  let tags = [...R.tags];
   let done = false;
-  const totals = () => {
-    const t = { g: 0, k: 0, p: 0, c: 0, f: 0, fb: 0, na: 0, ka: 0 };
-    for (const x of ingr) {
-      const r = (x.grams || 0) / 100;
-      t.g += x.grams || 0;
-      t.k += (x.food.k || 0) * r;
-      t.p += (x.food.p || 0) * r;
-      t.c += (x.food.c || 0) * r;
-      t.f += (x.food.f || 0) * r;
-      t.fb += (x.food.fb || 0) * r;
-      t.na += (x.food.na || 0) * r;
-      t.ka += (x.food.ka || 0) * r;
-    }
-    return t;
-  };
+  let saving = false;
   const s = openSheet({
-    title: existing ? 'Tarifi düzenle' : 'Yeni tarif',
+    title: existing && !copy ? 'Tarifi düzenle' : 'Yeni tarif',
     leftLabel: 'Vazgeç',
     rightLabel: 'Kaydet',
     onClose: () => {
       if (!done && after) after();
     },
     body: `
-      <div class="field"><label for="rc-name">Tarifin adı</label><input id="rc-name" class="input" value="${esc(existing ? existing.name : '')}" placeholder="Örn. Annemin mercimek köftesi"></div>
-      <div class="field"><label for="rc-serv">Kaç porsiyon çıkıyor?</label>
-        <div class="stepper">
-          <button type="button" data-sstep="-1" aria-label="Azalt">−</button>
-          <input id="rc-serv" inputmode="numeric" value="${servings}">
-          <button type="button" data-sstep="1" aria-label="Artır">+</button>
-        </div></div>
-      <div class="sec" style="padding:4px 14px 6px"><h2>Malzemeler</h2><span class="meta" id="rc-count"></span></div>
-      <div class="card flush" id="rc-items"></div>
+      <div class="field"><label for="rc-name">Tarifin adı</label><input id="rc-name" class="input" value="${esc(existing ? (copy ? cleanName(existing.name) + ' (kopya)' : cleanName(existing.name)) : '')}" placeholder="Örn. Tavuklu bulgur pilavı"></div>
+      <div class="grid2">
+        <div class="field"><label for="rc-cat">Kategori</label><select id="rc-cat" class="input">${RECIPE_CATEGORIES.map(([k, l]) => `<option value="${k}" ${R.category === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+        <div class="field"><label for="rc-serv">Porsiyon sayısı</label>
+          <div class="stepper"><button type="button" data-sstep="-0.5" aria-label="Azalt">−</button><input id="rc-serv" inputmode="decimal" value="${trq(servings)}"><button type="button" data-sstep="0.5" aria-label="Artır">+</button></div></div>
+      </div>
+      <label class="kv" style="border-top:0;min-height:36px"><span class="k small">Porsiyon sayısı değişince malzemeleri ölçekle</span><span class="switch"><input id="rc-scale" type="checkbox" checked><span></span></span></label>
+      <div class="field"><label for="rc-desc">Kısa açıklama – isteğe bağlı</label><textarea id="rc-desc" class="input" rows="2">${esc(R.description)}</textarea></div>
+      <div class="grid2">
+        <div class="field"><label for="rc-prep">Hazırlama (dk)</label><input id="rc-prep" class="input" inputmode="numeric" value="${R.prep_min ?? ''}"></div>
+        <div class="field"><label for="rc-cook">Pişirme (dk)</label><input id="rc-cook" class="input" inputmode="numeric" value="${R.cook_min ?? ''}"></div>
+      </div>
+      <div class="field"><span class="lbl">Etiketler</span><div class="toggle-row" id="rc-tags"></div>
+        <input id="rc-tag-new" class="input" placeholder="Kendi etiketin (Enter ile ekle)" style="margin-top:6px"></div>
+      <div class="sec" style="padding:4px 4px 6px"><h2>Malzemeler</h2><span class="meta" id="rc-count"></span></div>
+      <div id="rc-items"></div>
       <label class="sr-only" for="rc-q">Malzeme ara</label>
-      <input id="rc-q" class="input" type="search" placeholder="Malzeme ara ve ekle: bulgur, soğan…" autocomplete="off" style="margin-bottom:8px">
+      <input id="rc-q" class="input" type="search" placeholder="Malzeme ara ve ekle: yumurta, bulgur…" autocomplete="off" style="margin:4px 0 8px">
       <div id="rc-res"></div>
+      <div class="field"><label for="rc-cooked">Pişmiş son ağırlık (g) – isteğe bağlı</label><input id="rc-cooked" class="input" inputmode="decimal" value="${R.cooked_weight ? trq(R.cooked_weight) : ''}" placeholder="Tencerenin pişmiş hâli, kap hariç"></div>
       <div class="card" id="rc-tot"></div>
-      <p class="small muted" style="margin:0 4px 12px;line-height:18px">Malzemeleri çiğ ağırlıklarıyla gir. Kaydettiğin tarif "Tarifler" sekmesinde ve aramada çıkar; Coach da onu tanır.</p>
-      ${existing ? '<button type="button" class="btn danger block" data-del-recipe>Tarifi sil</button>' : ''}`,
+      <div class="sec" style="padding:4px 4px 6px"><h2>Hazırlanışı</h2></div>
+      <div id="rc-steps"></div>
+      <button type="button" class="btn block" data-step-add style="margin:4px 0 12px">+ Adım ekle</button>
+      ${existing && !copy ? '<button type="button" class="btn danger block" data-del-recipe>Tarifi sil</button>' : ''}`,
     onRight: async (api) => {
+      if (saving) return;
+      syncSteps();
       const name = s.el.querySelector('#rc-name').value.trim();
       if (!name) return toast('Tarife bir ad ver');
       if (!ingr.length) return toast('En az bir malzeme ekle');
-      const t = totals();
-      if (!t.g) return toast('Malzeme miktarlarını gir');
-      const per = (x) => Math.round((x / t.g) * 100 * 10) / 10;
+      if (ingr.some((x) => !(x.grams > 0))) return toast('Her malzemenin miktarı sıfırdan büyük olmalı');
+      const { totals, missing } = recipeTotals(ingr);
+      if (missing.length) return toast(`Değeri bilinmeyen malzeme var: ${missing.join(', ')}. Çıkar ya da yerine besin seç.`, 4500);
+      const cooked = parseNum(s.el.querySelector('#rc-cooked').value);
+      if (s.el.querySelector('#rc-cooked').value.trim() && !(cooked > 0)) return toast('Pişmiş ağırlık sıfırdan büyük olmalı');
+      const nu = recipeNutrition(totals, servings, cooked > 0 ? cooked : null);
+      saving = true;
+      let saved;
+      try {
+        const keep = existing && !copy ? (({ custom: _c, ...rest }) => rest)(existing) : {};
+        saved = await db.put('custom_foods', {
+          ...keep,
+          ...(existing && !copy ? { id: existing.id } : {}),
+          name,
+          alias: 'tarif',
+          k: nu.k,
+          p: nu.p,
+          c: nu.c,
+          f: nu.f,
+          fb: nu.fb,
+          na: nu.na,
+          ka: nu.ka,
+          portions: [['porsiyon', nu.portion_g]],
+          default_portion: 'porsiyon',
+          category: keep.category || 'yemek',
+          source: 'tarif',
+          recipe: {
+            servings,
+            items: ingr.map((x) => ({ food_id: x.food_id || null, name: x.name, grams: x.grams, unit: x.unit, qty: x.qty, snap: x.per100 })),
+            cooked_weight: cooked > 0 ? cooked : null,
+            category: s.el.querySelector('#rc-cat').value,
+            description: s.el.querySelector('#rc-desc').value.trim().slice(0, 500),
+            prep_min: parseInt(s.el.querySelector('#rc-prep').value, 10) || null,
+            cook_min: parseInt(s.el.querySelector('#rc-cook').value, 10) || null,
+            tags,
+            steps: steps.map((x) => x.trim()).filter(Boolean),
+          },
+        });
+      } catch (err) {
+        saving = false;
+        return toast('Kaydedilemedi: ' + (err.message || err), 4000);
+      }
       done = true;
-      const saved = await db.put('custom_foods', {
-        ...(existing ? { id: existing.id } : {}),
-        name,
-        alias: 'tarif',
-        k: Math.round((t.k / t.g) * 100),
-        p: per(t.p),
-        c: per(t.c),
-        f: per(t.f),
-        fb: per(t.fb),
-        na: Math.round((t.na / t.g) * 100),
-        ka: Math.round((t.ka / t.g) * 100),
-        portions: [['porsiyon', Math.round(t.g / servings)]],
-        recipe: { servings, items: ingr.map((x) => ({ food_id: x.food.id, name: cleanName(x.food.name), grams: x.grams })) },
-        source: 'tarif',
-      });
       api.close();
-      toast(existing ? 'Tarif güncellendi' : 'Tarif kaydedildi');
+      toast(existing && !copy ? 'Tarif güncellendi' : 'Tarif kaydedildi');
       if (after) after(saved);
       else refresh();
     },
@@ -1178,75 +1219,148 @@ async function openRecipe(existing, after) {
   const itemsEl = s.el.querySelector('#rc-items');
   const resEl = s.el.querySelector('#rc-res');
   const totEl = s.el.querySelector('#rc-tot');
+  const stepsEl = s.el.querySelector('#rc-steps');
   const q = s.el.querySelector('#rc-q');
+
+  const drawTags = () => {
+    const all = [...new Set([...RECIPE_TAGS, ...tags])];
+    s.el.querySelector('#rc-tags').innerHTML = all.map((t) => `<button type="button" class="tog" data-tag="${esc(t)}" aria-pressed="${tags.includes(t)}">${esc(t)}</button>`).join('');
+  };
   const drawTot = () => {
-    const t = totals();
+    const { totals: t, missing } = recipeTotals(ingr);
+    const cookedV = parseNum(s.el.querySelector('#rc-cooked').value);
+    const nu = recipeNutrition(t, servings, cookedV > 0 ? cookedV : null);
     const sv = servings || 1;
     s.el.querySelector('#rc-count').textContent = ingr.length ? `${ingr.length} malzeme` : '';
     totEl.innerHTML = `
-      <div class="kv"><span class="k">Toplam</span><span class="v">${fmt(t.g)} g · ${fmt(t.k)} kcal</span></div>
-      <div class="kv"><span class="k">1 porsiyon</span><span class="v"><b>${fmt(t.k / sv)} kcal</b> · ${fmt(t.g / sv)} g</span></div>
-      <div class="kv"><span class="k">Porsiyonda P · K · Y</span><span class="v">${fmt(t.p / sv, 1)} · ${fmt(t.c / sv, 1)} · ${fmt(t.f / sv, 1)} g</span></div>`;
+      ${missing.length ? `<p class="small warn" style="margin:0 0 8px;line-height:18px">Değeri bilinmeyen malzeme: ${esc(missing.join(', '))}. Toplamlar eksik; kaydetmeden önce çıkar ya da yerine besin seç.</p>` : ''}
+      <div class="kv" style="border-top:0"><span class="k">Toplam</span><span class="v">${fmt(t.k)} kcal · ${nutLine(t, 1, 0)}</span></div>
+      <div class="kv"><span class="k">1 porsiyon (${fmt(nu.portion_g)} g)</span><span class="v"><b>${fmt(t.k / sv)} kcal</b> · ${nutLine(t, sv)}</span></div>
+      <div class="kv"><span class="k">100 g</span><span class="v">${fmt(nu.k)} kcal · P ${fmt(nu.p, 1)} · K ${fmt(nu.c, 1)} · Y ${fmt(nu.f, 1)}</span></div>
+      <div class="kv"><span class="k">Lif · sodyum · potasyum (toplam)</span><span class="v">${optTxt(t.fb, 1, 'g', 1)} · ${optTxt(t.na, 1, 'mg')} · ${optTxt(t.ka, 1, 'mg')}</span></div>
+      <p class="small muted" style="margin:6px 0 0;line-height:17px">${nu.basis.cooked ? `100 g ve porsiyon, girdiğin pişmiş son ağırlığa (${fmt(nu.basis.grams)} g) göre hesaplandı.` : `Pişmiş ağırlık girilmedi: 100 g ve porsiyon, çiğ malzemelerin toplam ağırlığına (${fmt(t.g)} g) göre hesaplanıyor. Pişince su kaybı ya da emme olacağı için pişmiş ağırlığı tartıp girersen daha doğru olur.`}</p>`;
+  };
+  const unitOpts = (x) => {
+    const ps = x.food ? portionsOf(x.food) : [];
+    return [['gram', 1], ...ps].map(([l, g]) => `<option value="${esc(l)}" ${x.unit === l ? 'selected' : ''}>${l === 'gram' ? 'g' : `${esc(l)} (${fmt(g)} g)`}</option>`).join('');
   };
   const drawItems = () => {
     itemsEl.innerHTML = ingr.length
-      ? ingr
-          .map(
-            (x, i) => `<div class="row">
-              <span class="row-main"><span class="row-title normal">${esc(cleanName(x.food.name))}</span>
-              <span class="row-sub num" data-ik="${i}">${fmt(((x.food.k || 0) * (x.grams || 0)) / 100)} kcal</span></span>
-              <label class="sr-only" for="rg-${i}">${esc(cleanName(x.food.name))} gram</label>
-              <input id="rg-${i}" class="input num" data-g="${i}" inputmode="decimal" value="${x.typed ? String(x.grams).replace('.', ',') : ''}" placeholder="${String(x.def ?? x.grams).replace('.', ',')}" style="width:76px;flex:none;text-align:right;min-height:38px;padding:6px 10px">
-              <span class="small muted" style="flex:none">g</span>
-              <button type="button" class="icon-btn" data-rm="${i}" aria-label="${esc(cleanName(x.food.name))} çıkar" style="flex:none;color:var(--sub)">${icon.close}</button>
-            </div>`
-          )
-          .join('')
+      ? `<div class="card flush">${ingr
+          .map((x, i) => {
+            const kc = x.per100 ? fmt(((x.per100.k || 0) * (x.grams || 0)) / 100) + ' kcal' : 'değeri bilinmiyor';
+            const note = x.status === 'snapshot' ? ' · kayıtlı değerlerle (besin listende yok)' : x.status === 'missing' ? ' · besin bulunamadı' : '';
+            return `<div class="row rc-row" style="flex-wrap:wrap;gap:6px">
+              <span class="row-main" style="flex:1 1 100%"><span class="row-title normal">${esc(cleanName(x.name))}</span>
+                <span class="row-sub num ${x.status === 'missing' ? 'warn' : ''}" data-ik="${i}">${fmt(x.grams)} g · ${kc}${note}</span></span>
+              <label class="sr-only" for="rq-${i}">${esc(x.name)} miktar</label>
+              <input id="rq-${i}" class="input num" data-iq="${i}" inputmode="decimal" value="${trq(x.qty ?? x.grams)}" style="width:72px;flex:none;text-align:right;min-height:38px;padding:6px 8px">
+              <label class="sr-only" for="ru-${i}">${esc(x.name)} ölçü</label>
+              <select id="ru-${i}" class="input" data-iu="${i}" style="flex:1;min-width:0;min-height:38px;padding:6px 8px" ${x.food ? '' : 'disabled'}>${unitOpts(x)}</select>
+              <button type="button" class="icon-btn" data-rm="${i}" aria-label="${esc(x.name)} çıkar" style="flex:none;color:var(--sub)">${icon.close}</button>
+            </div>`;
+          })
+          .join('')}</div>`
       : `<div class="empty">Henüz malzeme yok. Aşağıdan ara ve ekle.</div>`;
     drawTot();
   };
+  const drawSteps = () => {
+    stepsEl.innerHTML = steps.length
+      ? steps
+          .map(
+            (t, i) => `<div class="card rc-step" style="padding:8px 10px;margin-bottom:8px;display:flex;gap:8px;align-items:flex-start">
+              <b style="flex:none;min-width:22px;padding-top:9px">${i + 1}.</b>
+              <label class="sr-only" for="rs-${i}">Adım ${i + 1}</label>
+              <textarea id="rs-${i}" class="input" data-st="${i}" rows="2" style="flex:1;min-width:0">${esc(t)}</textarea>
+              <div style="display:flex;flex-direction:column;gap:2px;flex:none">
+                <button type="button" class="icon-btn" data-sup="${i}" aria-label="Adım ${i + 1} yukarı" ${i === 0 ? 'disabled' : ''}>↑</button>
+                <button type="button" class="icon-btn" data-sdown="${i}" aria-label="Adım ${i + 1} aşağı" ${i === steps.length - 1 ? 'disabled' : ''}>↓</button>
+                <button type="button" class="icon-btn" data-srm="${i}" aria-label="Adım ${i + 1} sil" style="color:var(--sub)">${icon.close}</button>
+              </div></div>`
+          )
+          .join('')
+      : `<p class="small muted" style="margin:0 4px 8px">Henüz adım yok.</p>`;
+  };
+  const syncSteps = () => stepsEl.querySelectorAll('[data-st]').forEach((el) => (steps[Number(el.dataset.st)] = el.value));
   let found = [];
+  let seq = 0;
   const drawRes = () => {
+    const my = ++seq;
     const v = q.value.trim();
     found = v ? searchFoods(v, pool).slice(0, 8) : [];
+    if (my !== seq) return;
     resEl.innerHTML = found.length
       ? `<div class="card flush search-res" style="margin-bottom:10px">${found
           .map((f, i) => {
             const d = defaultServing(f);
             return `<button type="button" class="row" data-add="${i}"><span class="row-main"><span class="row-title normal">${esc(cleanName(f.name))}</span>
-              <span class="row-sub">${esc(servingText(d.unit, d.qty, d.grams))} · ${fmt(nutrientsFor(f, d.grams).kcal)} kcal</span></span><span class="pill" aria-hidden="true">+</span></button>`;
+              <span class="row-sub">${esc(servingText(d.unit, d.qty, d.grams, baseUnit(f)))} · ${fmt(nutrientsFor(f, d.grams).kcal)} kcal</span></span><span class="pill" aria-hidden="true">+</span></button>`;
           })
           .join('')}</div>`
       : v
       ? `<div class="empty" style="padding:8px 0 14px">Bulunamadı. Önce "Yeni besin" ile ekleyebilirsin.</div>`
       : '';
   };
+  drawTags();
   drawItems();
+  drawSteps();
   q.addEventListener('input', drawRes);
+  s.el.querySelector('#rc-scale').addEventListener('change', (e) => (scaleOn = e.target.checked));
+  s.el.querySelector('#rc-tag-new').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const t = e.target.value.trim().slice(0, 30);
+    if (t && !tags.includes(t) && tags.length < 12) tags.push(t);
+    e.target.value = '';
+    drawTags();
+  });
+  const setServings = (v) => {
+    if (!(v > 0) || v > 100) return;
+    const old = servings;
+    servings = Math.round(v * 100) / 100;
+    if (scaleOn && old > 0 && servings !== old) {
+      const f = servings / old;
+      ingr = scaleItems(ingr, f);
+      const cEl = s.el.querySelector('#rc-cooked');
+      const cv = parseNum(cEl.value);
+      if (cv > 0) cEl.value = trq(Math.round(cv * f * 10) / 10);
+      drawItems();
+    } else drawTot();
+  };
+  const recalcItem = (i) => {
+    const x = ingr[i];
+    const g = x.food ? itemGrams(x.food, x.unit, x.qty) : parseNum(String(x.qty));
+    x.grams = g > 0 ? g : 0;
+    const el = s.el.querySelector(`[data-ik="${i}"]`);
+    if (el) el.textContent = `${fmt(x.grams)} g · ${x.per100 ? fmt(((x.per100.k || 0) * x.grams) / 100) + ' kcal' : 'değeri bilinmiyor'}`;
+    drawTot();
+  };
   s.el.addEventListener('input', (e) => {
-    const i = e.target.dataset.g;
-    if (i != null) {
-      const empty = e.target.value.trim() === '';
-      const v = empty ? ingr[i].def ?? 0 : parseNum(e.target.value);
-      ingr[i].typed = !empty;
-      ingr[i].grams = isNaN(v) ? 0 : v;
-      s.el.querySelector(`[data-ik="${i}"]`).textContent = `${fmt(((ingr[i].food.k || 0) * ingr[i].grams) / 100)} kcal`;
-      drawTot();
-    } else if (e.target.id === 'rc-serv') {
-      const v = parseInt(e.target.value, 10);
-      if (v > 0) {
-        servings = v;
-        drawTot();
-      }
-    }
+    const t = e.target;
+    if (t.dataset.iq != null) {
+      ingr[Number(t.dataset.iq)].qty = parseNum(t.value);
+      recalcItem(Number(t.dataset.iq));
+    } else if (t.id === 'rc-cooked') drawTot();
+  });
+  s.el.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.iu != null) {
+      const i = Number(t.dataset.iu);
+      const x = ingr[i];
+      // ölçü değişince gramı koru, miktarı yeni ölçüye çevir
+      const p = t.value === 'gram' ? 1 : (portionsOf(x.food).find((pp) => pp[0] === t.value) || [null, 0])[1];
+      x.unit = t.value;
+      x.qty = p ? Math.round((x.grams / p) * 100) / 100 : x.qty;
+      drawItems();
+    } else if (t.id === 'rc-serv') setServings(parseNum(t.value));
   });
   s.el.addEventListener('click', async (e) => {
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.add != null) {
       const f = found[Number(b.dataset.add)];
-      const dg = defaultServing(f).grams;
-      ingr.push({ food: f, grams: dg, def: dg, typed: false });
+      const d = defaultServing(f);
+      ingr.push(resolveItem({ food_id: f.id, name: cleanName(f.name), grams: d.grams, unit: d.unit, qty: d.qty }, [f, ...pool]));
       q.value = '';
       drawRes();
       drawItems();
@@ -1254,16 +1368,98 @@ async function openRecipe(existing, after) {
       ingr.splice(Number(b.dataset.rm), 1);
       drawItems();
     } else if (b.dataset.sstep) {
-      servings = Math.max(1, servings + Number(b.dataset.sstep));
-      s.el.querySelector('#rc-serv').value = servings;
-      drawTot();
+      setServings(Math.max(0.5, servings + Number(b.dataset.sstep)));
+      s.el.querySelector('#rc-serv').value = trq(servings);
+    } else if (b.dataset.tag) {
+      const t = b.dataset.tag;
+      tags = tags.includes(t) ? tags.filter((x) => x !== t) : [...tags, t];
+      drawTags();
+    } else if (b.hasAttribute('data-step-add')) {
+      syncSteps();
+      if (steps.length >= 30) return;
+      steps.push('');
+      drawSteps();
+      stepsEl.querySelector(`#rs-${steps.length - 1}`)?.focus();
+    } else if (b.dataset.sup != null || b.dataset.sdown != null) {
+      syncSteps();
+      const i = Number(b.dataset.sup ?? b.dataset.sdown);
+      const j = b.dataset.sup != null ? i - 1 : i + 1;
+      if (j < 0 || j >= steps.length) return;
+      [steps[i], steps[j]] = [steps[j], steps[i]];
+      drawSteps();
+    } else if (b.dataset.srm != null) {
+      syncSteps();
+      steps.splice(Number(b.dataset.srm), 1);
+      drawSteps();
     } else if (b.hasAttribute('data-del-recipe')) {
-      if (!(await confirmSheet({ title: 'Tarifi sil', text: `"${existing.name}" silinsin mi? Daha önceki kayıtların etkilenmez.`, okLabel: 'Sil', danger: true }))) return;
-      await db.remove('custom_foods', existing.id);
+      if (!(await confirmSheet({ title: 'Tarifi sil', text: `"${cleanName(existing.name)}" silinsin mi? Daha önceki günlük kayıtların etkilenmez.`, okLabel: 'Sil', danger: true }))) return;
+      try {
+        await db.remove('custom_foods', existing.id);
+      } catch (err) {
+        return toast('Silinemedi: ' + (err.message || err), 4000);
+      }
       done = true;
       s.close();
       toast('Tarif silindi');
       if (after) after();
+    }
+  });
+}
+
+// Tarif detay ekranı: bilgiler, malzemeler, adımlar, toplam / porsiyon / 100 g değerleri ve işlemler
+async function openRecipeDetail(food, meal, after = null) {
+  const custom = markCustom(await db.list('custom_foods'));
+  const R = normalizeRecipe(food);
+  const items = R.items.map((it) => resolveItem(it, custom.filter((c) => c.id !== food.id)));
+  const { totals: t, missing } = recipeTotals(items);
+  const nu = recipeNutrition(t, R.servings, R.cooked_weight);
+  const sv = R.servings || 1;
+  const s = openSheet({
+    title: cleanName(food.name),
+    body: `
+      <p class="small muted" style="margin:-2px 4px 10px;text-align:center">${esc(RECIPE_CAT_LABEL[R.category] || 'Tarif')}${R.prep_min ? ` · hazırlama ${R.prep_min} dk` : ''}${R.cook_min ? ` · pişirme ${R.cook_min} dk` : ''} · ${trq(sv)} porsiyon</p>
+      ${R.tags.length ? `<div class="toggle-row" style="justify-content:center;margin-bottom:10px">${R.tags.map((x) => `<span class="tog" aria-disabled="true">${esc(x)}</span>`).join('')}</div>` : ''}
+      ${R.description ? `<p style="margin:0 4px 12px;font-size:15px;line-height:21px">${esc(R.description)}</p>` : ''}
+      <div class="card">
+        ${missing.length ? `<p class="small warn" style="margin:0 0 8px">Değeri bilinmeyen malzeme: ${esc(missing.join(', '))}. Aşağıdaki değerler eksik olabilir.</p>` : ''}
+        <div class="kv" style="border-top:0"><span class="k">1 porsiyon (${fmt(nu.portion_g)} g)</span><span class="v"><b>${fmt(t.k / sv)} kcal</b></span></div>
+        <div class="kv"><span class="k">Porsiyonda P · K · Y</span><span class="v">${nutLine(t, sv)}</span></div>
+        <div class="kv"><span class="k">Porsiyonda lif · sodyum · potasyum</span><span class="v">${optTxt(t.fb, sv, 'g', 1)} · ${optTxt(t.na, sv, 'mg')} · ${optTxt(t.ka, sv, 'mg')}</span></div>
+        <div class="kv"><span class="k">Toplam</span><span class="v">${fmt(t.k)} kcal · ${nutLine(t, 1, 0)}</span></div>
+        <div class="kv"><span class="k">100 g</span><span class="v">${fmt(nu.k)} kcal · P ${fmt(nu.p, 1)} · K ${fmt(nu.c, 1)} · Y ${fmt(nu.f, 1)}</span></div>
+        <p class="small muted" style="margin:6px 0 0;line-height:17px">${nu.basis.cooked ? `Pişmiş son ağırlık (${fmt(nu.basis.grams)} g) üzerinden.` : `Çiğ malzemelerin toplam ağırlığı (${fmt(t.g)} g) üzerinden; pişmiş ağırlık girilmedi.`}</p>
+      </div>
+      <div class="btn-row" style="margin-bottom:12px"><button type="button" class="btn primary" data-log>Günlüğe ekle</button><button type="button" class="btn" data-edit>Düzenle</button></div>
+      <div class="sec" style="padding:4px 4px 6px"><h2>Malzemeler</h2><span class="meta">${items.length}</span></div>
+      <div class="card flush">${items
+        .map((x) => `<div class="row"><span class="row-main"><span class="row-title normal">${esc(cleanName(x.name))}</span><span class="row-sub ${x.status === 'missing' ? 'warn' : ''}">${x.unit && x.unit !== 'gram' ? `${trq(x.qty)} ${esc(x.unit)} · ` : ''}${fmt(x.grams)} g${x.status === 'snapshot' ? ' · kayıtlı değerlerle' : x.status === 'missing' ? ' · değeri bilinmiyor' : ''}</span></span><span class="row-end">${x.per100 ? fmt(((x.per100.k || 0) * x.grams) / 100) : '–'}</span></div>`)
+        .join('')}</div>
+      ${R.steps.length ? `<div class="sec" style="padding:4px 4px 6px"><h2>Hazırlanışı</h2></div><ol class="card" style="margin:0 0 12px;padding:12px 14px 12px 34px;line-height:22px">${R.steps.map((x) => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')}</ol>` : ''}
+      <div class="btn-row"><button type="button" class="btn" data-copy>Kopyala</button><button type="button" class="btn danger" data-del style="background:var(--card)">Sil</button></div>`,
+  });
+  s.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const back = () => (after ? after() : refresh());
+    if (b.hasAttribute('data-log')) {
+      s.close();
+      openAmount(food, meal, null, { onLogged: () => refresh(), onChanged: back });
+    } else if (b.hasAttribute('data-edit')) {
+      s.close();
+      openRecipe(food, back);
+    } else if (b.hasAttribute('data-copy')) {
+      s.close();
+      openRecipe(food, back, { copy: true });
+    } else if (b.hasAttribute('data-del')) {
+      if (!(await confirmSheet({ title: 'Tarifi sil', text: `"${cleanName(food.name)}" silinsin mi? Daha önceki günlük kayıtların etkilenmez.`, okLabel: 'Sil', danger: true }))) return;
+      try {
+        await db.remove('custom_foods', food.id);
+      } catch (err) {
+        return toast('Silinemedi: ' + (err.message || err), 4000);
+      }
+      s.close();
+      toast('Tarif silindi');
+      back();
     }
   });
 }
