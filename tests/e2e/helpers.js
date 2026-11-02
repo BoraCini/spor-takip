@@ -10,6 +10,8 @@ export async function onboard(page) {
 }
 export async function go(page, hash, wait = 1200) {
   await page.goto('/#/' + hash);
+  // günlük kilo sorusu açılışta gecikmeli gelebilir; testlerde tıklamaları engellemesin
+  await page.addStyleTag({ content: '.wprompt-back{display:none!important}' });
   await page.waitForTimeout(wait);
   await page.evaluate(() => document.querySelectorAll('.wprompt-back').forEach((e) => e.remove()));
 }

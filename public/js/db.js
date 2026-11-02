@@ -35,7 +35,7 @@ export const STORES = [
 ];
 
 // Dışa aktarmaya girmeyecek gizli ayarlar
-const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last', 'cloud_v2', '_health', 'cloud_last_counts', 'cloud_hold', 'inbox_seen', 'cloud_v3', 'cloud_loc_refresh', 'pin_len', 'pin_fail', 'pin_upgrade_asked'];
+const SECRET_SETTINGS = ['api_key', 'pin_hash', 'pin_salt', 'push_token', 'push_enabled', 'push_hash', 'faceid_cred', 'cloud_pass', 'cloud_last', 'inbox_token', 'inbox_last', 'cloud_v2', '_health', 'cloud_last_counts', 'cloud_hold', 'inbox_seen', 'cloud_v3', 'cloud_loc_refresh', 'pin_len', 'pin_fail', 'pin_upgrade_asked', 'seen_version'];
 
 // ---------- Hatalar ----------
 // Veritabanı hataları üst katmana anlamlı kodlarla iletilir; hiçbir hata boş liste ya da yeni kullanıcı gibi gösterilmez.
