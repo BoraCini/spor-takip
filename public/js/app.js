@@ -5,7 +5,7 @@ import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 import { checkWhatsNew, markVersionSeen } from './changelog.js';
 
-export const APP_VERSION = '2.2.1';
+export const APP_VERSION = '2.3.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -489,6 +489,8 @@ async function start() {
     }
     dailyWeight();
   } else await markVersionSeen(APP_VERSION).catch(() => {});
+  // Arka planda: paketli ürün listesini hazırla (aramada beklemesin, çevrimdışı da kullanılsın)
+  setTimeout(() => import('./data/packaged.js').then((m) => m.loadPackaged()).catch(() => {}), 4000);
   // Arka planda: Apple Sağlık kutusunu al, günlük şifreli bulut yedeği
   import('./cloud.js').then(async (c) => {
     if (await c.pullInbox()) refresh();

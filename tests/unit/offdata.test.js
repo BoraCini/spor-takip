@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toItem, tidyName, parseQuantity, FIELDS } from '../../scripts/build-off-tr.mjs';
+import { toItem, tidyName, parseQuantity, usefulName, FIELDS } from '../../scripts/build-off-tr.mjs';
 
 const row = (o = {}) => ({
   code: '8690504011112',
@@ -33,9 +33,18 @@ describe('Open Food Facts → paketli ürün listesi', () => {
     const it = obj(toItem(row({ product_name: 'Ayran', brands: 'Eker', 'energy-kcal_100g': '', energy_100g: '180', proteins_100g: '2', carbohydrates_100g: '3.5', fat_100g: '2.3', fiber_100g: '', salt_100g: '', quantity: '1 L', serving_quantity: '' })));
     expect(it).toMatchObject({ name: 'Eker Ayran', k: 43, ml: 1, pack: 1000, serving: 0, fb: null, na: null });
   });
+  it('ayırt edici olmayan adlar alınmaz', () => {
+    expect(usefulName('Ülker', 'Ülker')).toBe(false);
+    expect(usefulName('Ayran', '')).toBe(false);
+    expect(usefulName('Burçak Sultani', '')).toBe(true);
+    expect(usefulName('Ayran', 'Sütaş')).toBe(true);
+    expect(toItem(row({ product_name: 'ÜLKER', brands: 'Ülker' }))).toBeNull();
+  });
   it('ad düzeltme ve miktar okuma', () => {
     expect(tidyName('  ÜLKER ÇİKOLATALI   GOFRET ')).toBe('Ülker Çikolatalı Gofret');
     expect(tidyName('Süzme Yoğurt')).toBe('Süzme Yoğurt');
+    expect(tidyName('tat')).toBe('Tat');
+    expect(tidyName('iÇim')).toBe('iÇim'); // karışık yazım olduğu gibi kalır
     expect(parseQuantity('500 g')).toEqual({ amount: 500, ml: false });
     expect(parseQuantity('1,5 L')).toEqual({ amount: 1500, ml: true });
     expect(parseQuantity('33 cl')).toEqual({ amount: 330, ml: true });

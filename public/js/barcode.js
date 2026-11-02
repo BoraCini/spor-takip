@@ -173,18 +173,26 @@ export async function fetchProduct(code) {
     p: round1(num(n.proteins_100g) ?? 0),
     c: round1(num(n.carbohydrates_100g) ?? 0),
     f: round1(num(n.fat_100g) ?? 0),
-    fb: round1(num(n.fiber_100g) ?? 0),
-    na: sodium == null ? 0 : Math.round(sodium * 1000),
-    ka: num(n.potassium_100g) == null ? 0 : Math.round(num(n.potassium_100g) * 1000),
+    // bilinmeyen değerler sıfır değil boş (null) kalır
+    fb: num(n.fiber_100g) == null ? null : round1(num(n.fiber_100g)),
+    na: sodium == null ? null : Math.round(sodium * 1000),
+    ka: num(n.potassium_100g) == null ? null : Math.round(num(n.potassium_100g) * 1000),
     portions: serving && serving > 0 ? [['porsiyon', round1(serving)]] : [],
     source: 'Open Food Facts',
   };
 }
 
-// Barkod → kayıtlı besin (önce kendi listen, sonra Open Food Facts). Kullanıcı değerleri onaylar.
+// Barkod → besin: önce kendi listen, sonra uygulamadaki paketli ürün listesi (çevrimdışı da çalışır),
+// en son Open Food Facts (internet). Paketli listeden gelen ürün kaydedilmeden doğrudan döner (packaged: true).
 export async function foodFromBarcode(code) {
   const mine = (await db.list('custom_foods', (f) => f.barcode === code))[0];
   if (mine) return mine;
+  try {
+    const { loadPackaged, packagedByBarcode } = await import('./data/packaged.js');
+    await Promise.race([loadPackaged(), new Promise((r) => setTimeout(r, 4000))]);
+    const local = packagedByBarcode(code);
+    if (local) return local;
+  } catch {}
   let prod = null;
   try {
     toast('Ürün aranıyor…', 1500);
@@ -192,7 +200,7 @@ export async function foodFromBarcode(code) {
   } catch (e) {
     toast(e.message, 3500);
   }
-  return reviewFood(prod || { barcode: code, name: '', k: null, p: 0, c: 0, f: 0, fb: 0, na: 0, ka: 0, portions: [] }, !prod);
+  return reviewFood(prod || { barcode: code, name: '', k: null, p: 0, c: 0, f: 0, fb: null, na: null, ka: null, portions: [] }, !prod);
 }
 
 // Ürün değerlerini gösterip düzenletir, onaylanınca kendi besinlerine kaydeder
@@ -251,9 +259,10 @@ export function reviewFood(food, notFound = false) {
           p: g('#rf-p') || 0,
           c: g('#rf-c') || 0,
           f: g('#rf-f') || 0,
-          fb: g('#rf-fb') || 0,
-          na: g('#rf-na') || 0,
-          ka: food.ka || 0,
+          // boş bırakılan lif/sodyum "bilinmiyor" olarak saklanır (0 değil)
+          fb: s.el.querySelector('#rf-fb').value.trim() === '' ? null : g('#rf-fb') || 0,
+          na: s.el.querySelector('#rf-na').value.trim() === '' ? null : g('#rf-na') || 0,
+          ka: food.ka ?? null,
           portions: [...(pg > 0 ? [[pl && pl[0] ? pl[0] : 'porsiyon', pg]] : []), ...(food.portions || []).slice(1)],
           source: food.source || 'manuel',
         });
@@ -326,9 +335,9 @@ export async function searchProducts(q) {
       p: round1(Number(n.proteins_100g) || 0),
       c: round1(Number(n.carbohydrates_100g) || 0),
       f: round1(Number(n.fat_100g) || 0),
-      fb: round1(Number(n.fiber_100g) || 0),
-      na: sodium == null ? 0 : Math.round(Number(sodium) * 1000),
-      ka: 0,
+      fb: n.fiber_100g == null || n.fiber_100g === '' ? null : round1(Number(n.fiber_100g) || 0),
+      na: sodium == null || sodium === '' ? null : Math.round(Number(sodium) * 1000),
+      ka: n.potassium_100g == null || n.potassium_100g === '' ? null : Math.round(Number(n.potassium_100g) * 1000),
       portions: pr.serving_quantity > 0 ? [['porsiyon', round1(Number(pr.serving_quantity))]] : [],
       source: 'Open Food Facts',
     };

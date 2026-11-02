@@ -34,8 +34,17 @@ export function tidyName(s) {
       .split(' ')
       .map((w) => (w ? w[0].toLocaleUpperCase('tr') + w.slice(1) : w))
       .join(' ');
-  }
+  } else if (/[a-zçğıöşü]/.test(t) && !/[A-ZÇĞİÖŞÜ]/.test(t)) t = t[0].toLocaleUpperCase('tr') + t.slice(1); // tamamı küçük harf
   return t;
+}
+
+// Ayırt edici olmayan kayıtlar alınmaz: yalnızca marka adı ("Ülker") ya da markasız tek kelime ("Ayran")
+export function usefulName(name, brand) {
+  const n = String(name || '').toLocaleLowerCase('tr').trim();
+  const b = String(brand || '').toLocaleLowerCase('tr').trim();
+  if (b && n === b) return false;
+  if (!b && n.split(/\s+/).length < 2) return false;
+  return true;
 }
 
 // "500 g", "1 L", "330 ml", "2 x 200 ml" → { amount, ml }
@@ -52,22 +61,30 @@ export function parseQuantity(q) {
 
 // Tek ürün satırını (sütun adı → değer) uygulama kaydına çevirir; uygun değilse null
 export function toItem(row) {
+  const r = classify(row);
+  return r.item || null;
+}
+
+// Neden elendiğini de söyler (döküm istatistiği için): { item } ya da { reason }
+export function classify(row) {
+  const no = (reason) => ({ reason });
   const code = clean(row.code);
-  if (!/^\d{8,14}$/.test(code)) return null;
-  if (!String(row.countries_tags || '').split(',').includes('en:turkey')) return null;
+  if (!/^\d{8,14}$/.test(code)) return no('barkod geçersiz');
+  if (!String(row.countries_tags || '').split(',').includes('en:turkey')) return no('Türkiye dışı');
   let name = tidyName(row.product_name || row.generic_name);
-  if (!name || name.length < 2 || name.length > 90) return null;
+  if (!name || name.length < 2 || name.length > 90) return no('ad yok');
   const brand = tidyName(String(row.brands || '').split(',')[0]);
   const k = num(row['energy-kcal_100g']) ?? (num(row['energy_100g']) != null ? num(row['energy_100g']) / 4.184 : null);
   const p = num(row.proteins_100g);
   const c = num(row.carbohydrates_100g);
   const f = num(row.fat_100g);
-  if ([k, p, c, f].some((x) => x == null)) return null; // makrolar eksikse alınmaz (sıfır kabul edilmez)
-  if (k < 0 || k > 900 || [p, c, f].some((x) => x < 0 || x > 100) || p + c + f > 105) return null;
+  if (k == null) return no('kalori yok');
+  if ([p, c, f].some((x) => x == null)) return no('makro eksik'); // eksik değer sıfır kabul edilmez
+  if (k < 0 || k > 900 || [p, c, f].some((x) => x < 0 || x > 100) || p + c + f > 105) return no('değer aralık dışı');
   const fb = num(row.fiber_100g);
   // tutarlılık: makrolardan hesaplanan enerji etiketteki kaloriyle çok farklıysa veri hatalıdır
   const calc = 4 * p + 4 * c + 9 * f + (fb ? 2 * fb : 0);
-  if (Math.abs(calc - k) > Math.max(40, 0.3 * k)) return null;
+  if (Math.abs(calc - k) > Math.max(40, 0.3 * k)) return no('enerji tutarsız');
   const sodiumG = num(row.sodium_100g) ?? (num(row.salt_100g) != null ? num(row.salt_100g) / 2.5 : null);
   const na = sodiumG == null || sodiumG < 0 || sodiumG > 40 ? null : Math.round(sodiumG * 1000);
   const kaG = num(row.potassium_100g);
@@ -76,8 +93,9 @@ export function toItem(row) {
   const sq = num(row.serving_quantity);
   const serving = sq && sq >= 1 && sq <= 1000 ? r1(sq) : 0;
   const pack = qty && qty.amount >= 5 && qty.amount <= 3000 ? r1(qty.amount) : 0;
+  if (!usefulName(name, brand)) return no('ad ayırt edici değil');
   if (brand && !name.toLocaleLowerCase('tr').includes(brand.toLocaleLowerCase('tr'))) name = `${brand} ${name}`;
-  return [code, name, brand, Math.round(k), r1(p), r1(c), r1(f), fb == null || fb < 0 || fb > 100 ? null : r1(fb), na, ka, qty && qty.ml ? 1 : 0, serving, pack];
+  return { item: [code, name, brand, Math.round(k), r1(p), r1(c), r1(f), fb == null || fb < 0 || fb > 100 ? null : r1(fb), na, ka, qty && qty.ml ? 1 : 0, serving, pack] };
 }
 
 async function* lines(input) {
@@ -97,6 +115,8 @@ export async function build({ input = null } = {}) {
   let idx = null;
   const byCode = new Map();
   let seen = 0;
+  const reasons = {};
+  const codes = new Set();
   for await (const line of lines(input)) {
     if (!header) {
       header = line.split('\t');
@@ -113,18 +133,24 @@ export async function build({ input = null } = {}) {
     for (const k of ['code', 'product_name', 'generic_name', 'brands', 'countries_tags', 'quantity', 'serving_quantity', 'energy-kcal_100g', 'energy_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g', 'fiber_100g', 'sodium_100g', 'salt_100g', 'potassium_100g', 'last_modified_t']) {
       if (k in idx) row[k] = cols[idx[k]];
     }
-    const it = toItem(row);
-    if (!it) continue;
+    if (String(row.countries_tags || '').split(',').includes('en:turkey')) codes.add(clean(row.code));
+    const r = classify(row);
+    if (!r.item) {
+      reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+      continue;
+    }
+    const it = r.item;
     const prev = byCode.get(it[0]);
     if (!prev || Number(row.last_modified_t || 0) >= prev.t) byCode.set(it[0], { it, t: Number(row.last_modified_t || 0) });
   }
   const items = [...byCode.values()].map((x) => x.it).sort((a, b) => a[1].localeCompare(b[1], 'tr'));
-  return { items, seen };
+  return { items, seen, reasons, turkey: codes.size };
 }
 
 async function main() {
-  const { items, seen } = await build({ input: args.input || null });
-  console.log(`Türkiye satırı: ${seen}, uygun ürün: ${items.length}`);
+  const { items, seen, reasons, turkey } = await build({ input: args.input || null });
+  console.log(`Ön süzgeçten geçen satır: ${seen}, Türkiye'de satılan ürün: ${turkey}, uygun ürün: ${items.length}`);
+  console.log('Elenme nedenleri: ' + Object.entries(reasons).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(', '));
   if (items.length < MIN_COUNT) throw new Error(`Çok az ürün (${items.length} < ${MIN_COUNT}); dosya yazılmadı`);
   if (existsSync(OUT)) {
     const old = JSON.parse(readFileSync(OUT, 'utf8'));

@@ -311,5 +311,66 @@ export function bestMatch(name, custom = []) {
 }
 
 export function findFood(id, custom = []) {
-  return custom.find((c) => c.id === id) || custom.find((c) => c.overrides === id) || FOODS.find((f) => f.id === id) || null;
+  return custom.find((c) => c.id === id) || custom.find((c) => c.overrides === id) || FOODS.find((f) => f.id === id) || EXTRA.get(id) || null;
 }
+
+// ---------- Ek besinler (paketli ürün listesi, ayrı dosyadan yüklenir) ----------
+// findFood bu kimlikleri de bulur (geçmiş, favoriler, şablonlar); arama ayrı yapılır (searchExtra).
+const EXTRA = new Map();
+const extraIndex = new Map(); // id → { n: normalize ad, w: kelimeler, b: normalize marka }
+export function registerExtraFoods(list) {
+  EXTRA.clear();
+  extraIndex.clear();
+  for (const f of list || []) EXTRA.set(f.id, f);
+}
+const idx = (f) => {
+  let x = extraIndex.get(f.id);
+  if (!x) {
+    const n = norm(f.name);
+    const b = norm(f.brand || '');
+    x = { n, w: (n + ' ' + b).split(' ').filter(Boolean), b };
+    extraIndex.set(f.id, x);
+  }
+  return x;
+};
+
+// Paketli ürünlerde arama: tüm kelimeler eşleşmeli; marka eşleşmesi öne alır; kullanıcının düzelttiği/kaydettiği barkodlar çıkarılır.
+export function searchExtra(query, { custom = [], usage = null, limit = 20, filter = null } = {}) {
+  const q = norm(query);
+  if (!q || !EXTRA.size) return [];
+  const words = q.split(' ').filter(Boolean);
+  const mine = new Set(custom.filter((c) => c.barcode).map((c) => String(c.barcode)));
+  const out = [];
+  for (const f of EXTRA.values()) {
+    if (mine.has(f.barcode)) continue;
+    if (filter && !filter(f)) continue;
+    const x = idx(f);
+    let score = 0;
+    let ok = true;
+    for (const w of words) {
+      const sc = wordScore(w, x.n, x.w);
+      if (sc < 2) {
+        ok = false;
+        break;
+      }
+      score += sc;
+      if (x.b && (x.b === w || x.b.startsWith(w + ' '))) score += 1; // marka adıyla arandı
+    }
+    if (!ok) continue;
+    if (usage && usage.get(f.id)) score += Math.min(2, 0.5 + usage.get(f.id) * 0.25);
+    out.push([score, f, x.n.length]);
+  }
+  out.sort((a, b) => b[0] - a[0] || a[2] - b[2]);
+  // aynı ad ve kaloride farklı barkodlu ürünler (ör. farklı ambalajlar) tek satırda gösterilir
+  const seen = new Set();
+  const res = [];
+  for (const [, f] of out) {
+    const key = `${idx(f).n}|${f.k}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    res.push(f);
+    if (res.length >= limit) break;
+  }
+  return res;
+}
+export const extraCount = () => EXTRA.size;
