@@ -533,8 +533,10 @@ async function callAPIStream(apiKey, body, onText) {
 }
 
 // Konuşma geçmişini API formatına çevir
-async function historyMessages() {
-  const msgs = (await db.list('chat_messages')).filter((m) => m.role === 'user' || m.role === 'assistant');
+// Yalnızca açık sohbetin geçmişi gönderilir (eski sohbetler Coach'a gitmez; kalıcı bilgiler Coach notlarında)
+export const convOf = (m) => m.conv_id || 'eski';
+async function historyMessages(convId) {
+  const msgs = (await db.list('chat_messages')).filter((m) => (m.role === 'user' || m.role === 'assistant') && (!convId || convOf(m) === convId));
   const recent = msgs.slice(-HISTORY_LIMIT);
   const out = [];
   for (const m of recent) {
@@ -557,7 +559,7 @@ async function historyMessages() {
 
 // Bir kullanıcı mesajını işle. attachments: [{ kind:'image', media_type, data } | { kind:'pdf', name, data } | { kind:'text', name, text }]
 // onModel(model): hangi model çalışıyor; onText(fullText): cevap yazıldıkça
-export async function runTurn({ text, image, attachments = [], onModel, onText }) {
+export async function runTurn({ text, image, attachments = [], onModel, onText, convId = null }) {
   const apiKey = await db.getSetting('api_key');
   if (!apiKey) throw new AIError("Coach'u kullanmak için önce Ayarlar sayfasından API anahtarını ekle.");
   if (image) attachments = [{ kind: 'image', ...image }, ...attachments];
@@ -573,7 +575,7 @@ export async function runTurn({ text, image, attachments = [], onModel, onText }
     { type: 'text', text: staticPrompt(), cache_control: { type: 'ephemeral' } },
     { type: 'text', text: dynamicPrompt(summary, custom, share) },
   ];
-  const history = await historyMessages(); // son kullanıcı mesajı zaten kaydedildiği için geçmişte var
+  const history = await historyMessages(convId); // son kullanıcı mesajı zaten kaydedildiği için geçmişte var
   if (history.length && history[history.length - 1].role === 'user') history.pop();
   const userContent = [];
   for (const a of attachments) {

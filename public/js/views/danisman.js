@@ -1,11 +1,11 @@
 import * as db from '../db.js';
 import { shareLineHTML, openAiShareSheet } from '../aishare.js';
-import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr, avatarHTML } from '../util.js';
+import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr, avatarHTML, openSheet, confirmSheet } from '../util.js';
 import { refresh } from '../app.js';
 import { cycleInfo, dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES, AI_CAT_LABEL, aiShare } from '../context.js';
 import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
 import { weekday } from '../util.js';
-import { runTurn, commitCard, cardNutrition, AIError, undoNote } from '../ai.js';
+import { runTurn, commitCard, cardNutrition, AIError, undoNote, convOf } from '../ai.js';
 import { listen, sttSupported, ttsSupported, speak, stopSpeaking, unlockSpeech } from '../voice.js';
 
 let voiceReply = false;
@@ -16,11 +16,43 @@ let pending = []; // eklenecekler: { kind:'image', media_type, data, thumb } | {
 let rootEl = null;
 let vvHandler = null;
 
+// ---------- Sohbetler ----------
+// Her mesaj bir sohbete (conv_id) aittir. Coach ekranı açık sohbet yoksa sohbet listesini gösterir.
+// Bir sohbet 3 saatten uzun süre yazışılmadıysa ekran yeniden açıldığında kendiliğinden kapanır.
+let conv = null;
+const CONV_IDLE_MS = 3 * 3600 * 1000;
+const newConvId = () => (crypto.randomUUID ? crypto.randomUUID() : 'c-' + Date.now().toString(36) + Math.random().toString(36).slice(2));
+
+export async function convList() {
+  const msgs = await db.list('chat_messages');
+  const map = new Map();
+  for (const m of msgs) {
+    const id = convOf(m);
+    let c = map.get(id);
+    if (!c) map.set(id, (c = { id, title: '', count: 0, first: m.created_at, last: m.created_at }));
+    c.count++;
+    c.last = m.created_at;
+    if (!c.title && m.role === 'user' && (m.text || '').trim()) c.title = m.text.trim();
+    if (!c.title && m.role === 'user' && ((m.images && m.images.length) || (m.files && m.files.length))) c.title = (m.files && m.files[0] && m.files[0].name) || 'Fotoğraf';
+  }
+  return [...map.values()].map((c) => ({ ...c, title: c.id === 'eski' ? 'Önceki konuşmalar' : c.title || 'Sohbet' })).sort((a, b) => (b.last || '').localeCompare(a.last || ''));
+}
+async function setConv(id) {
+  conv = id;
+  await db.setSetting('chat_current', id);
+  document.body.classList.toggle('conv-open', !!id);
+}
+async function deleteConv(id) {
+  const msgs = await db.list('chat_messages', (m) => convOf(m) === id);
+  for (const m of msgs) await db.remove('chat_messages', m.id);
+  if (conv === id) await setConv(null);
+}
+
 export function destroy() {
   if (stopListen) stopListen();
   stopListen = null;
   stopSpeaking();
-  document.body.classList.remove('chat-mode', 'kb-open');
+  document.body.classList.remove('chat-mode', 'kb-open', 'conv-open');
   if (vvHandler && window.visualViewport) {
     window.visualViewport.removeEventListener('resize', vvHandler);
     window.visualViewport.removeEventListener('scroll', vvHandler);
@@ -31,6 +63,14 @@ export function destroy() {
 export async function render(root, params) {
   rootEl = root;
   document.body.classList.add('chat-mode');
+  // açık sohbet: uzun süre yazışılmadıysa ya da bir sayfadan yeni soru geliyorsa temiz başla
+  conv = await db.getSetting('chat_current');
+  if (conv) {
+    const last = (await db.list('chat_messages', (m) => convOf(m) === conv)).pop();
+    if (!last || Date.now() - Date.parse(last.created_at) > CONV_IDLE_MS) conv = null;
+  }
+  if (params.ask || params.photo === '1') conv = null;
+  await setConv(conv);
   const t = today();
   const p = await db.getProfile();
   const tg = targetsOf(p);
@@ -78,6 +118,7 @@ export async function render(root, params) {
           </a>
         </nav>
       </div>
+      <div id="convbar"></div>
       <div id="banners"></div>
       <div class="chat-list" id="chat" aria-live="polite"></div>
       <div class="attach-preview" id="attach" hidden></div>
@@ -244,6 +285,10 @@ export async function render(root, params) {
 async function drawBanners() {
   const box = rootEl && rootEl.querySelector('#banners');
   if (!box) return;
+  if (conv) {
+    box.innerHTML = '';
+    return;
+  }
   const t = today();
   let html = '';
   if (await db.getSetting('ai_share_notice')) {
@@ -287,10 +332,88 @@ async function drawBanners() {
     } else if (a === 'snooze-backup') await db.setSetting('backup_snooze', addDays(today(), 3));
     else if (a === 'report' || a === 'dismiss-report') {
       await db.setSetting('report_seen', b.dataset.key);
+      if (a === 'report') await setConv(null);
       if (a === 'report') send(b.dataset.which === 'bu' ? 'Bu haftanın raporunu hazırlar mısın?' : 'Geçen haftanın raporunu hazırlar mısın?');
     }
     drawBanners();
   };
+}
+
+// Açık sohbetin üst çubuğu: kapat (sohbet listesine dön) ve yeni sohbet
+async function drawConvBar() {
+  const bar = rootEl && rootEl.querySelector('#convbar');
+  if (!bar) return;
+  if (!conv) {
+    bar.innerHTML = '';
+    return;
+  }
+  const c = (await convList()).find((x) => x.id === conv);
+  bar.innerHTML = `<div class="conv-bar">
+    <button type="button" class="conv-btn" data-conv-close aria-label="Sohbeti kapat"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg><span>Sohbetler</span></button>
+    <span class="conv-title">${esc(c ? c.title : 'Yeni sohbet')}</span>
+    <button type="button" class="conv-btn" data-conv-new aria-label="Yeni sohbet">${icon.plus}<span>Yeni</span></button>
+  </div>`;
+  bar.onclick = async (e) => {
+    if (busy) return;
+    if (e.target.closest('[data-conv-close]') || e.target.closest('[data-conv-new]')) {
+      const fresh = !!e.target.closest('[data-conv-new]');
+      await setConv(null);
+      await drawMessages();
+      drawBanners();
+      if (fresh) rootEl.querySelector('#msg')?.focus();
+    }
+  };
+}
+
+function convWhen(iso) {
+  if (!iso) return '';
+  const d = dateStr(new Date(iso));
+  return `${relDay(d)} ${timeStr(iso)}`;
+}
+async function convListHTML() {
+  const list = await convList();
+  if (!list.length) return '';
+  const shown = list.slice(0, 4);
+  return `<section class="conv-list" aria-label="Önceki sohbetler">
+    <div class="sec" style="padding:0 4px 6px"><h2>Sohbetler</h2>${list.length > shown.length ? `<button type="button" class="link" data-conv-all>Tümü (${list.length})</button>` : ''}</div>
+    <div class="card flush">${shown
+      .map((c) => `<button type="button" class="row" data-conv-open="${esc(c.id)}"><span class="row-main"><span class="row-title normal conv-row-t">${esc(c.title)}</span><span class="row-sub">${esc(convWhen(c.last))} · ${c.count} mesaj</span></span>${icon.chev}</button>`)
+      .join('')}</div>
+  </section>`;
+}
+async function openAllConvs() {
+  const draw = async () => {
+    const list = await convList();
+    s.setBody(
+      list.length
+        ? `<div class="card flush">${list
+            .map(
+              (c) => `<div class="row conv-all-row"><button type="button" class="row-main" data-open="${esc(c.id)}" style="background:none;border:0;padding:0;text-align:left;font:inherit;color:inherit;flex:1;min-width:0"><span class="row-title normal conv-row-t">${esc(c.title)}</span><span class="row-sub">${esc(convWhen(c.last))} · ${c.count} mesaj</span></button>
+                <button type="button" class="btn ghost" data-del="${esc(c.id)}" aria-label="${esc(c.title)} sohbetini sil" style="color:var(--warn)">Sil</button></div>`
+            )
+            .join('')}</div>
+           <p class="small muted" style="margin:10px 4px 0;line-height:18px">Coach yalnızca açık sohbeti görür. Kalıcı tercihlerin Coach notlarında durur; sohbet silince notlar silinmez.</p>`
+        : '<div class="empty">Sohbet yok.</div>'
+    );
+  };
+  const s = openSheet({ title: 'Sohbetler' });
+  await draw();
+  s.el.addEventListener('click', async (e) => {
+    const o = e.target.closest('[data-open]');
+    if (o) {
+      s.close();
+      await setConv(o.dataset.open);
+      await drawMessages();
+      drawBanners();
+      return;
+    }
+    const d = e.target.closest('[data-del]');
+    if (d && (await confirmSheet({ title: 'Sohbeti sil', text: 'Bu sohbetteki tüm mesajlar silinir. Kaydettiğin yemek, antrenman ve diğer kayıtlar etkilenmez.', okLabel: 'Sil', danger: true }))) {
+      await deleteConv(d.dataset.del);
+      await draw();
+      if (!conv) drawMessages();
+    }
+  });
 }
 
 // Canlı yazılan cevap
@@ -325,10 +448,12 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
   const list = rootEl.querySelector('#chat');
   if (!list) return;
   if (hasKey === undefined) hasKey = !!(await db.getSetting('api_key'));
-  const msgs = await db.list('chat_messages');
+  drawConvBar();
+  const msgs = conv ? await db.list('chat_messages', (m) => convOf(m) === conv) : [];
   let html = '<div class="spacer"></div>';
   if (!msgs.length) {
     html += `<div class="coach-empty" aria-label="Coach">${orbHTML()}</div>`;
+    if (!conv) html += await convListHTML();
   }
   if (!hasKey) {
     html += `<div class="act-card"><div class="ac-head"><span class="ac-title">Kurulum</span></div>
@@ -497,6 +622,14 @@ function cardHTML(m) {
 }
 
 async function onListClick(e) {
+  const co = e.target.closest('[data-conv-open]');
+  if (co) {
+    await setConv(co.dataset.convOpen);
+    await drawMessages();
+    drawBanners();
+    return;
+  }
+  if (e.target.closest('[data-conv-all]')) return openAllConvs();
   const sp = e.target.closest('[data-speak]');
   if (sp) {
     const m = await db.get('chat_messages', sp.dataset.speak);
@@ -707,26 +840,29 @@ async function send(raw) {
 
   const imgs = atts.filter((a) => a.kind === 'image');
   const files = atts.filter((a) => a.kind !== 'image').map((a) => ({ name: a.name, kind: a.kind }));
-  await db.put('chat_messages', { role: 'user', text, image: imgs[0] ? imgs[0].thumb : null, images: imgs.map((a) => a.thumb), files });
+  if (!conv) await setConv(newConvId());
+  const cid = conv;
+  drawBanners();
+  await db.put('chat_messages', { conv_id: cid, role: 'user', text, image: imgs[0] ? imgs[0].thumb : null, images: imgs.map((a) => a.thumb), files });
   busy = true;
   await drawMessages();
   try {
-    const res = await runTurn({ text, attachments: atts, onText: showLive });
+    const res = await runTurn({ text, attachments: atts, onText: showLive, convId: cid });
     for (const card of res.cards) {
       if (card.type === 'doses') {
         const sg = await suggestSite();
         for (const it of card.items) if (it.kind === 'inj' && !it.site) it.site = sg.site;
       }
-      await db.put('chat_messages', { role: 'card', card, status: card.autoSaved ? 'saved' : 'pending' });
+      await db.put('chat_messages', { conv_id: cid, role: 'card', card, status: card.autoSaved ? 'saved' : 'pending' });
     }
     if (res.text) {
-      await db.put('chat_messages', { role: 'assistant', text: res.text, model: res.model.label, looked: res.looked || [] });
+      await db.put('chat_messages', { conv_id: cid, role: 'assistant', text: res.text, model: res.model.label, looked: res.looked || [] });
       if (voiceReply) speak(res.text);
     }
-    else if (!res.cards.length) await db.put('chat_messages', { role: 'assistant', text: 'Bir cevap oluşturamadım, yeniden dener misin?', model: res.model.label });
+    else if (!res.cards.length) await db.put('chat_messages', { conv_id: cid, role: 'assistant', text: 'Bir cevap oluşturamadım, yeniden dener misin?', model: res.model.label });
   } catch (err) {
     console.error(err);
-    await db.put('chat_messages', { role: 'error', text: err instanceof AIError ? err.message : 'Beklenmeyen bir hata oluştu: ' + err.message });
+    await db.put('chat_messages', { conv_id: cid, role: 'error', text: err instanceof AIError ? err.message : 'Beklenmeyen bir hata oluştu: ' + err.message });
   } finally {
     busy = false;
   }
