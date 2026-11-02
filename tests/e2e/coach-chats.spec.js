@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { onboard, go } from './helpers.js';
 
+// Service worker, Playwright'ın ağ taklidini (özellikle WebKit'te) atlatabiliyor; bu dosyada kapalı
+test.use({ serviceWorkers: 'block' });
+
 // Anthropic API'yi taklit et: her soruya "Cevap: <soru>" döner
 async function mockClaude(page) {
   // Safari (WebKit) başka alan adına giden istekte CORS başlıklarını şart koşar; gerçek API bunları döner
@@ -17,7 +20,7 @@ const ask = async (page, q) => {
   await page.fill('#msg', q);
   await page.click('.composer .send');
   // cevap ya da hata balonu gelene kadar bekle; hata varsa metnini göster
-  await expect(page.locator('.bubble.ai, .bubble.err').last()).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.bubble.ai', { hasText: 'Cevap: ' + q }).or(page.locator('.bubble.err')).first()).toBeVisible({ timeout: 15_000 });
   const err = await page.locator('.bubble.err').last().textContent().catch(() => null);
   expect(err, 'Coach hata verdi').toBeNull();
   await expect(page.locator('.bubble.ai').last()).toContainText('Cevap: ' + q);
