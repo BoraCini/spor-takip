@@ -88,6 +88,7 @@ const S = (inner, w = 22) =>
 export const icon = {
   person: S('<circle cx="12" cy="8" r="3.5"/><path d="M5 20c1-3.5 3.8-5.5 7-5.5s6 2 7 5.5"/>'),
   plus: S('<path d="M12 5v14M5 12h14"/>'),
+  star: S('<path d="M12 3.8l2.5 5.1 5.6.8-4 3.9 1 5.6-5.1-2.7-5 2.7 1-5.6-4.1-3.9 5.6-.8z" stroke-linejoin="round"/>'),
   camera: S('<path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>'),
   send: S('<path d="M12 19V5M6 11l6-6 6 6"/>'),
   calendar: S('<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),

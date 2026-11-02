@@ -87,7 +87,7 @@ describe('IndexedDB erişim hataları', () => {
     const seen = vi.fn();
     window.addEventListener('db-versionchange', seen);
     await new Promise((res, rej) => {
-      const r = indexedDB.open('sporcoach', 5);
+      const r = indexedDB.open('sporcoach', 6);
       r.onsuccess = () => {
         r.result.close();
         res();

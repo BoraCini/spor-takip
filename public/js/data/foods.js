@@ -119,36 +119,94 @@ const BASE_FOODS = [
 export const FOODS = [...BASE_FOODS, ...FOODS_TR, ...FOODS_USDA, ...FOODS_BRANDS];
 export const FOOD_ATTRIBUTION = 'Temel besin değerleri: USDA FoodData Central (SR Legacy), TempoLife (tempolife.app) derlemesi üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar Pro Coach tarafından eklendi.';
 
-// Varsayılan porsiyon: son kullanılan miktar, yoksa ilk porsiyon, yoksa 100 g
+// ---------- Porsiyon ve ölçü sistemi ----------
+// Porsiyonlar eski biçimde kalır: [etiket, gram] dizisi (ör. [['adet', 50], ['dilim', 30]]).
+// Her porsiyonun gram karşılığı O BESİNE ÖZELDİR: hacim ölçüleri genel olarak grama çevrilmez
+// (1 yemek kaşığı zeytinyağı ≠ 1 yemek kaşığı yulaf). Gram karşılığı bilinmeyen ölçü kullanılmaz.
+// Besinin temel birimi 'g' (varsayılan) ya da 'ml'dir; besin değerleri 100 g ya da 100 ml içindir.
+// İç hesaplarda "grams" alanı her zaman temel birim miktarıdır (ml besinde ml).
+export const UNIT_TYPES = ['adet', 'dilim', 'su bardağı', 'çay bardağı', 'yemek kaşığı', 'tatlı kaşığı', 'çay kaşığı', 'kase', 'porsiyon', 'avuç', 'ölçek', 'paket', 'kutu', 'ml'];
+export const MAX_PORTIONS = 10;
+export const baseUnit = (food) => (food && food.base === 'ml' ? 'ml' : 'g');
+
+// Geçerli porsiyonlar; varsayılan (default_portion) öne alınır. Bozuk/eksik elemanlar atlanır.
+export function portionsOf(food) {
+  const list = ((food && food.portions) || [])
+    .filter((p) => Array.isArray(p) && String(p[0] || '').trim() && Number(p[1]) > 0 && String(p[0]) !== 'gram')
+    .map((p) => [String(p[0]).trim(), Number(p[1])]);
+  const d = food && food.default_portion;
+  if (d) {
+    const i = list.findIndex((p) => p[0] === d);
+    if (i > 0) list.unshift(list.splice(i, 1)[0]);
+  }
+  return list;
+}
+
+// "1 ölçek", "0,5 ölçek", "250 ml" gibi porsiyon etiketi
+export function portionLabel(qty, unit) {
+  const q = Number(qty);
+  if (!q || q === 1) return unit;
+  return `${String(Math.round(q * 100) / 100).replace('.', ',')} ${unit}`;
+}
+
+// Geçerli miktar: sıfırdan büyük, sonlu sayı
+export const validAmount = (g) => typeof g === 'number' && isFinite(g) && g > 0;
+
+// Porsiyon düzenleyici satırlarını doğrular: miktar × ölçü = gram. Döner { portions, default_portion } ya da { error }.
+export function parsePortionRows(rows) {
+  const parseNum = (t) => (String(t).trim() === '' ? NaN : Number(String(t).trim().replace(',', '.')));
+  const out = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const unit = (r.unit === 'ozel' ? r.custom : r.unit || '').trim();
+    const q = r.qty === '' || r.qty == null ? 1 : parseNum(String(r.qty));
+    const g = parseNum(String(r.grams ?? ''));
+    if (!unit && (r.grams === '' || r.grams == null)) continue; // tamamen boş satır
+    if (!unit) return { error: 'Her porsiyona bir ölçü seç ya da yaz.' };
+    if (!validAmount(q)) return { error: `"${unit}" için miktar sıfırdan büyük olmalı.` };
+    if (!validAmount(g)) return { error: `"${portionLabel(q, unit)}" için gram karşılığını gir (sıfırdan büyük).` };
+    const label = portionLabel(q, unit).slice(0, 30);
+    if (label === 'gram' || seen.has(label)) return { error: `"${label}" iki kez tanımlanmış.` };
+    seen.add(label);
+    out.push({ label, grams: Math.round(g * 10) / 10, def: !!r.def });
+  }
+  if (out.length > MAX_PORTIONS) return { error: `En fazla ${MAX_PORTIONS} porsiyon tanımlanabilir.` };
+  return { portions: out.map((p) => [p.label, p.grams]), default_portion: (out.find((p) => p.def) || out[0] || {}).label || null };
+}
+
+// Varsayılan porsiyon: son kullanılan miktar (ölçü hâlâ varsa), yoksa varsayılan porsiyon, yoksa 100 g/ml
 export function defaultServing(food, last = null) {
+  const portions = portionsOf(food);
   if (last && last.grams > 0) {
-    if (last.unit && last.unit !== 'gram' && (food.portions || []).some((p) => p[0] === last.unit)) return { unit: last.unit, qty: last.qty || 1, grams: last.grams };
+    if (last.unit && last.unit !== 'gram' && portions.some((p) => p[0] === last.unit)) return { unit: last.unit, qty: last.qty || 1, grams: last.grams };
     return { unit: 'gram', qty: last.grams, grams: last.grams };
   }
-  const p = food.portions && food.portions[0];
+  const p = portions[0];
   if (p) return { unit: p[0], qty: 1, grams: p[1] };
   return { unit: 'gram', qty: 100, grams: 100 };
 }
 
 const trNum = (n) => String(Math.round(n * 100) / 100).replace('.', ',');
-// "1 orta boy (173 g)" gibi porsiyon metni
-export function servingText(unit, qty, grams) {
-  if (!unit || unit === 'gram') return `${trNum(grams)} g`;
-  return `${trNum(qty)} ${unit} (${trNum(Math.round(grams))} g)`;
+// "1 orta boy (173 g)" gibi porsiyon metni; base: 'g' | 'ml'
+export function servingText(unit, qty, grams, base = 'g') {
+  if (!unit || unit === 'gram') return `${trNum(grams)} ${base}`;
+  return `${trNum(qty)} ${unit} (${trNum(Math.round(grams))} ${base})`;
 }
 
-// Besin değerini miktara göre hesapla
+// Besin değerini miktara göre hesapla (merkezi hesap; günlük kayıt, tarif ve şablonlar hep bunu kullanır).
+// Lif, sodyum ve potasyum bilinmiyorsa (null/undefined) sonuç da null döner: bilinmeyen değer sıfır gibi gösterilmez.
 export function nutrientsFor(food, grams) {
   const r = grams / 100;
   const v = (x) => Math.round((x || 0) * r * 10) / 10;
+  const opt = (x, d) => (x == null || x === '' || isNaN(Number(x)) ? null : Math.round(Number(x) * r * d) / d);
   return {
     kcal: Math.round((food.k || 0) * r),
     protein_g: v(food.p),
     carb_g: v(food.c),
     fat_g: v(food.f),
-    fiber_g: v(food.fb),
-    sodium_mg: Math.round((food.na || 0) * r),
-    potassium_mg: Math.round((food.ka || 0) * r),
+    fiber_g: opt(food.fb, 10),
+    sodium_mg: opt(food.na, 1),
+    potassium_mg: opt(food.ka, 1),
   };
 }
 
@@ -193,11 +251,17 @@ function wordScore(w, nameN, hayWords) {
 const STAPLES = new Set(['f_feta', 'u_dana_kiyma_10_yag_cig', 'f_milk_semi', 'f_chk_breast_raw', 'f_bread_white', 'f_yog_full', 'f_egg', 'f_oats', 'f_banana', 'f_pilav']);
 
 // Kullanıcının düzelttiği besinler (custom.overrides = orijinal id) orijinalin yerine geçer
-export function searchFoods(query, custom = [], usage = null) {
+// Kullanıcının göreceği tüm besinler: kendi besinleri + (düzeltilmiş olanlar hariç) hazır besinler
+export function allFoods(custom = []) {
   const replaced = new Set(custom.filter((c) => c.overrides).map((c) => c.overrides));
-  const all = [...custom.map((c) => ({ ...c, custom: true })), ...FOODS.filter((f) => !replaced.has(f.id))];
+  return [...custom.map((c) => ({ ...c, custom: true })), ...FOODS.filter((f) => !replaced.has(f.id))];
+}
+
+// filter: isteğe bağlı süzgeç (örn. kategori); sınır süzgeçten sonra uygulanır
+export function searchFoods(query, custom = [], usage = null, { filter = null, limit = 60 } = {}) {
+  const all = filter ? allFoods(custom).filter(filter) : allFoods(custom);
   const q = norm(query);
-  if (!q) return all.slice(0, 60);
+  if (!q) return all.slice(0, limit);
   const words = q.split(' ');
   const scored = [];
   const partial = [];
@@ -228,7 +292,7 @@ export function searchFoods(query, custom = [], usage = null) {
   const by = (a, b) => b[0] - a[0] || a[2] - b[2];
   scored.sort(by);
   partial.sort(by);
-  return [...scored, ...partial].map((x) => x[1]).slice(0, 60);
+  return [...scored, ...partial].map((x) => x[1]).slice(0, limit);
 }
 
 export function bestMatch(name, custom = []) {
