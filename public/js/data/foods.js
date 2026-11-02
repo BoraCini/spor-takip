@@ -251,11 +251,17 @@ function wordScore(w, nameN, hayWords) {
 const STAPLES = new Set(['f_feta', 'u_dana_kiyma_10_yag_cig', 'f_milk_semi', 'f_chk_breast_raw', 'f_bread_white', 'f_yog_full', 'f_egg', 'f_oats', 'f_banana', 'f_pilav']);
 
 // Kullanıcının düzelttiği besinler (custom.overrides = orijinal id) orijinalin yerine geçer
-export function searchFoods(query, custom = [], usage = null) {
+// Kullanıcının göreceği tüm besinler: kendi besinleri + (düzeltilmiş olanlar hariç) hazır besinler
+export function allFoods(custom = []) {
   const replaced = new Set(custom.filter((c) => c.overrides).map((c) => c.overrides));
-  const all = [...custom.map((c) => ({ ...c, custom: true })), ...FOODS.filter((f) => !replaced.has(f.id))];
+  return [...custom.map((c) => ({ ...c, custom: true })), ...FOODS.filter((f) => !replaced.has(f.id))];
+}
+
+// filter: isteğe bağlı süzgeç (örn. kategori); sınır süzgeçten sonra uygulanır
+export function searchFoods(query, custom = [], usage = null, { filter = null, limit = 60 } = {}) {
+  const all = filter ? allFoods(custom).filter(filter) : allFoods(custom);
   const q = norm(query);
-  if (!q) return all.slice(0, 60);
+  if (!q) return all.slice(0, limit);
   const words = q.split(' ');
   const scored = [];
   const partial = [];
@@ -286,7 +292,7 @@ export function searchFoods(query, custom = [], usage = null) {
   const by = (a, b) => b[0] - a[0] || a[2] - b[2];
   scored.sort(by);
   partial.sort(by);
-  return [...scored, ...partial].map((x) => x[1]).slice(0, 60);
+  return [...scored, ...partial].map((x) => x[1]).slice(0, limit);
 }
 
 export function bestMatch(name, custom = []) {

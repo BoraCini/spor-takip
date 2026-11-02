@@ -4,8 +4,8 @@ import { refresh, go } from '../app.js';
 import { removeWithUndo } from '../undo.js';
 import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpenditure, macrosFor } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
-import { searchFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
-import { FOOD_CATEGORIES } from '../data/food_categories.js';
+import { searchFoods, allFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
+import { FOOD_CATEGORIES, CATEGORY_LABEL, categoryOf, inCategory, categoryCounts, isUserCategory, cleanUserCats, toggleFavorite, catNameError, newUserCatId, deleteUserCat, MAX_CAT_NAME } from '../data/food_categories.js';
 import { RECIPE_CATEGORIES, RECIPE_CAT_LABEL, RECIPE_TAGS, normalizeRecipe, resolveItem, recipeTotals, recipeNutrition, scaleItems, itemGrams } from '../recipes.js';
 
 let state = { tab: 'log', date: today(), collapsed: null };
@@ -415,18 +415,127 @@ function logRecord(food, sv, { date, meal, source = 'manuel', existing = null } 
   };
 }
 
-async function openAddFood(meal, startTab = null) {
+// ---------- Favoriler ve kişisel kategoriler ----------
+// Düzeltilmiş (overrides) besinler orijinal kimlikle tutulur; böylece "Orijinal değerlere dön" sonrası favori kaybolmaz.
+const favKey = (f) => f.overrides || f.id;
+async function loadFoodMeta() {
+  const [fav, uc, as] = await Promise.all([db.getSetting('food_favorites', []), db.getSetting('food_user_categories', []), db.getSetting('food_cat_assign', {})]);
+  return {
+    favs: new Set(Array.isArray(fav) ? fav.filter((x) => typeof x === 'string') : []),
+    ucats: cleanUserCats(uc),
+    assign: as && typeof as === 'object' && !Array.isArray(as) ? { ...as } : {},
+  };
+}
+async function setFavorite(food, on) {
+  const cur = (await db.getSetting('food_favorites', [])) || [];
+  const k = favKey(food);
+  if (cur.includes(k) === on) return;
+  await db.setSetting('food_favorites', toggleFavorite(cur, k));
+}
+const assignedCat = (meta, food) => {
+  const c = meta.assign[favKey(food)];
+  return isUserCategory(c) && meta.ucats.some((u) => u.id === c) ? c : null;
+};
+
+// Kişisel kategori oluştur / adını değiştir
+function openUserCatEdit(existing, after) {
+  const s = openSheet({
+    title: existing ? 'Kategoriyi düzenle' : 'Yeni kişisel kategori',
+    leftLabel: 'Vazgeç',
+    rightLabel: 'Kaydet',
+    body: `<div class="field"><label for="uc-name">Kategori adı</label><input id="uc-name" class="input" maxlength="${MAX_CAT_NAME}" value="${esc(existing ? existing.name : '')}" placeholder="Örn. Kahvaltılıklar, Diyet atıştırmalıkları" autocomplete="off"></div>
+      <p class="small muted" style="margin:0 4px">Kişisel kategoriler hazır kategorileri değiştirmez; bir besin hem kendi kategorisinde hem senin kategorinde görünür.</p>`,
+    onRight: async (api) => {
+      const name = s.el.querySelector('#uc-name').value.trim();
+      const ucats = cleanUserCats(await db.getSetting('food_user_categories', []));
+      const err = catNameError(name, ucats, existing ? existing.id : null);
+      if (err) return toast(err, 3500);
+      const next = existing ? ucats.map((c) => (c.id === existing.id ? { ...c, name } : c)) : [...ucats, { id: newUserCatId(), name }];
+      try {
+        await db.setSetting('food_user_categories', next);
+      } catch (e) {
+        return toast('Kaydedilemedi: ' + (e.message || e), 4000);
+      }
+      api.close();
+      toast(existing ? 'Kategori güncellendi' : 'Kategori oluşturuldu');
+      after && after(next.find((c) => (existing ? c.id === existing.id : c.name === name)));
+    },
+  });
+  setTimeout(() => s.el.querySelector('#uc-name').focus(), 50);
+}
+
+async function deleteUserCategory(cat) {
+  const meta = await loadFoodMeta();
+  const n = Object.values(meta.assign).filter((x) => x === cat.id).length;
+  if (!(await confirmSheet({ title: 'Kategoriyi sil', text: `"${cat.name}" silinsin mi?${n ? ` İçindeki ${n} besin silinmez; yalnızca bu kategoriden çıkarılır ve hazır kategorisinde görünmeye devam eder.` : ''}`, okLabel: 'Sil', danger: true }))) return false;
+  const next = deleteUserCat(meta.ucats, meta.assign, cat.id);
+  // iki ayar tek işlemde: yarıda kalırsa sahipsiz atama kalmaz
+  await db.putAtomic([
+    { store: 'settings', obj: { id: 'food_user_categories', value: next.ucats } },
+    { store: 'settings', obj: { id: 'food_cat_assign', value: next.assign } },
+  ]);
+  toast('Kategori silindi');
+  return true;
+}
+
+// Bir besini kişisel kategoriye ata (ya da çıkar)
+async function openCatPicker(food, after) {
+  const meta = await loadFoodMeta();
+  let cur = assignedCat(meta, food);
+  const s = openSheet({ title: 'Kişisel kategori', body: '' });
+  const draw = () => {
+    s.setBody(`<p class="small muted" style="margin:-2px 4px 10px;text-align:center">${esc(cleanName(food.name))} · hazır kategori: ${esc(CATEGORY_LABEL[categoryOf(food)])}</p>
+      <div class="toggle-row" id="ucp">${[['', 'Yok'], ...meta.ucats.map((c) => [c.id, c.name])]
+        .map(([k, l]) => `<button type="button" class="tog" data-uc="${esc(k)}" aria-pressed="${(cur || '') === k}">${esc(l)}</button>`)
+        .join('')}</div>
+      ${meta.ucats.length ? '' : '<p class="small muted" style="margin:10px 4px 0">Henüz kişisel kategorin yok.</p>'}
+      <button type="button" class="btn block" data-newuc style="margin-top:12px">+ Yeni kategori</button>`);
+  };
+  draw();
+  const save = async (id) => {
+    const m = await loadFoodMeta();
+    const a = { ...m.assign };
+    if (id) a[favKey(food)] = id;
+    else delete a[favKey(food)];
+    try {
+      await db.setSetting('food_cat_assign', a);
+    } catch (e) {
+      return toast('Kaydedilemedi: ' + (e.message || e), 4000);
+    }
+    cur = id || null;
+    s.close();
+    toast(id ? `"${m.ucats.find((c) => c.id === id)?.name || ''}" kategorisine eklendi` : 'Kişisel kategoriden çıkarıldı');
+    after && after(cur);
+  };
+  s.el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-uc')) save(b.dataset.uc);
+    else if (b.hasAttribute('data-newuc'))
+      openUserCatEdit(null, (c) => {
+        if (c) save(c.id);
+      });
+  });
+}
+
+async function openAddFood(meal, startTab = null, startCat = null) {
   const custom = markCustom(await db.list('custom_foods'));
   const hist = await foodHistory(custom);
   const mine = custom.filter((c) => !c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
   const recipes = custom.filter((c) => c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  const pool = allFoods(custom);
+  let meta = await loadFoodMeta();
+  let counts = categoryCounts(pool, meta.assign);
   let tab = startTab || 'son';
+  let cat = startCat || null; // seçili kategori (hazır anahtar ya da kişisel uc_…); aramayla birlikte süzgeç olarak da çalışır
   let selMeal = meal;
   const picked = new Map(); // id -> { food, unit, qty, grams }
   const serv = (f) => picked.get(f.id) || defaultServing(f, hist.last.get(f.id));
   const TABS = [
     ['son', 'Son'],
     ['sik', 'Sık'],
+    ['fav', 'Favoriler'],
+    ['kat', 'Kategoriler'],
     ['benim', 'Benim'],
     ['tarif', 'Tarifler'],
   ];
@@ -448,7 +557,7 @@ async function openAddFood(meal, startTab = null) {
         <button type="button" class="qa" data-act="quick">${icon.bolt}<span>Hızlı kalori</span></button>
         <button type="button" class="qa" data-act="custom">${icon.plus}<span>Yeni besin</span></button>
       </div>
-      <div class="seg" role="tablist" aria-label="Listeler" id="ftabs" style="margin:12px 0 10px"></div>
+      <div class="seg scroll" role="tablist" aria-label="Listeler" id="ftabs" style="margin:12px 0 10px"></div>
       <div id="flist"></div>
       <div id="fmore"></div>
       <p class="small muted" style="margin:16px 4px 0;line-height:17px">${esc(FOOD_ATTRIBUTION)}</p>`,
@@ -470,12 +579,14 @@ async function openAddFood(meal, startTab = null) {
     const n = nutrientsFor(f, sv.grams);
     const tag = srcTag(f);
     const on = picked.has(f.id);
+    const fav = meta.favs.has(favKey(f));
     return `<div class="row frow">
       <button type="button" class="row-main" data-open="${esc(f.id)}" style="text-align:left">
         <span class="row-title normal">${esc(cleanName(f.name))}${tag ? ` <span class="tag">${tag}</span>` : ''}</span>
         <span class="row-sub"><span data-sv>${esc(servingText(sv.unit, sv.qty, sv.grams, baseUnit(f)))}</span> · <b class="num" data-kc>${fmt(n.kcal)} kcal</b></span>
         <span class="row-sub num" data-mc>P ${fmt(n.protein_g, 1)} · K ${fmt(n.carb_g, 1)} · Y ${fmt(n.fat_g, 1)}</span>
       </button>
+      <button type="button" class="star-btn" aria-pressed="${fav}" data-fav="${esc(f.id)}" aria-label="${esc(cleanName(f.name))}: ${fav ? 'favorilerden çıkar' : 'favorilere ekle'}">${icon.star}</button>
       <button type="button" class="check-btn" aria-pressed="${on}" data-pick="${esc(f.id)}" aria-label="${esc(cleanName(f.name))}: ${on ? 'seçimi kaldır' : 'seç'}"><span class="check">${icon.check}</span></button>
     </div>`;
   };
@@ -485,17 +596,23 @@ async function openAddFood(meal, startTab = null) {
     const q = inp.value.trim();
     tabsEl.hidden = !!q;
     qaEl.hidden = !!q;
+    const catLabel = (k) => (isUserCategory(k) ? (meta.ucats.find((c) => c.id === k) || {}).name || 'Kategori' : CATEGORY_LABEL[k] || 'Diğer');
+    if (cat && isUserCategory(cat) && !meta.ucats.some((c) => c.id === cat)) cat = null; // silinmiş kategori
     if (q) {
-      const res = searchFoods(q, custom, hist.count);
+      const res = searchFoods(q, custom, hist.count, cat ? { filter: (f) => inCategory(f, cat, { [f.id]: meta.assign[favKey(f)] }) } : {});
+      const catSel = `<div class="field" style="margin:0 0 10px"><label class="sr-only" for="fcat">Kategoriye göre süz</label><select id="fcat" class="input">
+          <option value="">Tüm kategoriler</option>${FOOD_CATEGORIES.filter(([k]) => counts[k]).map(([k, l]) => `<option value="${k}"${cat === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}
+          ${meta.ucats.length ? `<optgroup label="Kişisel">${meta.ucats.map((c) => `<option value="${esc(c.id)}"${cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
+        </select></div>`;
       // Sayı içeren cümle yazıldıysa (örn. "3 yumurta 200 g tavuk") tek seferde eklemeyi öner
       const sentence = /\d|\b(bir|iki|üç|dört|beş|yarım)\b/i.test(q) && q.split(/\s+/).length >= 2;
       listEl.innerHTML = (sentence
         ? `<button type="button" class="card" data-act="say-text" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-bottom:10px;padding:12px 14px">
              <span style="color:var(--accent)">${icon.mic}</span><span style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:600;color:var(--accent)">Cümle olarak ekle</span>
              <span class="small muted">"${esc(q)}" içindeki besinleri miktarlarıyla tek seferde ekle</span></span></button>`
-        : '') + (res.length
-        ? `<div class="sec" style="padding:0 14px 6px"><h2>Sonuçlar</h2><span class="meta">${res.length >= 60 ? '60+' : res.length} besin</span></div>${list(res, '')}`
-        : `<div class="empty">Listede "${esc(q)}" bulunamadı.</div>`);
+        : '') + catSel + (res.length
+        ? `<div class="sec" style="padding:0 14px 6px"><h2>Sonuçlar${cat ? ` · ${esc(catLabel(cat))}` : ''}</h2><span class="meta">${res.length >= 60 ? '60+' : res.length} besin</span></div>${list(res, '')}`
+        : `<div class="empty">${cat ? `"${esc(catLabel(cat))}" kategorisinde "${esc(q)}" bulunamadı. <button type="button" class="link" data-cat="">Tüm kategorilerde ara</button>` : `Listede "${esc(q)}" bulunamadı.`}</div>`);
       moreEl.innerHTML = `<div class="sec" style="padding:14px 14px 6px"><h2>${res.length ? 'Aradığın bu değil mi?' : 'Başka yollar'}</h2></div>
          <div class="card flush">
            <button type="button" class="row" data-act="ai-est"><span class="row-main"><span class="row-title" style="color:var(--accent)">Yapay zekâyla hesapla: "${esc(q)}"</span>
@@ -509,6 +626,31 @@ async function openAddFood(meal, startTab = null) {
     tabsEl.innerHTML = TABS.map(([k, l]) => `<button type="button" role="tab" aria-selected="${tab === k}" data-tab="${k}">${l}</button>`).join('');
     if (tab === 'son') listEl.innerHTML = list(hist.recent, 'Henüz kayıt yok. Yukarıdan ara ya da barkod okut.');
     else if (tab === 'sik') listEl.innerHTML = list(hist.frequent, 'En az iki kez eklediğin besinler burada görünür.');
+    else if (tab === 'fav') {
+      const favFoods = [...meta.favs].map((id) => findFood(id, custom)).filter(Boolean).sort((a, b) => cleanName(a.name).localeCompare(cleanName(b.name), 'tr'));
+      listEl.innerHTML = list(favFoods, 'Sık yediğin besinleri yanlarındaki yıldıza dokunarak favorilere ekle; burada hızlıca bulursun.');
+    } else if (tab === 'kat') {
+      if (!cat) {
+        listEl.innerHTML = `<div class="cat-grid">${FOOD_CATEGORIES.filter(([k]) => counts[k])
+          .map(([k, l]) => `<button type="button" class="cat-btn" data-cat="${k}"><span class="cat-name">${esc(l)}</span><span class="small muted">${counts[k]} besin</span></button>`)
+          .join('')}</div>
+          <div class="sec" style="padding:16px 14px 6px"><h2>Kişisel kategoriler</h2><span class="meta">${meta.ucats.length || ''}</span></div>
+          ${meta.ucats.length
+            ? `<div class="card flush">${meta.ucats
+                .map((c) => `<div class="row"><button type="button" class="row-main" data-cat="${esc(c.id)}" style="text-align:left"><span class="row-title normal">${esc(c.name)}</span><span class="row-sub">${counts[c.id] || 0} besin</span></button>
+                  <button type="button" class="icon-btn" data-ucedit="${esc(c.id)}" aria-label="${esc(c.name)}: adını değiştir">${icon.edit}</button>
+                  <button type="button" class="icon-btn" data-ucdel="${esc(c.id)}" aria-label="${esc(c.name)}: sil">${icon.trash}</button></div>`)
+                .join('')}</div>`
+            : '<div class="empty" style="padding:8px 14px">Kendi gruplarını oluştur (örn. Kahvaltılıklar). Bir besine dokunup "Kişisel kategori" ile eklersin.</div>'}
+          <button type="button" class="btn block" data-act="newcat" style="margin-top:10px">+ Yeni kişisel kategori</button>`;
+      } else {
+        const inCat = pool
+          .filter((f) => inCategory(f, cat, { [f.id]: meta.assign[favKey(f)] }))
+          .sort((a, b) => (hist.count.get(b.id) || 0) - (hist.count.get(a.id) || 0) || cleanName(a.name).localeCompare(cleanName(b.name), 'tr'));
+        listEl.innerHTML = `<div class="sec" style="padding:0 4px 8px;align-items:center"><button type="button" class="link" data-cat="">‹ Kategoriler</button><h2 style="flex:1;margin-left:10px">${esc(catLabel(cat))}</h2><span class="meta">${inCat.length} besin</span></div>
+          ${list(inCat, isUserCategory(cat) ? 'Bu kategoride henüz besin yok. Bir besine dokun ve "Kişisel kategori" düğmesiyle bu kategoriyi seç.' : 'Bu kategoride besin yok.')}`;
+      }
+    }
     else if (tab === 'benim')
       listEl.innerHTML = `<button type="button" class="btn block" data-act="custom" style="margin-bottom:10px">+ Yeni besin</button>${list(mine, 'Kendi eklediğin, barkodla okuttuğun veya yapay zekâya hesaplattığın besinler burada durur.')}`;
     else
@@ -527,6 +669,11 @@ async function openAddFood(meal, startTab = null) {
       b.querySelector('[data-sv]').textContent = servingText(sv.unit, sv.qty, sv.grams, baseUnit(f));
       b.querySelector('[data-kc]').textContent = `${fmt(n.kcal)} kcal`;
       b.querySelector('[data-mc]').textContent = `P ${fmt(n.protein_g, 1)} · K ${fmt(n.carb_g, 1)} · Y ${fmt(n.fat_g, 1)}`;
+    });
+    s.el.querySelectorAll(`[data-fav="${CSS.escape(id)}"]`).forEach((b) => {
+      const fav = meta.favs.has(favKey(f));
+      b.setAttribute('aria-pressed', fav);
+      b.setAttribute('aria-label', `${cleanName(f.name)}: ${fav ? 'favorilerden çıkar' : 'favorilere ekle'}`);
     });
     s.el.querySelectorAll(`[data-pick="${CSS.escape(id)}"]`).forEach((b) => {
       const on = picked.has(id);
@@ -548,9 +695,57 @@ async function openAddFood(meal, startTab = null) {
 
   draw();
   inp.addEventListener('input', draw);
+  s.sheet.addEventListener('change', (e) => {
+    if (e.target.id !== 'fcat') return;
+    cat = e.target.value || null;
+    draw();
+  });
   s.sheet.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-meal],[data-tab],[data-pick],[data-open],[data-act],[data-addall]');
+    const b = e.target.closest('[data-meal],[data-tab],[data-pick],[data-open],[data-act],[data-addall],[data-fav],[data-cat],[data-ucedit],[data-ucdel]');
     if (!b) return;
+    if (b.hasAttribute('data-fav')) {
+      const f = byId.get(b.dataset.fav);
+      if (!f) return;
+      const on = !meta.favs.has(favKey(f));
+      try {
+        await setFavorite(f, on);
+      } catch (err) {
+        return toast('Kaydedilemedi: ' + (err.message || err), 4000);
+      }
+      if (on) meta.favs.add(favKey(f));
+      else meta.favs.delete(favKey(f));
+      updateRow(f.id); // arama, sekme ve seçimler korunur; liste yeniden çizilmez
+      toast(on ? 'Favorilere eklendi' : 'Favorilerden çıkarıldı', 1500);
+      return;
+    }
+    if (b.hasAttribute('data-cat')) {
+      cat = b.dataset.cat || null;
+      draw();
+      return;
+    }
+    if (b.dataset.ucedit) {
+      const c = meta.ucats.find((x) => x.id === b.dataset.ucedit);
+      if (c)
+        openUserCatEdit(c, async () => {
+          meta = await loadFoodMeta();
+          draw();
+        });
+      return;
+    }
+    if (b.dataset.ucdel) {
+      const c = meta.ucats.find((x) => x.id === b.dataset.ucdel);
+      if (!c) return;
+      try {
+        if (!(await deleteUserCategory(c))) return;
+      } catch (err) {
+        return toast('Silinemedi: ' + (err.message || err), 4000);
+      }
+      meta = await loadFoodMeta();
+      counts = categoryCounts(pool, meta.assign);
+      if (cat === c.id) cat = null;
+      draw();
+      return;
+    }
     if (b.dataset.meal) {
       selMeal = b.dataset.meal;
       s.el.querySelectorAll('[data-meal]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.meal === selMeal));
@@ -558,6 +753,7 @@ async function openAddFood(meal, startTab = null) {
     }
     if (b.dataset.tab) {
       tab = b.dataset.tab;
+      cat = null; // sekmeye dokunmak kategori seçimini sıfırlar (Kategoriler'e tekrar dokunmak listeye döner)
       draw();
       return;
     }
@@ -575,7 +771,7 @@ async function openAddFood(meal, startTab = null) {
       if (!f) return;
       if (f.recipe && !picked.size) {
         s.close();
-        return openRecipeDetail(f, selMeal, () => openAddFood(selMeal, tab));
+        return openRecipeDetail(f, selMeal, () => openAddFood(selMeal, tab, cat));
       }
       openAmount(f, selMeal, null, {
         serving: serv(f),
@@ -588,7 +784,13 @@ async function openAddFood(meal, startTab = null) {
         onLogged: () => s.close(),
         onChanged: () => {
           s.close();
-          openAddFood(selMeal, tab);
+          openAddFood(selMeal, tab, cat);
+        },
+        onMeta: async () => {
+          meta = await loadFoodMeta();
+          counts = categoryCounts(pool, meta.assign);
+          if (tab === 'kat' && cat && !inp.value.trim()) draw();
+          else updateRow(f.id);
         },
       });
       return;
@@ -626,6 +828,11 @@ async function openAddFood(meal, startTab = null) {
     } else if (act === 'recipe') {
       s.close();
       openRecipe(null, () => openAddFood(selMeal, 'tarif'));
+    } else if (act === 'newcat') {
+      openUserCatEdit(null, async () => {
+        meta = await loadFoodMeta();
+        draw();
+      });
     } else if (act === 'ai-est') {
       s.close();
       openEstimate(selMeal, q);
@@ -890,6 +1097,7 @@ async function openAmount(liveFood, meal, existing = null, opts = {}) {
   let typed = !!existing; // kullanıcı miktarı kendisi girdi mi (girmediyse öneri gri görünür)
   let selMeal = meal;
   const selecting = !!opts.selecting;
+  let meta = existing ? null : await loadFoodMeta();
   const grams = () => {
     const u = portions.find((p) => p[0] === unit);
     return round1(qty * (u ? u[1] : 1));
@@ -978,6 +1186,8 @@ async function openAmount(liveFood, meal, existing = null, opts = {}) {
       }
       <div class="sec" style="padding:4px 14px 6px"><h2>Besin değerleri</h2></div>
       <div class="card" id="fs-tbl">${tblHTML()}</div>
+      ${existing ? '' : `<div class="btn-row" style="margin-top:4px"><button type="button" class="btn" data-favtoggle aria-pressed="${meta.favs.has(favKey(liveFood))}">${meta.favs.has(favKey(liveFood)) ? '★ Favorilerde' : '☆ Favorilere ekle'}</button><button type="button" class="btn" data-ucpick>${assignedCat(meta, liveFood) ? esc(meta.ucats.find((c) => c.id === assignedCat(meta, liveFood)).name) : 'Kişisel kategori'}</button></div>
+      <p class="small muted" style="margin:6px 4px 0">Kategori: ${esc(CATEGORY_LABEL[categoryOf(liveFood)])}</p>`}
       ${liveFood.recipe ? `<div class="btn-row" style="margin-top:4px"><button type="button" class="btn" data-recipe-detail>Tarif ayrıntıları</button><button type="button" class="btn" data-edit-recipe>Tarifi düzenle</button></div>` : food.custom && !existing ? `<button type="button" class="btn block" data-edit-food style="margin-top:4px">Besini düzenle</button>` : ''}
       ${!food.custom && !existing ? `<button type="button" class="btn block" data-fix style="margin-top:4px">Değerleri düzelt</button>` : ''}
       ${food.custom && !existing ? `<button type="button" class="btn danger block" data-del-food style="margin-top:4px">${food.overrides ? 'Orijinal değerlere dön' : 'Listemden sil'}</button>` : ''}
@@ -998,7 +1208,24 @@ async function openAmount(liveFood, meal, existing = null, opts = {}) {
   s.el.addEventListener('click', async (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.hasAttribute('data-live')) {
+    if (b.hasAttribute('data-favtoggle')) {
+      const on = !meta.favs.has(favKey(liveFood));
+      try {
+        await setFavorite(liveFood, on);
+      } catch (err) {
+        return toast('Kaydedilemedi: ' + (err.message || err), 4000);
+      }
+      meta = await loadFoodMeta();
+      toast(on ? 'Favorilere eklendi' : 'Favorilerden çıkarıldı', 1500);
+      draw();
+      opts.onMeta && opts.onMeta();
+    } else if (b.hasAttribute('data-ucpick')) {
+      openCatPicker(liveFood, async () => {
+        meta = await loadFoodMeta();
+        draw();
+        opts.onMeta && opts.onMeta();
+      });
+    } else if (b.hasAttribute('data-live')) {
       useLive = !useLive;
       food = useLive ? liveFood : snap;
       draw();
