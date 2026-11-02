@@ -1,11 +1,12 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, openSheet, downloadOrShare, lineChartSVG, trendChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
 import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
-import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId } from '../lock.js';
+import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId, pinLength, faceIdNeedsReenroll } from '../lock.js';
 import { monthUsage } from '../ai.js';
-import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate } from '../context.js';
+import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate, AI_CATEGORIES } from '../context.js';
 import * as push from '../push.js';
-import { cloudSupported, cloudUpload, cloudDownload, cloudDelete, passIssue, inboxToken, inboxUrl, pullInbox, closeInbox } from '../cloud.js';
+import { sharedLabels, openAiShareSheet } from '../aishare.js';
+import { cloudSupported, cloudMode, enableVault, upgradeToVault, backupNow, findBackup, adoptVault, disableCloud, recoveryCode, passIssue, inboxToken, inboxUrl, pullInbox, closeInbox } from '../cloud.js';
 
 
 function suggestTargets(p) {
@@ -24,6 +25,8 @@ export async function renderPage(root, params, mode = 'profile') {
   const pin = await hasPin();
   const faceAvail = pin && (await faceIdAvailable());
   const faceOn = await hasFaceId();
+  const pinLen = await pinLength();
+  const faceOld = await faceIdNeedsReenroll();
   const dailyWeight = await db.getSetting('daily_weight_prompt', true);
   const apiKey = await db.getSetting('api_key', '');
   const usage = await monthUsage();
@@ -36,8 +39,11 @@ export async function renderPage(root, params, mode = 'profile') {
   const standalone = push.isStandalone();
   const pushDiag = [`ana ekran: ${standalone ? 'evet' : 'hayır'}`, `push: ${'PushManager' in window ? 'var' : 'yok'}`, `bildirim: ${'Notification' in window ? 'var' : 'yok'}`, `sw: ${'serviceWorker' in navigator ? 'var' : 'yok'}`].join(' · ');
   const backupPhotos = await db.getSetting('backup_photos', true);
-  const cloudPass = await db.getSetting('cloud_pass');
+  const cloudM = await cloudMode();
+  const aiShared = await sharedLabels();
+  const vault = await db.getSetting('cloud_v3');
   const cloudLast = await db.getSetting('cloud_last');
+  const cloudHold = await db.getSetting('cloud_hold');
   const inTok = await db.getSetting('inbox_token');
   const inLast = await db.getSetting('inbox_last');
   const stepsMap = (await db.getSetting('daily_steps', {})) || {};
@@ -81,7 +87,7 @@ export async function renderPage(root, params, mode = 'profile') {
 
     <div class="sec"><h2>Coach (yapay zekâ)</h2></div>
     <section class="card">
-      <p class="small muted" style="margin:0 0 10px;line-height:18px">Coach, Anthropic'in Claude modelini kullanır. Bunun için Claude Console'dan aldığın bir API anahtarı gerekir. Anahtar yalnızca bu telefonda saklanır ve yedeğe dahil edilmez.</p>
+      <p class="small muted" style="margin:0 0 10px;line-height:18px">Coach, Anthropic'in Claude modelini kullanır. Bunun için Claude Console'dan aldığın bir API anahtarı gerekir. Anahtar yalnızca bu telefonda (uygulama verisinde, ayrıca şifrelenmeden) saklanır, yedeğe dahil edilmez ve doğrudan Anthropic'e gönderilir.</p>
       <div class="field"><label for="api-key">API anahtarı</label>
         <input id="api-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-..." value="${apiKey ? '••••••••••••' : ''}">
       </div>
@@ -93,6 +99,7 @@ export async function renderPage(root, params, mode = 'profile') {
       <div class="kv"><span class="k">Bu ay mesaj</span><span class="v">${fmt(usage.calls)}</span></div>
       ${usage.saved > 0.005 ? `<div class="kv"><span class="k">Önbellekle tasarruf</span><span class="v">$${usage.saved.toFixed(2)}</span></div>` : ''}
       <p class="small muted" style="margin:6px 0 0;line-height:18px">Console'da aylık harcama limiti koymanı öneririm; limit aşılırsa Coach durur, uygulamanın geri kalanı çalışmaya devam eder.</p>
+      <button type="button" class="list-btn" data-act="ai-share" style="margin-top:6px"><span class="k" style="display:flex;flex-direction:column;gap:2px"><span>Coach neleri görebilir</span><span class="small muted">${esc(aiShared.length === AI_CATEGORIES.length ? 'Tüm kategoriler' : aiShared.length ? aiShared.join(', ') : 'Hiçbiri')}</span></span>${icon.chev}</button>
     </section>
 
     <div class="sec"><h2>Bildirimler</h2></div>
@@ -152,6 +159,8 @@ export async function renderPage(root, params, mode = 'profile') {
             : `<button type="button" class="list-btn" data-act="pin-set"><span class="k">PIN kilidi belirle</span>${icon.chev}</button>`
         }
       </div>
+      ${pin && pinLen < 6 ? `<p class="small warn" style="margin:6px 0 4px;line-height:18px">PIN'in ${pinLen} haneli. Daha güvenli olması için 6 haneli bir PIN'e geçmeni öneririm ("PIN'i değiştir").</p>` : ''}
+      ${pin && faceOld ? `<p class="small warn" style="margin:6px 0 4px;line-height:18px">Face ID güvenlik güncellemesi nedeniyle kapatıldı. Aşağıdan yeniden açabilirsin.</p>` : ''}
       ${
         pin
           ? faceAvail || faceOn
@@ -159,24 +168,36 @@ export async function renderPage(root, params, mode = 'profile') {
             : `<p class="small muted" style="margin:6px 0 0;line-height:18px">Face ID, uygulama ana ekrandan açıldığında kullanılabilir.</p>`
           : `<p class="small muted" style="margin:6px 0 0;line-height:18px">Face ID ile açmak için önce PIN belirle (Face ID olmazsa PIN yedek olarak kullanılır).</p>`
       }
-      <p class="small muted" style="margin:6px 0 0;line-height:18px">PIN bir ekran kilididir; telefonunun kendi şifresi asıl korumadır.</p>
+      <p class="small muted" style="margin:6px 0 0;line-height:18px">PIN ve Face ID uygulamayı açmayı kilitler; telefondaki verileri şifrelemez. Verilerini asıl koruyan, telefonunun kendi kilidi ve şifresidir. Art arda 5 yanlış PIN'den sonra bekleme süresi başlar ve giderek uzar; veriler hiçbir zaman otomatik silinmez.</p>
     </section>
 
-    <div class="sec"><h2>Şifreli bulut yedeği</h2>${cloudPass ? '<span class="meta">açık</span>' : ''}</div>
+    <div class="sec"><h2>Şifreli bulut yedeği</h2>${cloudM !== 'off' ? '<span class="meta">açık</span>' : ''}</div>
     <section class="card">
       ${
         !cloudSupported()
           ? '<p class="small muted" style="margin:0">Bu tarayıcı şifreli yedeği desteklemiyor (iOS 16.4 ve sonrası gerekir).</p>'
-          : cloudPass
-          ? `<div class="kv" style="border-top:0"><span class="k">Son bulut yedeği</span><span class="v">${cloudLast ? esc(trDate(cloudLast.slice(0, 10))) + ' ' + esc(new Date(cloudLast).toTimeString().slice(0, 5)) : 'henüz yok'}</span></div>
-             <p class="small muted" style="margin:0 0 6px;line-height:18px">Uygulamayı her gün ilk açışında otomatik yedeklenir. Yeni telefonda Ayarlar › Şifreli bulut yedeği › Buluttan geri yükle'ye aynı şifreyi yazman yeterli.</p>
+          : cloudM !== 'off'
+          ? `${cloudHold ? `<p class="small warn" style="margin:0 0 8px;line-height:18px">Otomatik yedek durduruldu: telefondaki kayıt sayısı son yedeğe göre çok azaldı (${esc(String(cloudHold.prev))} → ${esc(String(cloudHold.now))}). Eski yedeğin üzerine yazılmadı. Verilerin doğruysa "Şimdi yedekle"ye dokun; bir şeyler kaybolduysa önce "Buluttan geri yükle".</p>` : ''}
+             ${
+               cloudM === 'v2'
+                 ? `<div class="cloud-upgrade" style="margin:0 0 10px">
+                      <p style="margin:0 0 6px;font-size:15px;line-height:21px"><b>Yedeğini yeni güvenli biçime taşı.</b> Yeni biçimde şifren telefonda saklanmaz ve aynı şifreyi seçen başka biri senin yedeğine erişemez. Bir yedek adı seç; yeni telefonda bu ad ve şifrenle açacaksın.</p>
+                      <div class="field"><label for="cl-up-name">Yedek adı (e-posta ya da takma ad)</label><input id="cl-up-name" class="input" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+                      <button type="button" class="btn primary block" data-act="cloud-upgrade">Yeni biçime taşı</button>
+                    </div>`
+                 : `<div class="kv" style="border-top:0"><span class="k" style="flex:none;white-space:nowrap;margin-right:12px">Yedek adı</span><span class="v" style="min-width:0;overflow-wrap:anywhere;text-align:right">${esc((vault && vault.name) || '—')}</span></div>`
+             }
+             <div class="kv"${cloudM === 'v2' ? ' style="border-top:0"' : ''}><span class="k">Son bulut yedeği</span><span class="v">${cloudLast ? esc(trDate(cloudLast.slice(0, 10))) + ' ' + esc(new Date(cloudLast).toTimeString().slice(0, 5)) : 'henüz yok'}</span></div>
+             <p class="small muted" style="margin:0 0 6px;line-height:18px">Uygulamayı her gün ilk açışında otomatik yedeklenir.${cloudM === 'v3' ? ' Yeni telefonda Buluttan geri yükle\'ye yedek adını (ya da kurtarma kodunu) ve şifreni yazman yeterli.' : ''}</p>
              <button type="button" class="list-btn" data-act="cloud-now"><span class="k">Şimdi yedekle</span>${icon.chev}</button>
+             ${cloudM === 'v3' ? `<button type="button" class="list-btn" data-act="cloud-code"><span class="k">Kurtarma kodunu göster</span>${icon.chev}</button>` : ''}
              <button type="button" class="list-btn" data-act="cloud-restore"><span class="k">Buluttan geri yükle</span>${icon.chev}</button>
              <button type="button" class="list-btn danger" data-act="cloud-off"><span class="k">Bulut yedeğini kapat ve sil</span></button>`
-          : `<p style="margin:0 0 10px;font-size:15px;line-height:21px">Telefon kaybolsa ya da değişse bile verilerin kaybolmasın. Yedek <b>senin belirlediğin şifreyle telefonda şifrelenir</b>; sunucu içeriği göremez.</p>
+          : `<p style="margin:0 0 10px;font-size:15px;line-height:21px">Telefon kaybolsa ya da değişse bile verilerin kaybolmasın. Yedek <b>senin belirlediğin şifreyle telefonda şifrelenir</b>; sunucu içeriği göremez, şifren telefonda da saklanmaz.</p>
+             <div class="field"><label for="cl-name">Yedek adı (e-posta ya da takma ad)</label><input id="cl-name" class="input" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Yeni telefonda bu adla bulacaksın"></div>
              <div class="field"><label for="cl-pass">Yedek şifresi (en az 10 karakter)</label><input id="cl-pass" class="input" type="password" autocomplete="new-password" placeholder="Unutmayacağın bir cümle"></div>
              <div class="field"><label for="cl-pass2">Şifre tekrar</label><input id="cl-pass2" class="input" type="password" autocomplete="new-password"></div>
-             <p class="small warn" style="margin:0 0 10px;line-height:18px">Bu şifreyi unutursan yedeği kimse açamaz, ben de. Bir yere not et.</p>
+             <p class="small warn" style="margin:0 0 10px;line-height:18px">Bu şifreyi unutursan yedeği kimse açamaz, ben de. Açtıktan sonra sana bir kurtarma kodu da vereceğim; ikisini de güvenli bir yere kaydet.</p>
              <div class="btn-row"><button type="button" class="btn primary" data-act="cloud-on">Aç ve yedekle</button><button type="button" class="btn" data-act="cloud-restore">Geri yükle</button></div>`
       }
     </section>
@@ -552,39 +573,56 @@ export async function renderPage(root, params, mode = 'profile') {
       await disableFaceId();
       toast('PIN kilidi kapatıldı');
       refresh();
+    } else if (act === 'ai-share') {
+      openAiShareSheet(() => refresh());
     } else if (act === 'cloud-on') {
+      const name = root.querySelector('#cl-name').value;
       const a = root.querySelector('#cl-pass').value;
       const b = root.querySelector('#cl-pass2').value;
       const issue = passIssue(a);
       if (issue) return toast(issue, 3500);
       if (a !== b) return toast('Şifreler aynı değil');
       t.disabled = true;
+      t.textContent = 'Şifreleniyor…';
       try {
-        await db.setSetting('cloud_pass', a);
-        const r = await cloudUpload(a);
-        toast(r.ok ? `Bulut yedeği açıldı (${Math.max(1, Math.round(r.size / 1024))} KB)` : 'Bulut yedeği açıldı', 3500);
+        const r = await enableVault({ name, pass: a });
+        toast(`Bulut yedeği açıldı (${Math.max(1, Math.round(r.size / 1024))} KB)`, 3500);
+        await refresh();
+        openRecoveryCode(r.code, true);
       } catch (err) {
-        toast(err.message, 4000);
+        toast(err.message, 4500);
+        t.disabled = false;
+        t.textContent = 'Aç ve yedekle';
       }
-      refresh();
+    } else if (act === 'cloud-upgrade') {
+      t.disabled = true;
+      t.textContent = 'Taşınıyor…';
+      try {
+        const r = await upgradeToVault(root.querySelector('#cl-up-name').value);
+        toast('Yedeğin yeni biçime taşındı', 3500);
+        await refresh();
+        openRecoveryCode(r.code, true);
+      } catch (err) {
+        toast(err.message, 4500);
+        t.disabled = false;
+        t.textContent = 'Yeni biçime taşı';
+      }
+    } else if (act === 'cloud-code') {
+      openRecoveryCode(await recoveryCode(), false);
     } else if (act === 'cloud-now') {
       t.disabled = true;
       try {
-        const r = await cloudUpload(cloudPass);
+        const r = await backupNow();
         toast(r.ok ? 'Buluta yedeklendi' : 'Az önce yedeklendi; birkaç dakika sonra tekrar dene', 3500);
       } catch (err) {
         toast(err.message, 4000);
       }
       refresh();
     } else if (act === 'cloud-restore') {
-      openCloudRestore(cloudPass);
+      openCloudRestore();
     } else if (act === 'cloud-off') {
       if (!(await confirmSheet({ title: 'Bulut yedeğini kapat', text: 'Sunucudaki şifreli yedek silinir ve otomatik yedekleme durur. Telefondaki verilerin etkilenmez.', okLabel: 'Kapat ve sil', danger: true }))) return;
-      try {
-        await cloudDelete(cloudPass);
-      } catch {}
-      await db.setSetting('cloud_pass', null);
-      await db.setSetting('cloud_last', null);
+      await disableCloud();
       toast('Bulut yedeği kapatıldı');
       refresh();
     } else if (act === 'health-on') {
@@ -677,22 +715,54 @@ export async function renderPage(root, params, mode = 'profile') {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     try {
-      const obj = JSON.parse(await file.text());
-      const ok = await confirmSheet({
-        title: 'Yedeği geri yükle',
-        text: `${obj.exported_at ? trDate(dateStr(new Date(obj.exported_at))) + ' tarihli yedek. ' : ''}Mevcut verilerin bu yedekle değiştirilecek.`,
-        okLabel: 'Geri yükle',
-      });
-      if (!ok) return;
-      await db.importAll(obj);
+      if (file.size > 300 * 1024 * 1024) throw new Error('Dosya çok büyük.');
+      const obj = db.parseBackupText(await file.text());
+      const choice = await restoreSheet(obj);
+      if (!choice) return;
+      await db.importAll(obj, { keepPhotos: choice.keepPhotos });
       toast('Yedek yüklendi');
       applyAccent(await db.getSetting('accent'));
       refresh();
     } catch (err) {
-      toast(err.message || 'Dosya okunamadı');
+      toast(err.message || 'Dosya okunamadı', 4500);
     } finally {
       e.target.value = '';
     }
+  });
+}
+
+// Geri yükleme öncesi özet: doğrulama sonucu, kayıt sayıları, uyarılar ve fotoğraf seçeneği.
+// Doğrulama hatası varsa geri yükleme düğmesi gösterilmez; telefondaki veriye dokunulmaz.
+const STORE_LABELS = { food_logs: 'besin kaydı', workout_sets: 'set', body_logs: 'kilo kaydı', lab_values: 'tahlil değeri', dose_logs: 'doz kaydı', progress_photos: 'fotoğraf', vitals: 'tansiyon/nabız' };
+export async function restoreSheet(obj, { at = null } = {}) {
+  const v = db.validateBackup(obj);
+  const photosHere = (await db.list('progress_photos')).length;
+  const askPhotos = v.ok && !v.photosIncluded && photosHere > 0;
+  const when = at || obj.exported_at;
+  const counts = Object.entries(STORE_LABELS)
+    .filter(([k]) => v.stats[k])
+    .map(([k, l]) => `${v.stats[k]} ${l}`)
+    .join(' · ');
+  return new Promise((resolve) => {
+    let result = null;
+    const s = openSheet({
+      title: v.ok ? 'Yedeği geri yükle' : 'Yedek açılamadı',
+      size: 'auto',
+      leftLabel: 'Vazgeç',
+      body: v.ok
+        ? `<p style="font-size:16px;line-height:22px;margin:4px 4px 10px">${when ? esc(trDate(dateStr(new Date(when)))) + ' tarihli yedek. ' : ''}Bu telefondaki veriler bu yedekle değiştirilecek. API anahtarı, PIN ve bulut ayarların korunur.</p>
+           ${counts ? `<p class="small muted" style="margin:0 4px 10px;line-height:18px">${esc(counts)}</p>` : ''}
+           ${v.warnings.length ? `<p class="small warn" style="margin:0 4px 10px;line-height:18px">${v.warnings.slice(0, 3).map(esc).join('<br>')}</p>` : ''}
+           ${askPhotos ? `<div class="kv" style="border-top:0;margin-bottom:10px"><label class="k" for="rs-keep">Bu yedekte fotoğraf yok. Telefondaki ${photosHere} fotoğraf korunsun</label><span class="switch"><input id="rs-keep" type="checkbox" checked><span></span></span></div>` : ''}
+           <button type="button" class="btn block primary" data-ok>Geri yükle</button>`
+        : `<p style="font-size:16px;line-height:22px;margin:4px 4px 10px">Yedek doğrulamadan geçmedi; telefondaki verilerine dokunulmadı.</p>
+           <p class="small warn" style="margin:0 4px 10px;line-height:18px">${v.errors.slice(0, 5).map(esc).join('<br>')}${v.errors.length > 5 ? `<br>+${v.errors.length - 5} sorun daha` : ''}</p>`,
+      onClose: () => resolve(result),
+    });
+    s.el.querySelector('[data-ok]')?.addEventListener('click', () => {
+      result = { keepPhotos: askPhotos ? s.el.querySelector('#rs-keep').checked : true };
+      s.close();
+    });
   });
 }
 
@@ -703,32 +773,86 @@ async function logWeight(v) {
 }
 
 
+// ---------- Kurtarma kodu ----------
+// Kod = kasa kimliği + tuz + sürüm. Tek başına yedeği açmaz; yeni telefonda şifre ayrıca istenir.
+async function qrSVG(text) {
+  const { default: qrcode } = await import('../../vendor/qrcode/qrcode.mjs');
+  const q = qrcode(0, 'M');
+  q.addData(text);
+  q.make();
+  const n = q.getModuleCount();
+  let d = '';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c + 4} ${r + 4}h1v1h-1z`;
+  // QR her temada siyah-beyaz (okunabilirlik için)
+  return `<svg viewBox="0 0 ${n + 8} ${n + 8}" width="220" height="220" role="img" aria-label="Kurtarma kodu QR" style="display:block;margin:0 auto;background:#fff;border-radius:12px" shape-rendering="crispEdges"><path fill="#000" d="${d}"/></svg>`;
+}
+async function openRecoveryCode(code, fresh) {
+  if (!code) return;
+  const s = openSheet({
+    title: 'Kurtarma kodu',
+    leftLabel: 'Kapat',
+    body: `
+      <p style="font-size:15px;line-height:21px;margin:0 4px 12px">${fresh ? '<b>Bunu şimdi kaydet.</b> ' : ''}Yedek adını unutursan yeni telefonda bu kod ve şifrenle yedeğini açabilirsin. Kod tek başına yedeği açmaz; şifren ayrıca gerekir.</p>
+      <div data-qr style="min-height:220px;margin-bottom:12px"></div>
+      <p class="rc-code" style="font-family:ui-monospace,Menlo,monospace;font-size:14px;line-height:22px;overflow-wrap:anywhere;text-align:center;background:var(--card);border-radius:12px;padding:12px;margin:0 0 12px;user-select:all">${esc(code)}</p>
+      <div class="btn-row" style="margin-bottom:10px"><button type="button" class="btn" data-copy>Kopyala</button><button type="button" class="btn" data-save>Dosya olarak kaydet</button></div>
+      <p class="small muted" style="margin:0 4px 12px;line-height:18px">Ekran görüntüsü alıp Fotoğraflar'da saklayabilir ya da şifre yöneticine yapıştırabilirsin. Şifreni bu kodla aynı yere yazma.</p>
+      ${fresh ? '<button type="button" class="btn primary block" data-done>Kaydettim</button>' : ''}`,
+  });
+  s.el.querySelector('[data-qr]').innerHTML = await qrSVG(code).catch(() => '');
+  s.el.querySelector('[data-copy]').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      toast('Kopyalandı');
+    } catch {
+      toast('Kopyalanamadı; kodu basılı tutup seç');
+    }
+  });
+  s.el.querySelector('[data-save]').addEventListener('click', () =>
+    downloadOrShare('procoach-kurtarma-kodu.txt', `Pro Coach bulut yedeği kurtarma kodu\n\n${code}\n\nYeni telefonda: Ayarlar › Şifreli bulut yedeği › Geri yükle › bu kodu ve yedek şifreni yaz.\nKod tek başına yedeği açmaz.\n`, 'text/plain')
+  );
+  s.el.querySelector('[data-done]')?.addEventListener('click', () => s.close());
+}
+
 // ---------- Buluttan geri yükle ----------
-function openCloudRestore(savedPass) {
+function openCloudRestore() {
   const s = openSheet({
     title: 'Buluttan geri yükle',
     size: 'auto',
     leftLabel: 'Vazgeç',
     rightLabel: 'Geri yükle',
-    body: `<div class="field"><label for="cr-pass">Yedek şifresi</label><input id="cr-pass" class="input" type="password" autocomplete="current-password" value="${esc(savedPass || '')}"></div>
-      <p class="small muted" style="margin:0 4px;line-height:18px">Bu telefondaki veriler buluttaki yedekle değiştirilir. API anahtarı, PIN ve Face ID ayarların korunur.</p>`,
+    body: `<div class="field"><label for="cr-who">Yedek adı ya da kurtarma kodu</label>
+        <div style="display:flex;gap:8px"><input id="cr-who" class="input" autocomplete="username" autocapitalize="none" spellcheck="false" style="flex:1"><button type="button" class="btn" data-scan aria-label="Kurtarma kodunun QR'ını okut">QR</button></div></div>
+      <div class="field"><label for="cr-pass">Yedek şifresi</label><input id="cr-pass" class="input" type="password" autocomplete="current-password"></div>
+      <p class="small muted" style="margin:0 4px;line-height:18px">Bu telefondaki veriler buluttaki yedekle değiştirilir. API anahtarı, PIN ve Face ID ayarların korunur. Yedeğini 2.0 sürümünde açtıysan ad alanını boş bırak, sadece şifreni yaz.</p>`,
     onRight: async (api) => {
+      const who = s.el.querySelector('#cr-who').value;
       const pass = s.el.querySelector('#cr-pass').value;
       if (!pass) return toast('Şifreyi yaz');
+      const btn = s.el.querySelector('[data-sheet-right]');
+      if (btn) btn.disabled = true;
       try {
-        const { data, at } = await cloudDownload(pass);
-        const ok = await confirmSheet({ title: 'Yedeği geri yükle', text: `${at ? trDate(dateStr(new Date(at))) + ' tarihli yedek bulundu. ' : ''}Bu telefondaki veriler bu yedekle değiştirilsin mi?`, okLabel: 'Geri yükle' });
-        if (!ok) return;
-        await db.importAll(data);
-        await db.setSetting('cloud_pass', pass);
+        const { data, at, vault, legacyPass } = await findBackup({ who, pass });
+        const choice = await restoreSheet(data, { at });
+        if (!choice) return;
+        await db.importAll(data, { keepPhotos: choice.keepPhotos });
+        if (vault) await adoptVault(vault);
+        else if (legacyPass) await db.setSetting('cloud_pass', legacyPass); // eski biçim: Ayarlar'da yeni biçime taşıma önerilir
         applyAccent(await db.getSetting('accent'));
         api.close();
         toast('Yedek geri yüklendi');
         refresh();
       } catch (err) {
-        toast(err.message, 4000);
+        toast(err.message, 4500);
+      } finally {
+        if (btn) btn.disabled = false;
       }
     },
+  });
+  s.el.querySelector('[data-scan]').addEventListener('click', async () => {
+    const { scanBarcode } = await import('../barcode.js');
+    const code = await scanBarcode({ qr: true, accept: (c) => /^PC3-/i.test(c) });
+    if (code) s.el.querySelector('#cr-who').value = code;
   });
 }
 

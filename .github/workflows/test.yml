@@ -1,0 +1,32 @@
+name: Testler
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npx eslint public/js worker tests
+      - name: Birim ve Worker testleri
+        run: npx vitest run
+      - name: Tarayıcıları kur
+        run: npx playwright install --with-deps chromium webkit
+      - name: Uçtan uca testler (Chromium + WebKit)
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-sonuclari
+          path: test-results/
+          retention-days: 7

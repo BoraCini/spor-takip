@@ -40,6 +40,30 @@ export function rateOk(ip, kind, now = Date.now()) {
   return h.n <= max;
 }
 
+// Önizleme sürümleri (ör. p0-guvenlik-spor-takip.<hesap>.workers.dev) üretimle aynı KV'yi kullanır.
+// Önizlemede yapılan denemeler gerçek yedeklerin üzerine yazmasın diye tüm anahtarlar 'pv:' önekiyle ayrılır.
+export function isPreviewHost(host) {
+  return /^[a-z0-9-]+-spor-takip\./.test(host || '');
+}
+export function prefixedKV(kv, pre) {
+  return {
+    get: (k, t) => kv.get(pre + k, t),
+    getWithMetadata: (k, t) => kv.getWithMetadata(pre + k, t),
+    put: (k, v, o) => kv.put(pre + k, v, o),
+    delete: (k) => kv.delete(pre + k),
+    list: async (o = {}) => {
+      const r = await kv.list({ ...o, prefix: pre + (o.prefix || '') });
+      return { ...r, keys: r.keys.map((x) => ({ ...x, name: x.name.slice(pre.length) })) };
+    },
+  };
+}
+function envFor(env, host) {
+  return isPreviewHost(host) ? { ...env, PUSH_KV: prefixedKV(env.PUSH_KV, 'pv:') } : env;
+}
+export function _resetRateLimits() {
+  hits.clear();
+}
+
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -61,7 +85,7 @@ export default {
       const kind = request.method === 'GET' || request.method === 'HEAD' ? 'read' : 'write';
       if (!rateOk(ip, kind)) return json({ error: 'sik' }, 429);
       try {
-        return await handleApi(request, env, url);
+        return await handleApi(request, envFor(env, url.hostname), url);
       } catch (e) {
         console.error('api error', e && e.stack ? e.stack : e);
         return json({ error: 'server' }, 500);
@@ -143,8 +167,7 @@ async function handleBackup(request, env, id) {
     if (!(await writeAllowed(request, prev.metadata))) return json({ error: 'yetki' }, 403);
     if (prev.metadata && Date.now() - Date.parse(prev.metadata.at) < 5 * 60 * 1000) return json({ error: 'sik' }, 429);
     if (!prev.metadata) {
-      const all = await env.PUSH_KV.list({ prefix: 'bk:', limit: MAX_BACKUPS + 1 });
-      if (all.keys.length >= MAX_BACKUPS) return json({ error: 'dolu' }, 507);
+      if ((await backupCount(env)) >= MAX_BACKUPS) return json({ error: 'dolu' }, 507);
     }
     const wk = request.headers.get('x-write-key') || '';
     const wh = /^[a-f0-9]{64}$/.test(wk) ? await sha256hex(wk) : (prev.metadata && prev.metadata.wh) || null;
@@ -166,14 +189,164 @@ async function handleBackup(request, env, id) {
   return json({ error: 'method' }, 405);
 }
 
+// ---------- Vault v3 ----------
+// 'vx:<kasa>' şifreli yedek; metadata'da okuma (rh) ve yazma (wh) anahtarlarının SHA-256 özeti.
+// 'vn:<ad özeti>' yedek adından kasaya ulaşmak için bulucu: { vault_id, salt, v }. Tuz gizli değildir;
+// kasayı okumak için şifreden türeyen okuma anahtarı gerekir.
+const HEX64 = /^[a-f0-9]{64}$/;
+const VAULT_TTL = 60 * 60 * 24 * 400;
+
+async function keyMatches(given, hash) {
+  return HEX64.test(given || '') && !!hash && safeEq(await sha256hex(given), hash);
+}
+async function backupCount(env) {
+  const a = await env.PUSH_KV.list({ prefix: 'bk:', limit: MAX_BACKUPS + 1 });
+  const b = await env.PUSH_KV.list({ prefix: 'vx:', limit: MAX_BACKUPS + 1 });
+  return a.keys.length + b.keys.length;
+}
+
+async function handleVault(request, env, id) {
+  const key = 'vx:' + id;
+  const rk = request.headers.get('x-read-key') || '';
+  const wk = request.headers.get('x-write-key') || '';
+  const m = request.method;
+  if (m === 'GET' || m === 'HEAD') {
+    const cur = await env.PUSH_KV.getWithMetadata(key, m === 'GET' ? 'arrayBuffer' : 'stream');
+    if (!cur.metadata) return json({ error: 'yok' }, 404);
+    if (!(await keyMatches(rk, cur.metadata.rh))) return json({ error: 'yetki' }, 403);
+    const headers = { 'cache-control': 'no-store', 'x-backup-at': cur.metadata.at || '' };
+    if (m === 'HEAD') return new Response(null, { status: 200, headers });
+    return new Response(cur.value, { headers: { ...headers, 'content-type': 'application/octet-stream' } });
+  }
+  if (m === 'PUT') {
+    const len = Number(request.headers.get('content-length') || 0);
+    if (len > BK_MAX) return json({ error: 'buyuk' }, 413);
+    const prev = await env.PUSH_KV.getWithMetadata(key, 'stream');
+    if (prev.metadata) {
+      if (!(await keyMatches(wk, prev.metadata.wh))) return json({ error: 'yetki' }, 403);
+      if (Date.now() - Date.parse(prev.metadata.at) < 5 * 60 * 1000) return json({ error: 'sik' }, 429);
+    } else {
+      if (!HEX64.test(rk) || !HEX64.test(wk)) return json({ error: 'anahtar' }, 400);
+      if ((await backupCount(env)) >= MAX_BACKUPS) return json({ error: 'dolu' }, 507);
+    }
+    const buf = await request.arrayBuffer();
+    if (!buf.byteLength || buf.byteLength > BK_MAX) return json({ error: 'boyut' }, buf.byteLength ? 413 : 400);
+    if (new TextDecoder().decode(new Uint8Array(buf, 0, 4)) !== 'PC03') return json({ error: 'bicim' }, 400);
+    const at = new Date().toISOString();
+    const metadata = {
+      at,
+      size: buf.byteLength,
+      rh: prev.metadata ? prev.metadata.rh : await sha256hex(rk),
+      wh: prev.metadata ? prev.metadata.wh : await sha256hex(wk),
+    };
+    await env.PUSH_KV.put(key, buf, { metadata, expirationTtl: VAULT_TTL });
+    return json({ ok: true, at });
+  }
+  if (m === 'DELETE') {
+    const prev = await env.PUSH_KV.getWithMetadata(key, 'stream');
+    if (!prev.metadata) return json({ ok: true });
+    if (!(await keyMatches(wk, prev.metadata.wh))) return json({ error: 'yetki' }, 403);
+    await env.PUSH_KV.delete(key);
+    return json({ ok: true });
+  }
+  return json({ error: 'method' }, 405);
+}
+
+async function handleVaultName(request, env, loc) {
+  const key = 'vn:' + loc;
+  const wk = request.headers.get('x-write-key') || '';
+  const m = request.method;
+  const cur = await env.PUSH_KV.get(key, 'json');
+  if (m === 'GET') {
+    if (!cur) return json({ error: 'yok' }, 404);
+    return json({ vault_id: cur.vault_id, salt: cur.salt, v: cur.v || 3 });
+  }
+  if (m === 'PUT') {
+    let body;
+    try {
+      body = JSON.parse((await request.text()).slice(0, 2000));
+    } catch {
+      return json({ error: 'json' }, 400);
+    }
+    if (!body || !HEX64.test(body.vault_id || '') || !HEX64.test(body.salt || '') || !HEX64.test(wk)) return json({ error: 'gecersiz' }, 400);
+    if (cur && !(await keyMatches(wk, cur.wh))) return json({ error: 'ad alinmis' }, 409);
+    await env.PUSH_KV.put(key, JSON.stringify({ vault_id: body.vault_id, salt: body.salt, v: 3, wh: cur ? cur.wh : await sha256hex(wk) }), { expirationTtl: VAULT_TTL });
+    return json({ ok: true });
+  }
+  if (m === 'DELETE') {
+    if (!cur) return json({ ok: true });
+    if (!(await keyMatches(wk, cur.wh))) return json({ error: 'yetki' }, 403);
+    await env.PUSH_KV.delete(key);
+    return json({ ok: true });
+  }
+  return json({ error: 'method' }, 405);
+}
+
 // ---------- Apple Sağlık köprüsü (Kestirmeler) ----------
 // Kestirme günlük adım/kilo değerlerini buraya gönderir; uygulama açılınca alır ve kutuyu boşaltır.
-async function handleInbox(request, env, token) {
-  const key = 'ib:' + token;
+// Yeni yapı: kutu işareti 'ibx:<token>', her kayıt ayrı anahtar 'ibi:<token>:<id>'.
+// Kayıtlar ayrı anahtarda olduğu için gelen yeni kayıt ile onay (ACK) birbirinin üzerine yazamaz.
+// Eski yapı ('ib:<token>' altında tek liste) ilk okumada yeni yapıya taşınır.
+const MAX_INBOX_ITEMS = 120;
+const ibx = (t) => 'ibx:' + t;
+const ibi = (t, id = '') => 'ibi:' + t + ':' + id;
+const ITEM_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+
+async function inboxExists(env, token) {
+  if (await env.PUSH_KV.get(ibx(token))) return true;
+  return !!(await env.PUSH_KV.get('ib:' + token)); // eski yapı
+}
+async function migrateLegacyInbox(env, token) {
+  const legacy = await env.PUSH_KV.get('ib:' + token, 'json');
+  if (!legacy) return;
+  for (const it of Array.isArray(legacy) ? legacy : []) {
+    const id = it.id && ITEM_ID_RE.test(it.id) ? it.id : crypto.randomUUID();
+    await env.PUSH_KV.put(ibi(token, id), JSON.stringify({ ...it, id }), { expirationTtl: INBOX_TTL });
+  }
+  await env.PUSH_KV.put(ibx(token), JSON.stringify({ v: 2 }), { expirationTtl: INBOX_TTL });
+  await env.PUSH_KV.delete('ib:' + token);
+}
+async function inboxItems(env, token) {
+  const out = [];
+  let cursor;
+  do {
+    const r = await env.PUSH_KV.list({ prefix: ibi(token), cursor });
+    for (const k of r.keys) {
+      const v = await env.PUSH_KV.get(k.name, 'json');
+      if (v) out.push(v);
+    }
+    cursor = r.list_complete ? null : r.cursor;
+  } while (cursor && out.length < MAX_INBOX_ITEMS);
+  return out.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+}
+async function inboxCount(env) {
+  const a = await env.PUSH_KV.list({ prefix: 'ibx:', limit: MAX_INBOXES + 1 });
+  const b = await env.PUSH_KV.list({ prefix: 'ib:', limit: MAX_INBOXES + 1 });
+  return a.keys.length + b.keys.length;
+}
+
+async function handleInbox(request, env, token, sub) {
+  const url = new URL(request.url);
+  if (sub === 'ack') {
+    // Yalnızca gönderilen kimlikler silinir; başka hiçbir kayda dokunulmaz
+    if (request.method !== 'POST') return json({ error: 'method' }, 405);
+    if (!(await inboxExists(env, token))) return json({ error: 'kutu yok' }, 404);
+    let body;
+    try {
+      body = JSON.parse((await request.text()).slice(0, 20000));
+    } catch {
+      return json({ error: 'json' }, 400);
+    }
+    const ids = Array.isArray(body && body.ids) ? [...new Set(body.ids.filter((x) => typeof x === 'string' && ITEM_ID_RE.test(x)))].slice(0, MAX_INBOX_ITEMS) : [];
+    for (const id of ids) await env.PUSH_KV.delete(ibi(token, id));
+    return json({ ok: true, removed: ids.length });
+  }
+  if (sub) return json({ error: 'not found' }, 404);
+
   if (request.method === 'POST') {
     // Kutu ancak uygulama bir kez açtıysa vardır; rastgele adreslere veri yığılamaz
-    const cur = await env.PUSH_KV.get(key, 'json');
-    if (!cur) return json({ error: 'kutu yok' }, 404);
+    if (!(await inboxExists(env, token))) return json({ error: 'kutu yok' }, 404);
+    await migrateLegacyInbox(env, token);
     let body;
     const txt = (await request.text()).slice(0, 4000);
     try {
@@ -186,6 +359,7 @@ async function handleInbox(request, env, token) {
       return isFinite(n) ? n : null;
     };
     const item = {
+      id: crypto.randomUUID(),
       date: /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : null,
       steps: num(body.steps),
       weight: num(body.weight),
@@ -194,25 +368,30 @@ async function handleInbox(request, env, token) {
       at: new Date().toISOString(),
     };
     if (item.steps == null && item.weight == null && item.bodyfat == null && item.rhr == null) return json({ error: 'veri yok' }, 400);
-    const list = cur.slice(-59);
-    list.push(item);
-    await env.PUSH_KV.put(key, JSON.stringify(list), { expirationTtl: INBOX_TTL });
-    return json({ ok: true });
+    const existing = await env.PUSH_KV.list({ prefix: ibi(token), limit: MAX_INBOX_ITEMS + 1 });
+    if (existing.keys.length >= MAX_INBOX_ITEMS) return json({ error: 'kutu dolu' }, 507);
+    await env.PUSH_KV.put(ibi(token, item.id), JSON.stringify(item), { expirationTtl: INBOX_TTL });
+    return json({ ok: true, id: item.id });
   }
   if (request.method === 'GET') {
-    const cur = await env.PUSH_KV.get(key, 'json');
-    if (!cur) {
+    // GET hiçbir kaydı silmez (yeni istemciler ACK kullanır)
+    if (!(await inboxExists(env, token))) {
       // uygulama kutuyu ilk kez açıyor
-      const all = await env.PUSH_KV.list({ prefix: 'ib:', limit: MAX_INBOXES + 1 });
-      if (all.keys.length >= MAX_INBOXES) return json({ error: 'dolu' }, 507);
-      await env.PUSH_KV.put(key, '[]', { expirationTtl: INBOX_TTL });
+      if ((await inboxCount(env)) >= MAX_INBOXES) return json({ error: 'dolu' }, 507);
+      await env.PUSH_KV.put(ibx(token), JSON.stringify({ v: 2 }), { expirationTtl: INBOX_TTL });
       return json({ items: [] });
     }
-    if (cur.length && new URL(request.url).searchParams.get('clear') === '1') await env.PUSH_KV.put(key, '[]', { expirationTtl: INBOX_TTL });
-    return json({ items: cur });
+    await migrateLegacyInbox(env, token);
+    await env.PUSH_KV.put(ibx(token), JSON.stringify({ v: 2 }), { expirationTtl: INBOX_TTL }); // kutunun ömrünü uzat
+    const items = await inboxItems(env, token);
+    // Eski sürüm uygulamalar (2.0.x) '?clear=1' gönderir: onlar için eski davranış korunur
+    if (items.length && url.searchParams.get('clear') === '1') for (const it of items) await env.PUSH_KV.delete(ibi(token, it.id));
+    return json({ items });
   }
   if (request.method === 'DELETE') {
-    await env.PUSH_KV.delete(key);
+    for (const it of await inboxItems(env, token)) await env.PUSH_KV.delete(ibi(token, it.id));
+    await env.PUSH_KV.delete(ibx(token));
+    await env.PUSH_KV.delete('ib:' + token);
     return json({ ok: true });
   }
   return json({ error: 'method' }, 405);
@@ -220,10 +399,14 @@ async function handleInbox(request, env, token) {
 
 async function handleApi(request, env, url) {
   const path = url.pathname.replace(/\/+$/, '');
+  const vx = path.match(/^\/api\/vault\/([a-f0-9]{64})$/);
+  if (vx) return handleVault(request, env, vx[1]);
+  const vn = path.match(/^\/api\/vault-name\/([a-f0-9]{64})$/);
+  if (vn) return handleVaultName(request, env, vn[1]);
   const bk = path.match(/^\/api\/backup\/([a-f0-9]{64})$/);
   if (bk && BK_ID.test(bk[1])) return handleBackup(request, env, bk[1]);
-  const ib = path.match(/^\/api\/inbox\/([A-Za-z0-9_-]+)$/);
-  if (ib && INBOX_RE.test(ib[1])) return handleInbox(request, env, ib[1]);
+  const ib = path.match(/^\/api\/inbox\/([A-Za-z0-9_-]+)(?:\/(ack))?$/);
+  if (ib && INBOX_RE.test(ib[1])) return handleInbox(request, env, ib[1], ib[2] || null);
   if (path === '/api/push/key' && request.method === 'GET') {
     const v = await getVapid(env);
     return json({ publicKey: v.publicKey });

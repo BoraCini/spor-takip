@@ -1,10 +1,10 @@
 import * as db from './db.js';
-import { showLock, hasPin, setupPinFlow, faceIdAvailable, enableFaceId } from './lock.js';
+import { showLock, hasPin, setupPinFlow, faceIdAvailable, enableFaceId, pinLength, NEW_PIN_LEN } from './lock.js';
 import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '2.0.2';
+export const APP_VERSION = '2.1.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -190,6 +190,12 @@ async function lockIfNeeded() {
   locking = true;
   await showLock({ onForgot: forgotPin });
   locking = false;
+  // Eski 4 haneli PIN: bir kez 6 haneye geçiş öner
+  if ((await pinLength()) < NEW_PIN_LEN && !(await db.getSetting('pin_upgrade_asked'))) {
+    await db.setSetting('pin_upgrade_asked', true);
+    const ok = await confirmSheet({ title: 'PIN\'ini güçlendir', text: 'PIN\'in 4 haneli. 6 haneli bir PIN tahmin edilmeye karşı 100 kat daha dayanıklı. Şimdi değiştirmek ister misin?', okLabel: '6 haneli PIN belirle' });
+    if (ok && (await setupPinFlow({ title: 'Yeni PIN' }))) toast('PIN güncellendi');
+  }
 }
 
 function watchBackground() {
@@ -291,7 +297,7 @@ function lockChoice() {
       <div class="choice-list">
         <button type="button" class="choice" data-pin>
           <span class="choice-ic">${lockIcon}</span>
-          <span class="choice-t"><b>Şifreli başla</b><small>4 haneli PIN belirle; destekleyen telefonda Face ID ile de açılır</small></span>
+          <span class="choice-t"><b>Şifreli başla</b><small>6 haneli PIN belirle; destekleyen telefonda Face ID ile de açılır</small></span>
         </button>
         <button type="button" class="choice" data-nopin>
           <span class="choice-ic muted-ic">${openIcon}</span>
@@ -350,7 +356,7 @@ async function onboarding() {
   while (await lockChoice()) {
     set = await setupPinFlow({
       title: 'PIN belirle',
-      text: '4 haneli bir PIN seç. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldığında sorulur.',
+      text: '6 haneli bir PIN seç. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldığında sorulur.',
       cancelLabel: 'Geri',
     });
     if (set) break;
@@ -364,6 +370,7 @@ async function onboarding() {
 }
 
 // ---------- Service worker ----------
+let updateRequested = false;
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
@@ -377,6 +384,7 @@ function registerSW() {
         b.setAttribute('role', 'status');
         b.innerHTML = `<span>Yeni sürüm hazır.</span><button type="button" class="btn primary">Yenile</button>`;
         b.querySelector('button').addEventListener('click', () => {
+          updateRequested = true;
           worker.postMessage('skipWaiting');
         });
         document.body.appendChild(b);
@@ -394,9 +402,13 @@ function registerSW() {
       });
     })
     .catch((e) => console.warn('SW kaydı başarısız', e));
+  // Yalnızca güncellemede yenile. İlk kurulumda (önceden kontrol eden service worker yokken) yenileme yapılmaz;
+  // yoksa yeni kullanıcı kurulum ekranındayken sayfa kendiliğinden yenilenip kurulum baştan başlar.
+  // Kullanıcı "Yenile"ye bastıysa (updateRequested) ilk ziyaret oturumunda da yenilenir.
+  const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloaded) return;
+    if ((!hadController && !updateRequested) || reloaded) return;
     reloaded = true;
     location.reload();
   });
@@ -415,9 +427,44 @@ function syncTouchIcon() {
 }
 
 // ---------- Başlat ----------
+// Veritabanı açılamazsa normal ekranlar açılmaz; boş günlük ya da yeni kullanıcı gibi gösterilmez.
+const STORAGE_MSG = {
+  STORAGE_UNAVAILABLE: 'Bu tarayıcı veri saklamaya izin vermiyor. Gizli sekmedeysen normal sekmede aç; ayarlardan site verilerini engellediysen izin ver.',
+  STORAGE_BLOCKED: 'Uygulama başka bir sekmede ya da pencerede açık. Onu kapatıp yeniden dene.',
+  STORAGE_MIGRATION_FAILED: 'Veritabanı güncellenemedi. Eski verilerin yerinde duruyor; uygulamayı kapatıp yeniden aç.',
+  STORAGE_QUOTA_EXCEEDED: 'Telefonda yer kalmadı. Biraz yer açıp yeniden dene.',
+};
+function storageErrorScreen(err) {
+  const v = document.getElementById('view');
+  document.body.classList.add('locked');
+  const msg = STORAGE_MSG[err && err.code] || 'Verilerin okunamadı. Hiçbir şey silinmedi.';
+  v.innerHTML = `<div class="empty" style="padding:60px 24px;text-align:center">
+    <p style="font-size:19px;font-weight:600;margin:0 0 10px">Veriler açılamadı</p>
+    <p style="font-size:15px;line-height:21px;margin:0 0 6px">${esc(msg)}</p>
+    <p class="small muted" style="margin:0 0 18px">Hata kodu: ${esc((err && err.code) || 'bilinmiyor')}</p>
+    <button type="button" class="btn primary" data-retry>Yeniden dene</button></div>`;
+  v.querySelector('[data-retry]').addEventListener('click', () => location.reload());
+}
+window.addEventListener('db-versionchange', () => {
+  toast('Uygulamanın yeni sürümü açıldı, yenileniyor…', 2500);
+  setTimeout(() => location.reload(), 1200);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  if (r && r.name === 'StorageError') {
+    toast(r.code === 'STORAGE_QUOTA_EXCEEDED' ? 'Telefonda yer kalmadı; son değişiklik kaydedilemedi.' : 'Kaydedilemedi (' + r.code + '). Yeniden dene.', 4500);
+  }
+});
+
 async function start() {
   syncTouchIcon();
-  await db.init();
+  try {
+    await db.init();
+  } catch (err) {
+    console.error('veritabanı', err);
+    storageErrorScreen(err);
+    return;
+  }
   applyAccent(await db.getSetting('accent'));
   setAvatarCache(await db.getSetting('avatar'));
   registerSW();

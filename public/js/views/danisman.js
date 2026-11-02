@@ -1,7 +1,8 @@
 import * as db from '../db.js';
+import { shareLineHTML, openAiShareSheet } from '../aishare.js';
 import { esc, fmt, parseNum, toast, today, trDate, relDay, timeStr, icon, miniMarkdown, dateStr, avatarHTML } from '../util.js';
 import { refresh } from '../app.js';
-import { cycleInfo, dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES } from '../context.js';
+import { cycleInfo, dayNutrition, targetsOf, programDay, sessionFor, routineDay, dueOn, mealLabel, slotLabel, suggestSite, SITES, MEASURES, AI_CAT_LABEL, aiShare } from '../context.js';
 import { daysBetween, addDays, weekStart, downloadOrShare } from '../util.js';
 import { weekday } from '../util.js';
 import { runTurn, commitCard, cardNutrition, AIError, undoNote } from '../ai.js';
@@ -80,6 +81,7 @@ export async function render(root, params) {
       <div id="banners"></div>
       <div class="chat-list" id="chat" aria-live="polite"></div>
       <div class="attach-preview" id="attach" hidden></div>
+      <div id="shareline"></div>
       <form class="composer" id="composer">
         <div class="plus-wrap">
           <button type="button" class="icon-btn plus" id="plusbtn" aria-haspopup="menu" aria-expanded="false" aria-label="Ekle">${icon.plus}</button>
@@ -97,6 +99,7 @@ export async function render(root, params) {
     </div>`;
 
   await drawMessages({ hasKey, name: p.name, params });
+  await aiShare(); // paylaşım ayarı ilk kez burada oluşabilir; bilgi şeridinden önce hazır olsun
   await drawBanners();
   drawAttach();
 
@@ -243,6 +246,18 @@ async function drawBanners() {
   if (!box) return;
   const t = today();
   let html = '';
+  if (await db.getSetting('ai_share_notice')) {
+    box.innerHTML = `<div class="banner" role="status"><span>Coach artık yalnızca izin verdiğin verileri görüyor. Senin kurulumunda tahlil, tansiyon ve kür dahil hepsi açık bırakıldı.</span>
+      <button type="button" class="pill" data-banner="ai-share">Ayarla</button><button type="button" class="x" data-banner="ai-share-ok" aria-label="Kapat">×</button></div>`;
+    box.onclick = async (e) => {
+      const b = e.target.closest('[data-banner]');
+      if (!b) return;
+      await db.setSetting('ai_share_notice', false);
+      if (b.dataset.banner === 'ai-share') openAiShareSheet(() => drawShareLine());
+      drawBanners();
+    };
+    return;
+  }
   const last = await db.getSetting('last_backup');
   const snooze = await db.getSetting('backup_snooze');
   const hasData = (await db.list('food_logs')).length + (await db.list('workout_sets')).length + (await db.list('compounds')).length > 3;
@@ -338,8 +353,9 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
         .join('')}${esc(m.text || '')}</div>`;
     } else if (m.role === 'assistant') {
       html += `<div class="bubble ai">${miniMarkdown(m.text || '')}</div>`;
-      if (m.model || ttsSupported())
-        html += `<span class="model-tag">${m.model ? esc(m.model) : ''}${ttsSupported() ? `${m.model ? ' · ' : ''}<button type="button" class="speak-btn" data-speak="${m.id}">Dinle</button>` : ''}</span>`;
+      const lookedTxt = (m.looked || []).length ? `Baktı: ${m.looked.map((k) => AI_CAT_LABEL[k] || k).join(', ')}` : '';
+      if (m.model || lookedTxt || ttsSupported())
+        html += `<span class="model-tag">${[m.model ? esc(m.model) : '', esc(lookedTxt)].filter(Boolean).join(' · ')}${ttsSupported() ? `${m.model || lookedTxt ? ' · ' : ''}<button type="button" class="speak-btn" data-speak="${m.id}">Dinle</button>` : ''}</span>`;
     } else if (m.role === 'card') {
       html += cardHTML(m);
     } else if (m.role === 'error') {
@@ -645,7 +661,16 @@ async function addAttachment(file) {
     toast(err.message || 'Dosya eklenemedi');
   }
 }
+async function drawShareLine() {
+  const el = rootEl && rootEl.querySelector('#shareline');
+  if (!el) return;
+  el.innerHTML = await shareLineHTML(pending);
+  el.onclick = (e) => {
+    if (e.target.closest('[data-share-open]')) openAiShareSheet(() => drawShareLine());
+  };
+}
 function drawAttach() {
+  drawShareLine();
   const box = rootEl && rootEl.querySelector('#attach');
   if (!box) return;
   box.hidden = !pending.length;
@@ -695,7 +720,7 @@ async function send(raw) {
       await db.put('chat_messages', { role: 'card', card, status: card.autoSaved ? 'saved' : 'pending' });
     }
     if (res.text) {
-      await db.put('chat_messages', { role: 'assistant', text: res.text, model: res.model.label });
+      await db.put('chat_messages', { role: 'assistant', text: res.text, model: res.model.label, looked: res.looked || [] });
       if (voiceReply) speak(res.text);
     }
     else if (!res.cards.length) await db.put('chat_messages', { role: 'assistant', text: 'Bir cevap oluşturamadım, yeniden dener misin?', model: res.model.label });
