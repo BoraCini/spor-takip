@@ -52,3 +52,32 @@ describe('Open Food Facts → paketli ürün listesi', () => {
     expect(parseQuantity('')).toBeNull();
   });
 });
+
+describe('Adı dökümde olmayan ürünler', () => {
+  it('besin değerleri tamsa ad ürün sayfasından bulunur ve listeye girer', async () => {
+    const fs = await import('node:fs');
+    const zlib = await import('node:zlib');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { build } = await import('../../scripts/build-off-tr.mjs');
+    const H = ['code', 'product_name', 'brands', 'countries_tags', 'quantity', 'serving_quantity', 'energy-kcal_100g', 'energy-kj_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g', 'last_modified_t'];
+    const rows = [
+      ['8690000000011', '', 'Eti', 'en:turkey', '100 g', '', '470', '', '7', '64', '20', '1'],
+      ['8690000000012', '', 'Ülker', 'en:turkey', '', '', '', '2000', '6', '60', '30', '1'], // kJ'den kalori; adı bulunamaz
+      ['8690000000013', 'Ayçiçek Yağı', 'Yudum', 'en:turkey', '1 L', '', '', '', '', '', '', '1'], // besin değeri yok
+    ];
+    const file = path.join(os.tmpdir(), `off-${Date.now()}.csv.gz`);
+    fs.writeFileSync(file, zlib.gzipSync([H, ...rows].map((r) => r.join('\t')).join('\n') + '\n'));
+    const asked = [];
+    const { items, reasons } = await build({
+      input: file,
+      nameLookup: async (codes) => {
+        asked.push(...codes);
+        return new Map([['8690000000011', { product_name_tr: 'Burçak Bisküvi' }]]);
+      },
+    });
+    expect(asked).toEqual(['8690000000011', '8690000000012']); // değeri olmayan ürün için ad sorulmaz
+    expect(items.map((x) => [x[0], x[1], x[3]])).toEqual([['8690000000011', 'Eti Burçak Bisküvi', 470]]);
+    expect(reasons).toMatchObject({ 'kalori yok': 1, 'ad yok (besin değerleri tam)': 1 });
+  });
+});

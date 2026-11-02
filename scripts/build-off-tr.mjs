@@ -113,12 +113,40 @@ async function* lines(input) {
   yield* createInterface({ input: stream, crlfDelay: Infinity });
 }
 
-export async function build({ input = null } = {}) {
+// OFF ürün API'si (dakikada 100 okuma sınırı): kod → { product_name_tr, product_name, ... }
+async function apiNames(codes, { perMinute = 90 } = {}) {
+  const out = new Map();
+  const gap = Math.ceil(60000 / perMinute);
+  const fields = 'product_name_tr,product_name,product_name_en,generic_name_tr,generic_name,abbreviated_product_name';
+  for (const code of codes) {
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=${fields}`, {
+        headers: { 'User-Agent': 'ProCoach-data-builder/1.0 (github.com/BoraCini/spor-takip)' },
+      });
+      if (res.ok) {
+        const p = (await res.json()).product || {};
+        const n = Object.fromEntries(Object.entries(p).filter(([, v]) => clean(v)));
+        if (Object.keys(n).length) out.set(code, n);
+      }
+    } catch {}
+    const wait = gap - (Date.now() - t0);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  }
+  return out;
+}
+
+export async function build({ input = null, nameLookup = input ? null : apiNames } = {}) {
   let header = null;
   let idx = null;
   let wanted = [];
   const byCode = new Map();
   let seen = 0;
+  const nameless = [];
+  const keep = (it, row) => {
+    const prev = byCode.get(it[0]);
+    if (!prev || Number(row.last_modified_t || 0) >= prev.t) byCode.set(it[0], { it, t: Number(row.last_modified_t || 0) });
+  };
   const reasons = {};
   const codes = new Set();
   for await (const line of lines(input)) {
@@ -142,13 +170,26 @@ export async function build({ input = null } = {}) {
     if (String(row.countries_tags || '').split(',').includes('en:turkey')) codes.add(clean(row.code));
     const r = classify(row);
     if (!r.item) {
-      reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+      if (r.reason.startsWith('ad yok')) nameless.push(row); // besin değerleri tam ama adı dökümde boş: API'den ad aranacak
+      else reasons[r.reason] = (reasons[r.reason] || 0) + 1;
       continue;
     }
-    const it = r.item;
-    const prev = byCode.get(it[0]);
-    if (!prev || Number(row.last_modified_t || 0) >= prev.t) byCode.set(it[0], { it, t: Number(row.last_modified_t || 0) });
+    keep(r.item, row);
   }
+  // Adı dökümde olmayanlar: ürün sayfasından (API) Türkçe ya da başka dildeki adı al
+  if (nameless.length && nameLookup) {
+    const names = await nameLookup(nameless.map((row) => clean(row.code)));
+    let found = 0;
+    for (const row of nameless) {
+      const n = names.get(clean(row.code));
+      const r = n ? classify({ ...row, ...n }) : { reason: 'ad yok (besin değerleri tam)' };
+      if (r.item) {
+        found++;
+        keep(r.item, row);
+      } else reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+    }
+    console.log(`Adı dökümde olmayan ${nameless.length} üründen ${found} tanesinin adı ürün sayfasından bulundu`);
+  } else if (nameless.length) reasons['ad yok (besin değerleri tam)'] = nameless.length;
   const items = [...byCode.values()].map((x) => x.it).sort((a, b) => a[1].localeCompare(b[1], 'tr'));
   return { items, seen, reasons, turkey: codes.size };
 }
