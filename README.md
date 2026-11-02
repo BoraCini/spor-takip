@@ -42,7 +42,7 @@ Safari'de sitenin adresini aç → Paylaş → **Ana Ekrana Ekle** → Ekle.
 npx wrangler dev --test-scheduled
 ```
 
-Yeni sürüm yayınlarken `public/sw.js` içindeki `CACHE` adını artır.
+Yeni sürüm yayınlarken `public/sw.js` içindeki `CACHE` adını ve `public/js/app.js` içindeki `APP_VERSION`ı artır, `public/js/changelog.js` en üstüne kullanıcıya gösterilecek sürüm notunu ekle (güncellemeden sonraki ilk açılışta "Yenilikler" olarak bir kez çıkar).
 
 ## Veri kaynakları
 

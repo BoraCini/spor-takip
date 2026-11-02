@@ -3,8 +3,9 @@ import { showLock, hasPin, setupPinFlow, faceIdAvailable, enableFaceId, pinLengt
 import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './util.js';
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
+import { checkWhatsNew, markVersionSeen } from './changelog.js';
 
-export const APP_VERSION = '2.2.0';
+export const APP_VERSION = '2.2.1';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -479,7 +480,15 @@ async function start() {
     await lockIfNeeded();
   }
   await route();
-  if (onboarded) dailyWeight();
+  if (onboarded) {
+    // Güncellemeden sonraki ilk açılışta "Yenilikler" (bir kez); kapatılınca günlük kilo sorusu gelir
+    try {
+      await checkWhatsNew(APP_VERSION);
+    } catch (e) {
+      console.error('yenilikler', e);
+    }
+    dailyWeight();
+  } else await markVersionSeen(APP_VERSION).catch(() => {});
   // Arka planda: Apple Sağlık kutusunu al, günlük şifreli bulut yedeği
   import('./cloud.js').then(async (c) => {
     if (await c.pullInbox()) refresh();

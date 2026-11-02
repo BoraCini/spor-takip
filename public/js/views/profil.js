@@ -227,6 +227,9 @@ export async function renderPage(root, params, mode = 'profile') {
       <button type="button" class="list-btn" data-act="clear-chat"><span class="k">Sohbet geçmişini temizle</span>${icon.chev}</button>
       <button type="button" class="list-btn danger" data-act="wipe"><span class="k">Tüm verileri sil</span></button>
     </section>
+    <section class="card">
+      <button type="button" class="list-btn" data-act="whatsnew"><span class="k" style="display:flex;flex-direction:column;gap:2px"><span>Yenilikler</span><span class="small muted">Sürüm notları · şu an ${esc(APP_VERSION)}</span></span>${icon.chev}</button>
+    </section>
     <div class="app-foot"><picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/logo.png" alt=""></picture><span>Pro Coach ${APP_VERSION}</span></div>
   `
     : `
@@ -573,6 +576,8 @@ export async function renderPage(root, params, mode = 'profile') {
       await disableFaceId();
       toast('PIN kilidi kapatıldı');
       refresh();
+    } else if (act === 'whatsnew') {
+      (await import('../changelog.js')).openWhatsNew();
     } else if (act === 'ai-share') {
       openAiShareSheet(() => refresh());
     } else if (act === 'cloud-on') {
