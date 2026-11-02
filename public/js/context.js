@@ -190,13 +190,44 @@ export const MEASURES = [
   ['bodyfat_pct', 'Yağ oranı', '%'],
 ];
 
+// ---------- Kayıtlı öğünler (Coach'un önerilerinde kullanması için) ----------
+// Favori besinler, öğün şablonları ve tarifler; kısa tutulur (her biri en fazla 20).
+export async function savedMeals() {
+  const { findFood, nutrientsFor } = await import('./data/foods.js');
+  const { templateTotals } = await import('./templates.js');
+  const custom = (await db.list('custom_foods')).map((c) => ({ ...c, custom: true }));
+  const name = (n) => String(n || '').replace(/\s*~$/, '');
+  const favIds = (await db.getSetting('food_favorites', [])) || [];
+  const favoriler = (Array.isArray(favIds) ? favIds : [])
+    .map((id) => findFood(id, custom))
+    .filter(Boolean)
+    .slice(0, 20)
+    .map((f) => `${name(f.name)} (100 ${f.base === 'ml' ? 'ml' : 'g'}: ${Math.round(f.k || 0)} kcal)`);
+  const tpls = (await db.list('meal_templates')).sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.use_count || 0) - (a.use_count || 0)).slice(0, 20);
+  const sablonlar = tpls.map((t) => {
+    const { totals } = templateTotals(t.items, custom);
+    const items = (t.items || []).map((it) => (it.grams ? `${name(it.name)} ${Math.round(it.grams)}${it.base === 'ml' ? 'ml' : 'g'}` : name(it.name))).join(', ');
+    return `${t.name}${t.meal ? ` [${t.meal}]` : ''}: ${items} — ${totals.kcal ?? '?'} kcal, P${totals.protein_g ?? '?'} K${totals.carb_g ?? '?'} Y${totals.fat_g ?? '?'}${t.use_count ? ` (${t.use_count} kez kullanıldı)` : ''}`;
+  });
+  const tarifler = custom
+    .filter((c) => c.recipe)
+    .slice(0, 20)
+    .map((r) => {
+      const pg = (r.portions && r.portions[0] && r.portions[0][1]) || 100;
+      const n = nutrientsFor(r, pg);
+      return `${name(r.name)}: 1 porsiyon ${Math.round(pg)} g, ${n.kcal} kcal, P${n.protein_g}`;
+    });
+  return { favoriler, sablonlar, tarifler };
+}
+
 // ---------- Haftalık özet ----------
 export async function weeklySummary(ws) {
   const we = addDays(ws, 6);
   const inWeek = (d) => d >= ws && d <= we;
   const p = await db.getProfile();
   const tg = targetsOf(p);
-  const food = await db.list('food_logs', (f) => inWeek(f.date));
+  // ileri tarihli (planlı) kayıtlar, günü gelene kadar özetlere girmez
+  const food = await db.list('food_logs', (f) => inWeek(f.date) && f.date <= today());
   const days = {};
   for (const f of food) {
     const d = (days[f.date] = days[f.date] || { kcal: 0, protein_g: 0 });
@@ -390,6 +421,7 @@ export async function buildContext() {
     if (si) stocks.push(`${c.name}: ${si.left} ${si.unit} kaldı${si.daysLeft != null ? `, yaklaşık ${si.daysLeft} gün` : ''}`);
   }
   const nextLab = await db.getSetting('next_lab_date');
+  const shortcuts = await savedMeals();
 
   return {
     bugun: `${t} (${WD_LONG[weekday(t)]})`,
@@ -414,6 +446,7 @@ export async function buildContext() {
       toplam: totals,
       kayitlar: entries.map((e) => `${e.meal}: ${e.name} ${e.grams}g (${e.kcal} kcal)`),
     },
+    kayitli_ogunler: shortcuts,
     beslenme_plani: plan.map((x) => `${x.time || ''} ${x.name}: ${x.items || ''} (${x.kcal || '?'} kcal, P${x.protein_g || '?'} K${x.carb_g || '?'} Y${x.fat_g || '?'})`),
     rutinler: (await routineList()).map((r) => ({ ad: r.day.title, egzersizler: r.items.map((x) => `${x.exercise.name} ${x.pe.target_sets || '?'}x${x.pe.target_reps || '?'}`) })),
     son_seanslar: (await db.list('workout_sessions', (x) => x.date >= addDays(t, -21))).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10).map((x) => `${x.date}: ${x.routine_title || ''}`),
@@ -699,7 +732,7 @@ export async function monthlyReport(ym) {
     best[x.exercise_id] = { w: Math.max(b ? b.w : 0, x.weight_kg), e: Math.max(b ? b.e : 0, e) };
   }
   const regions = await regionSets(start, endD);
-  const food = await db.list('food_logs', (f) => inM(f.date));
+  const food = await db.list('food_logs', (f) => inM(f.date) && f.date <= today());
   const byDay = {};
   for (const f of food) {
     const d = (byDay[f.date] = byDay[f.date] || { k: 0, p: 0 });
@@ -782,6 +815,7 @@ export function splitContext(ctx, share) {
   if (on('beslenme')) {
     summary.bugun_beslenme = ctx.bugun_beslenme;
     summary.beslenme_plani = ctx.beslenme_plani;
+    summary.kayitli_ogunler = ctx.kayitli_ogunler;
     summary.bugun_su = ctx.bugun_su;
     summary.gercek_harcama_tahmini = ctx.gercek_harcama_tahmini;
   }

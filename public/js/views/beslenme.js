@@ -6,7 +6,7 @@ import { renderTemplateTab, saveMealAsTemplate } from './sablon.js';
 import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpenditure, macrosFor } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, allFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
-import { FOOD_CATEGORIES, CATEGORY_LABEL, categoryOf, inCategory, categoryCounts, isUserCategory, cleanUserCats, toggleFavorite, catNameError, newUserCatId, deleteUserCat, MAX_CAT_NAME } from '../data/food_categories.js';
+import { FOOD_CATEGORIES, CATEGORY_LABEL, categoryOf, inCategory, categoryCounts, isUserCategory, cleanUserCats, toggleFavorite, assignedList, toggleAssign, catNameError, newUserCatId, deleteUserCat, MAX_CAT_NAME } from '../data/food_categories.js';
 import { RECIPE_CATEGORIES, RECIPE_CAT_LABEL, RECIPE_TAGS, normalizeRecipe, resolveItem, recipeTotals, recipeNutrition, scaleItems, itemGrams } from '../recipes.js';
 
 let state = { tab: 'log', date: today(), collapsed: null };
@@ -41,6 +41,9 @@ export async function render(root, params) {
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
   const logged = new Set((await db.list('food_logs', (r) => r.date >= ws && r.date <= weekDays[6])).map((r) => r.date));
   const t0 = today();
+  // İleri tarihli (şablonla planlanmış) kayıt varsa o güne kadar gezinilebilir
+  const aheadLast = (await db.list('food_logs', (r) => r.date > t0)).map((r) => r.date).sort().pop() || null;
+  const dateLimit = aheadLast || t0;
   const weekHTML = `<div class="dweek" role="group" aria-label="Hafta">
       <button type="button" class="dw-nav" data-act="week-prev" aria-label="Önceki hafta">${icon.left}</button>
       ${weekDays
@@ -48,11 +51,11 @@ export async function render(root, params) {
           const sel = d === state.date;
           const fut = d > t0;
           const has = logged.has(d);
-          return `<button type="button" class="dw${sel ? ' sel' : ''}${has ? ' has' : ''}${d === t0 ? ' today' : ''}" data-act="day" data-d="${d}" ${fut ? 'disabled' : ''} aria-pressed="${sel}" aria-label="${esc(relDay(d))}${has ? ', kayıt var' : ''}">
+          return `<button type="button" class="dw${sel ? ' sel' : ''}${has ? ' has' : ''}${d === t0 ? ' today' : ''}" data-act="day" data-d="${d}" ${fut && !has ? 'disabled' : ''} aria-pressed="${sel}" aria-label="${esc(relDay(d))}${has ? (fut ? ', planlı kayıt var' : ', kayıt var') : ''}">
             <span class="dw-l">${WD[i]}</span><span class="dw-c">${has ? icon.check : parseDate(d).getDate()}</span></button>`;
         })
         .join('')}
-      <button type="button" class="dw-nav" data-act="week-next" aria-label="Sonraki hafta" ${weekDays[6] >= t0 ? 'disabled' : ''}>${icon.right}</button>
+      <button type="button" class="dw-nav" data-act="week-next" aria-label="Sonraki hafta" ${weekDays[6] >= dateLimit ? 'disabled' : ''}>${icon.right}</button>
     </div>`;
 
   let body = '';
@@ -118,6 +121,7 @@ export async function render(root, params) {
         </div>
       </section>`;
 
+    if (state.date > t0) body += `<p class="note" style="margin:0 16px 10px">Bu gün henüz gelmedi: buradaki kayıtlar planlı. Haftalık ve aylık özetlere gün gelince girer.</p>`;
     body += '<div id="meals">';
     for (const [mk, ml] of MEALS) {
       const items = entries.filter((e) => e.meal === mk);
@@ -227,7 +231,7 @@ export async function render(root, params) {
         <span class="eyebrow" style="display:flex;align-items:center;gap:4px">
           <button type="button" data-act="prev" aria-label="Önceki gün" style="height:28px;width:28px;display:flex;align-items:center;justify-content:center;margin-left:-6px">${icon.left}</button>
           <span>${esc(relDay(state.date))} · ${esc(phaseLbl)}</span>
-          <button type="button" data-act="next" aria-label="Sonraki gün" style="height:28px;width:28px;display:flex;align-items:center;justify-content:center;opacity:${state.date >= today() ? '.3' : '1'}" ${state.date >= today() ? 'disabled' : ''}>${icon.right}</button>
+          <button type="button" data-act="next" aria-label="Sonraki gün" style="height:28px;width:28px;display:flex;align-items:center;justify-content:center;opacity:${state.date >= dateLimit ? '.3' : '1'}" ${state.date >= dateLimit ? 'disabled' : ''}>${icon.right}</button>
         </span>
         <h1 class="title">Beslenme</h1>
       </div>
@@ -260,7 +264,7 @@ export async function render(root, params) {
       state.date = addDays(state.date, -1);
       refresh();
     } else if (act === 'next') {
-      if (state.date < today()) state.date = addDays(state.date, 1);
+      if (state.date < dateLimit) state.date = addDays(state.date, 1);
       refresh();
     } else if (act === 'day') {
       state.date = t.dataset.d;
@@ -270,7 +274,7 @@ export async function render(root, params) {
       refresh();
     } else if (act === 'week-next') {
       const n = addDays(state.date, 7);
-      state.date = n > today() ? today() : n;
+      state.date = n > dateLimit ? dateLimit : n;
       refresh();
     } else if (act === 'checkin-ok' || act === 'checkin-skip') {
       if (act === 'checkin-ok' && checkin) {
@@ -438,10 +442,9 @@ async function setFavorite(food, on) {
   if (cur.includes(k) === on) return;
   await db.setSetting('food_favorites', toggleFavorite(cur, k));
 }
-const assignedCat = (meta, food) => {
-  const c = meta.assign[favKey(food)];
-  return isUserCategory(c) && meta.ucats.some((u) => u.id === c) ? c : null;
-};
+// Besinin (hâlâ var olan) kişisel kategorileri
+const assignedCats = (meta, food) => assignedList(meta.assign, favKey(food)).filter((c) => meta.ucats.some((u) => u.id === c));
+const ucNames = (meta, food) => assignedCats(meta, food).map((c) => meta.ucats.find((u) => u.id === c).name);
 
 // Kişisel kategori oluştur / adını değiştir
 function openUserCatEdit(existing, after) {
@@ -472,7 +475,7 @@ function openUserCatEdit(existing, after) {
 
 async function deleteUserCategory(cat) {
   const meta = await loadFoodMeta();
-  const n = Object.values(meta.assign).filter((x) => x === cat.id).length;
+  const n = Object.keys(meta.assign).filter((k) => assignedList(meta.assign, k).includes(cat.id)).length;
   if (!(await confirmSheet({ title: 'Kategoriyi sil', text: `"${cat.name}" silinsin mi?${n ? ` İçindeki ${n} besin silinmez; yalnızca bu kategoriden çıkarılır ve hazır kategorisinde görünmeye devam eder.` : ''}`, okLabel: 'Sil', danger: true }))) return false;
   const next = deleteUserCat(meta.ucats, meta.assign, cat.id);
   // iki ayar tek işlemde: yarıda kalırsa sahipsiz atama kalmaz
@@ -484,42 +487,49 @@ async function deleteUserCategory(cat) {
   return true;
 }
 
-// Bir besini kişisel kategoriye ata (ya da çıkar)
+// Bir besini kişisel kategorilere ekle/çıkar (birden çok seçilebilir; her dokunuş hemen kaydedilir)
 async function openCatPicker(food, after) {
-  const meta = await loadFoodMeta();
-  let cur = assignedCat(meta, food);
-  const s = openSheet({ title: 'Kişisel kategori', body: '' });
+  let meta = await loadFoodMeta();
+  let changed = false;
+  const s = openSheet({
+    title: 'Kişisel kategoriler',
+    body: '',
+    onClose: () => changed && after && after(),
+  });
   const draw = () => {
+    const cur = assignedCats(meta, food);
     s.setBody(`<p class="small muted" style="margin:-2px 4px 10px;text-align:center">${esc(cleanName(food.name))} · hazır kategori: ${esc(CATEGORY_LABEL[categoryOf(food)])}</p>
-      <div class="toggle-row" id="ucp">${[['', 'Yok'], ...meta.ucats.map((c) => [c.id, c.name])]
-        .map(([k, l]) => `<button type="button" class="tog" data-uc="${esc(k)}" aria-pressed="${(cur || '') === k}">${esc(l)}</button>`)
-        .join('')}</div>
-      ${meta.ucats.length ? '' : '<p class="small muted" style="margin:10px 4px 0">Henüz kişisel kategorin yok.</p>'}
+      ${meta.ucats.length
+        ? `<p class="small muted" style="margin:0 4px 8px">Bir besin birden çok kişisel kategoride olabilir.</p><div class="toggle-row" id="ucp">${meta.ucats
+            .map((c) => `<button type="button" class="tog" data-uc="${esc(c.id)}" aria-pressed="${cur.includes(c.id)}">${esc(c.name)}</button>`)
+            .join('')}</div>`
+        : '<p class="small muted" style="margin:0 4px">Henüz kişisel kategorin yok.</p>'}
       <button type="button" class="btn block" data-newuc style="margin-top:12px">+ Yeni kategori</button>`);
   };
   draw();
-  const save = async (id) => {
+  const toggle = async (id) => {
     const m = await loadFoodMeta();
-    const a = { ...m.assign };
-    if (id) a[favKey(food)] = id;
-    else delete a[favKey(food)];
+    const a = toggleAssign(m.assign, favKey(food), id);
     try {
       await db.setSetting('food_cat_assign', a);
     } catch (e) {
       return toast('Kaydedilemedi: ' + (e.message || e), 4000);
     }
-    cur = id || null;
-    s.close();
-    toast(id ? `"${m.ucats.find((c) => c.id === id)?.name || ''}" kategorisine eklendi` : 'Kişisel kategoriden çıkarıldı');
-    after && after(cur);
+    changed = true;
+    meta = { ...m, assign: a };
+    const on = assignedList(a, favKey(food)).includes(id);
+    toast(`${on ? 'Eklendi' : 'Çıkarıldı'}: ${m.ucats.find((c) => c.id === id)?.name || ''}`, 1500);
+    draw();
   };
   s.el.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.hasAttribute('data-uc')) save(b.dataset.uc);
+    if (b.dataset.uc) toggle(b.dataset.uc);
     else if (b.hasAttribute('data-newuc'))
-      openUserCatEdit(null, (c) => {
-        if (c) save(c.id);
+      openUserCatEdit(null, async (c) => {
+        if (!c) return;
+        meta = await loadFoodMeta();
+        toggle(c.id);
       });
   });
 }
@@ -564,7 +574,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
         <button type="button" class="qa" data-act="quick">${icon.bolt}<span>Hızlı kalori</span></button>
         <button type="button" class="qa" data-act="custom">${icon.plus}<span>Yeni besin</span></button>
       </div>
-      <div class="seg scroll" role="tablist" aria-label="Listeler" id="ftabs" style="margin:12px 0 10px"></div>
+      <div class="seg tabs2" role="tablist" aria-label="Listeler" id="ftabs" style="margin:12px 0 10px"></div>
       <div id="flist"></div>
       <div id="fmore"></div>
       <p class="small muted" style="margin:16px 4px 0;line-height:17px">${esc(FOOD_ATTRIBUTION)}</p>`,
@@ -606,7 +616,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
     const catLabel = (k) => (isUserCategory(k) ? (meta.ucats.find((c) => c.id === k) || {}).name || 'Kategori' : CATEGORY_LABEL[k] || 'Diğer');
     if (cat && isUserCategory(cat) && !meta.ucats.some((c) => c.id === cat)) cat = null; // silinmiş kategori
     if (q) {
-      const res = searchFoods(q, custom, hist.count, cat ? { filter: (f) => inCategory(f, cat, { [f.id]: meta.assign[favKey(f)] }) } : {});
+      const res = searchFoods(q, custom, hist.count, cat ? { filter: (f) => inCategory(f, cat, meta.assign) } : {});
       const catSel = `<div class="field" style="margin:0 0 10px"><label class="sr-only" for="fcat">Kategoriye göre süz</label><select id="fcat" class="input">
           <option value="">Tüm kategoriler</option>${FOOD_CATEGORIES.filter(([k]) => counts[k]).map(([k, l]) => `<option value="${k}"${cat === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}
           ${meta.ucats.length ? `<optgroup label="Kişisel">${meta.ucats.map((c) => `<option value="${esc(c.id)}"${cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
@@ -652,7 +662,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
           <button type="button" class="btn block" data-act="newcat" style="margin-top:10px">+ Yeni kişisel kategori</button>`;
       } else {
         const inCat = pool
-          .filter((f) => inCategory(f, cat, { [f.id]: meta.assign[favKey(f)] }))
+          .filter((f) => inCategory(f, cat, meta.assign))
           .sort((a, b) => (hist.count.get(b.id) || 0) - (hist.count.get(a.id) || 0) || cleanName(a.name).localeCompare(cleanName(b.name), 'tr'));
         listEl.innerHTML = `<div class="sec" style="padding:0 4px 8px;align-items:center"><button type="button" class="link" data-cat="">‹ Kategoriler</button><h2 style="flex:1;margin-left:10px">${esc(catLabel(cat))}</h2><span class="meta">${inCat.length} besin</span></div>
           ${list(inCat, isUserCategory(cat) ? 'Bu kategoride henüz besin yok. Bir besine dokun ve "Kişisel kategori" düğmesiyle bu kategoriyi seç.' : 'Bu kategoride besin yok.')}`;
@@ -1205,7 +1215,7 @@ async function openAmount(liveFood, meal, existing = null, opts = {}) {
       }
       <div class="sec" style="padding:4px 14px 6px"><h2>Besin değerleri</h2></div>
       <div class="card" id="fs-tbl">${tblHTML()}</div>
-      ${existing ? '' : `<div class="btn-row" style="margin-top:4px"><button type="button" class="btn" data-favtoggle aria-pressed="${meta.favs.has(favKey(liveFood))}">${meta.favs.has(favKey(liveFood)) ? '★ Favorilerde' : '☆ Favorilere ekle'}</button><button type="button" class="btn" data-ucpick>${assignedCat(meta, liveFood) ? esc(meta.ucats.find((c) => c.id === assignedCat(meta, liveFood)).name) : 'Kişisel kategori'}</button></div>
+      ${existing ? '' : `<div class="btn-row" style="margin-top:4px"><button type="button" class="btn" data-favtoggle aria-pressed="${meta.favs.has(favKey(liveFood))}">${meta.favs.has(favKey(liveFood)) ? '★ Favorilerde' : '☆ Favorilere ekle'}</button><button type="button" class="btn" data-ucpick>${ucNames(meta, liveFood).length ? esc(ucNames(meta, liveFood).join(', ')) : 'Kişisel kategori'}</button></div>
       <p class="small muted" style="margin:6px 4px 0">Kategori: ${esc(CATEGORY_LABEL[categoryOf(liveFood)])}</p>`}
       ${liveFood.recipe ? `<div class="btn-row" style="margin-top:4px"><button type="button" class="btn" data-recipe-detail>Tarif ayrıntıları</button><button type="button" class="btn" data-edit-recipe>Tarifi düzenle</button></div>` : food.custom && !existing ? `<button type="button" class="btn block" data-edit-food style="margin-top:4px">Besini düzenle</button>` : ''}
       ${!food.custom && !existing ? `<button type="button" class="btn block" data-fix style="margin-top:4px">Değerleri düzelt</button>` : ''}

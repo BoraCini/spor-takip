@@ -1075,9 +1075,11 @@ input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webk
 .pdef input, .portion-row input[type="radio"] { accent-color: var(--accent); width: 18px; height: 18px; }
 
 /* ---------- Favoriler ve kategoriler (P1.3) ---------- */
-.seg.scroll { grid-auto-columns: max-content; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-.seg.scroll::-webkit-scrollbar { display: none; }
-.seg.scroll button { padding: 0 12px; white-space: nowrap; }
+/* 7 sekme iki satırda: hepsi görünür, kaydırma gerekmez (Son Sık Favoriler Kategoriler / Benim Tarifler Şablonlar) */
+.seg.tabs2 { grid-auto-flow: row; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.seg.tabs2 button { font-size: 14px; padding: 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seg.tabs2 button:nth-child(-n + 2) { grid-column: span 2; }
+.seg.tabs2 button:nth-child(n + 3) { grid-column: span 4; }
 .star-btn { width: 40px; height: 44px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--sub); }
 .star-btn[aria-pressed="true"] { color: #FF9F0A; }
 .star-btn[aria-pressed="true"] .ico { fill: currentColor; }

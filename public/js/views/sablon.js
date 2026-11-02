@@ -1,7 +1,7 @@
 // Öğün şablonları: kütüphane (Besin ekle → Şablonlar), oluşturma/düzenleme, inceleyip uygulama.
 // Hesaplar templates.js'te; yazma her zaman tek işlemde (db.putAtomic) yapılır.
 import * as db from '../db.js';
-import { esc, fmt, parseNum, toast, today, relDay, icon, openSheet, confirmSheet } from '../util.js';
+import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet } from '../util.js';
 import { refresh } from '../app.js';
 import { MEALS } from '../context.js';
 import { searchFoods, nutrientsFor, defaultServing, servingText, portionsOf, baseUnit } from '../data/foods.js';
@@ -11,6 +11,7 @@ import {
   MAX_TEMPLATE_ITEMS,
   FACTOR_MIN,
   FACTOR_MAX,
+  MAX_AHEAD_DAYS,
   templateFromLogs,
   itemFromFood,
   validateTemplate,
@@ -284,7 +285,8 @@ export async function openTemplateDetail(tpl, { meal = null, date = today(), onA
   const P = await pool();
   let factor = 1;
   let selMeal = meal || tpl.meal || 'ara';
-  let selDate = date > today() ? today() : date;
+  const maxDate = addDays(today(), MAX_AHEAD_DAYS);
+  let selDate = date > maxDate ? maxDate : date;
   const sel = new Set(tpl.items.map((_, i) => i));
   let busy = false;
   const items = tpl.items.map((it) => resolveTemplateItem(it, P));
@@ -330,7 +332,8 @@ export async function openTemplateDetail(tpl, { meal = null, date = today(), onA
       <input id="ta-factor" class="input" inputmode="decimal" value="${trq(factor)}" aria-describedby="ta-fh">
       <p class="small muted" id="ta-fh" style="margin:4px 4px 0">${trq(FACTOR_MIN)} ile ${trq(FACTOR_MAX)} arası. Tüm besinlerin miktarı bu oranla değişir.</p></div>
     <div class="field"><span class="lbl">Öğün</span><div class="toggle-row">${MEALS.map(([k, l]) => `<button type="button" class="tog" aria-pressed="${selMeal === k}" data-tmeal="${k}">${l}</button>`).join('')}</div></div>
-    <div class="field"><label for="ta-date">Tarih</label><input id="ta-date" class="input" type="date" value="${selDate}" max="${today()}"></div>
+    <div class="field"><label for="ta-date">Tarih</label><input id="ta-date" class="input" type="date" value="${selDate}" max="${maxDate}" aria-describedby="ta-dh">
+      <p class="small muted" id="ta-dh" style="margin:4px 4px 0">En fazla ${MAX_AHEAD_DAYS} gün ileri. İleri tarihli kayıtlar o gün gelene kadar planlı sayılır; haftalık ve aylık özetlere gün gelince girer.</p></div>
     <div class="card" id="ta-sum"></div>
     <button type="button" class="btn primary block" data-apply style="margin:4px 0 12px"></button>
     <div class="btn-row"><button type="button" class="btn" data-tedit>Düzenle</button><button type="button" class="btn" data-tcopy>Kopyala</button></div>
@@ -347,9 +350,9 @@ export async function openTemplateDetail(tpl, { meal = null, date = today(), onA
   s.el.addEventListener('change', (e) => {
     if (e.target.id !== 'ta-date') return;
     const v = e.target.value;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v > today()) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v > maxDate) {
       e.target.value = selDate;
-      return toast('Bugün ya da geçmiş bir tarih seç');
+      return toast(`En fazla ${MAX_AHEAD_DAYS} gün ileri bir tarih seçebilirsin`);
     }
     selDate = v;
   });

@@ -186,3 +186,28 @@ describe('Veritabanı: meal_templates deposu', () => {
     expect(await db.list('food_logs')).toEqual([]);
   });
 });
+
+describe('İleri tarihli (planlı) kayıtlar', () => {
+  it('şablon en fazla 7 gün ileri uygulanabilir; planlı kayıt günü gelene kadar haftalık ve aylık özete girmez', async () => {
+    const { MAX_AHEAD_DAYS } = await import('../../public/js/templates.js');
+    expect(MAX_AHEAD_DAYS).toBe(7);
+    const db = await import('../../public/js/db.js');
+    const { today, addDays, weekStart } = await import('../../public/js/util.js');
+    const { weeklySummary, monthlyReport } = await import('../../public/js/context.js');
+    await db.init();
+    const t = today();
+    await db.put('food_logs', { date: t, meal: 'ogle', name: 'Bugün', grams: 100, kcal: 1000, protein_g: 30, carb_g: 50, fat_g: 10 });
+    const { records } = applyTemplate({ id: 'x', name: 'X', items: [itemFromFood(egg, { grams: 1000 })] }, { date: addDays(t, 1), meal: 'ogle' });
+    await db.putAtomic(records.map((obj) => ({ store: 'food_logs', obj })));
+    const w = await weeklySummary(weekStart(t));
+    expect(w.nutrition.logged_days).toBe(1);
+    expect(records[0].kcal).toBeGreaterThan(800); // aylık özetin 800 kcal eşiğini geçer: süzülmesinin tek sebebi tarih
+    expect(w.nutrition.avg_kcal).toBe(1000);
+    const m = await monthlyReport(t.slice(0, 7));
+    // ayın son günüyse yarın sonraki aya düşer; her iki durumda da bu ayın özeti yalnızca bugünü içerir
+    expect(m.nutrition.logged_days).toBe(1);
+    expect(m.nutrition.avg_kcal).toBe(1000);
+    // kayıt silinmedi, sadece özete girmedi
+    expect((await db.list('food_logs')).length).toBe(2);
+  });
+});

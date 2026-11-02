@@ -205,3 +205,35 @@ test('v4 → v5 yükseltmesi (gerçek tarayıcı): eski kayıtlar ve ayarlar kor
   expect(ver).toEqual({ v: 5, has: true });
   expect(errors).toEqual([]);
 });
+
+test('şablon ileri tarihe (planlı) eklenir; o gün haftada seçilebilir ve planlı notu görünür', async ({ page }) => {
+  const errors = await onboard(page);
+  const d = await todayStr(page);
+  const tm = await page.evaluate(async (d) => (await import('./js/util.js')).addDays(d, 1), d);
+  const far = await page.evaluate(async (d) => (await import('./js/util.js')).addDays(d, 8), d);
+  await page.evaluate(async () => {
+    const db = await import('./js/db.js');
+    await db.put('meal_templates', { id: 'tp_p', name: 'Planlı', meal: 'aksam', items: [{ food_id: 'f_egg', name: 'Yumurta', grams: 100, unit: 'gram', qty: 100 }], use_count: 0 });
+  });
+  await go(page, 'beslenme', 1200);
+  await openTemplates(page, 2);
+  await page.locator('[data-topen="tp_p"]').click();
+  // 7 günden ileri seçilemez
+  await top(page).locator('#ta-date').fill(far);
+  await top(page).locator('#ta-date').dispatchEvent('change');
+  await expect(page.locator('#toast')).toContainText('En fazla 7 gün ileri');
+  await top(page).locator('#ta-date').fill(tm);
+  await top(page).locator('#ta-date').dispatchEvent('change');
+  await top(page).locator('[data-apply]').click();
+  await expect(page.locator('#toast')).toContainText('Yarın Akşam öğününe eklendi');
+  const logs = await all(page, 'food_logs');
+  expect(logs.map((l) => [l.date, l.meal])).toEqual([[tm, 'aksam']]);
+  // günün başlığındaki ileri oku artık yarına gider
+  await page.click('[data-act="next"]');
+  await expect(page.locator('.note', { hasText: 'Bu gün henüz gelmedi' })).toBeVisible();
+  await expect(page.locator('.meal-row', { hasText: 'Yumurta' })).toBeVisible();
+  await expect(page.locator(`.dw[data-d="${tm}"]`)).toBeEnabled();
+  // yarından ileri gidilemez
+  await expect(page.locator('[data-act="next"]')).toBeDisabled();
+  expect(errors).toEqual([]);
+});

@@ -13,6 +13,9 @@ import {
   categoryCounts,
   cleanUserCats,
   MAX_USER_CATEGORIES,
+  assignedList,
+  toggleAssign,
+  foodKey,
 } from '../../public/js/data/food_categories.js';
 
 const byName = (n) => FOODS.find((f) => f.name.replace(/\s*~$/, '') === n);
@@ -24,7 +27,7 @@ describe('Hazır kategoriler', () => {
   it('kategori dağılımı makul: "Diğer" küçük kalır, temel gruplar dolu', () => {
     const c = categoryCounts(FOODS);
     expect(c.diger || 0).toBeLessThan(FOODS.length * 0.05);
-    for (const k of ['et', 'sut', 'tahil', 'baklagil', 'sebze', 'meyve', 'kuruyemis', 'icecek', 'tatli', 'yemek']) expect(c[k], k).toBeGreaterThan(3);
+    for (const k of ['et', 'sut', 'tahil', 'baklagil', 'sebze', 'meyve', 'kuruyemis', 'icecek', 'tatli', 'atistirmalik', 'yemek']) expect(c[k], k).toBeGreaterThan(3);
   });
   it('örnek besinler doğru kategoride', () => {
     const exp = {
@@ -38,6 +41,9 @@ describe('Hazır kategoriler', () => {
       u_hindistan_cevizi_yagi: 'yag',
       t_tavuk_gogsu_tatli: 'tatli',
     };
+    // cips ve krakerler tatlılardan ayrı
+    for (const n of ['Patates cipsi', 'Kraker (tuzlu)', 'Patlamış mısır', 'Granola bar']) expect(categoryOf(byName(n)), n).toBe('atistirmalik');
+    expect(categoryOf(byName('Galeta / grissini'))).toBe('tahil');
     for (const [id, cat] of Object.entries(exp)) expect(categoryOf(findFood(id)), id).toBe(cat);
     const names = {
       'Cheddar peyniri': 'sut',
@@ -106,7 +112,7 @@ describe('Kişisel kategoriler', () => {
     const assign = { f_egg: 'uc_1', f_oats: 'uc_2', c_x: 'uc_1' };
     const r = deleteUserCat(ucats, assign, 'uc_1');
     expect(r.ucats).toEqual([{ id: 'uc_2', name: 'Akşam' }]);
-    expect(r.assign).toEqual({ f_oats: 'uc_2' });
+    expect(r.assign).toEqual({ f_oats: ['uc_2'] }); // yeni biçim: liste
     // girdiler değiştirilmez
     expect(assign.f_egg).toBe('uc_1');
     const r2 = deleteUserCat(ucats, assign, 'meyve');
@@ -127,6 +133,29 @@ describe('Kişisel kategoriler', () => {
     expect(counts.uc_1).toBe(2);
     // aynı besin hazır kategorisinde de görünür
     expect(inCategory(findFood('f_egg'), 'et', assign)).toBe(true);
+  });
+});
+
+describe('Birden çok kişisel kategori', () => {
+  it('eski tek kimlikli atamalar okunur; ekle/çıkar listeyle çalışır', () => {
+    const old = { f_egg: 'uc_1' };
+    expect(assignedList(old, 'f_egg')).toEqual(['uc_1']);
+    let a = toggleAssign(old, 'f_egg', 'uc_2');
+    expect(a.f_egg).toEqual(['uc_1', 'uc_2']);
+    expect(inCategory(findFood('f_egg'), 'uc_2', a)).toBe(true);
+    expect(inCategory(findFood('f_egg'), 'uc_1', a)).toBe(true);
+    a = toggleAssign(a, 'f_egg', 'uc_1');
+    a = toggleAssign(a, 'f_egg', 'uc_2');
+    expect(a).toEqual({}); // boş liste tutulmaz
+    expect(old).toEqual({ f_egg: 'uc_1' }); // girdi değişmez
+  });
+  it('silme diğer kişisel kategorileri korur; düzeltilmiş besin orijinal kimlikle eşleşir', () => {
+    const r = deleteUserCat([{ id: 'uc_1', name: 'A' }, { id: 'uc_2', name: 'B' }], { f_egg: ['uc_1', 'uc_2'], f_oats: 'uc_1' }, 'uc_1');
+    expect(r.assign).toEqual({ f_egg: ['uc_2'] });
+    const override = { id: 'c_ov', overrides: 'f_egg', name: 'Yumurta' };
+    expect(foodKey(override)).toBe('f_egg');
+    expect(inCategory(override, 'uc_2', r.assign)).toBe(true);
+    expect(categoryCounts([override], r.assign).uc_2).toBe(1);
   });
 });
 

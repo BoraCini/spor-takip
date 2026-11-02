@@ -103,15 +103,26 @@ test('kategoriler: hazır kategori listesi, aramayla birlikte süzme, kişisel k
   await page.locator('#flist [data-open="f_egg"]').click();
   await top(page).locator('[data-ucpick]').click();
   await top(page).locator(`[data-uc="${uc.id}"]`).click();
-  await expect(top(page).locator('[data-ucpick]')).toHaveText('Kahvaltılıklar');
+  await expect(top(page).locator(`[data-uc="${uc.id}"]`)).toHaveAttribute('aria-pressed', 'true');
+  // aynı besin ikinci bir kişisel kategoriye de girebilir (seçiciden yeni kategori)
+  await top(page).locator('[data-newuc]').click();
+  await top(page).locator('#uc-name').fill('Protein');
+  await top(page).locator('[data-sheet-right]').click();
+  await expect(top(page).locator('[data-uc]')).toHaveCount(2);
+  await expect(top(page).locator('[data-uc][aria-pressed="true"]')).toHaveCount(2);
+  await top(page).locator('[data-sheet-close]').click(); // seçici kapanır
+  await expect(top(page).locator('[data-ucpick]')).toHaveText('Kahvaltılıklar, Protein');
   await top(page).locator('[data-sheet-close]').click();
   // kişisel besini ata
   await page.fill('#fsearch', 'yulaf bar');
   await page.locator('#flist [data-open="c_bar"]').click();
   await top(page).locator('[data-ucpick]').click();
   await top(page).locator(`[data-uc="${uc.id}"]`).click();
+  await expect(top(page).locator(`[data-uc="${uc.id}"]`)).toHaveAttribute('aria-pressed', 'true');
   await top(page).locator('[data-sheet-close]').click();
-  expect(await setting(page, 'food_cat_assign')).toEqual({ f_egg: uc.id, c_bar: uc.id });
+  await top(page).locator('[data-sheet-close]').click();
+  const pr = (await setting(page, 'food_user_categories')).find((c) => c.name === 'Protein');
+  expect(await setting(page, 'food_cat_assign')).toEqual({ f_egg: [uc.id, pr.id], c_bar: [uc.id] });
 
   await page.fill('#fsearch', '');
   await page.click('#ftabs [data-tab="kat"]');
@@ -128,12 +139,12 @@ test('kategoriler: hazır kategori listesi, aramayla birlikte süzme, kişisel k
   await top(page).locator('#uc-name').fill('Sabah');
   await top(page).locator('[data-sheet-right]').click();
   await expect(page.locator('#flist')).toContainText('Sabah');
-  // sil: besinler silinmez, atamalar kalkar
+  // sil: besinler silinmez, yalnızca bu kategorinin atamaları kalkar; diğer kişisel kategori korunur
   await page.click(`#flist [data-ucdel="${uc.id}"]`);
   await top(page).locator('[data-ok], .btn.danger').last().click();
   await expect(page.locator('#toast')).toContainText('Kategori silindi');
-  expect(await setting(page, 'food_user_categories')).toEqual([]);
-  expect(await setting(page, 'food_cat_assign')).toEqual({});
+  expect(await setting(page, 'food_user_categories')).toEqual([pr]);
+  expect(await setting(page, 'food_cat_assign')).toEqual({ f_egg: [pr.id] });
   const foods = await page.evaluate(async () => (await (await import('./js/db.js')).list('custom_foods')).map((f) => f.id));
   expect(foods).toEqual(['c_bar']);
   expect(errors).toEqual([]);

@@ -9,6 +9,8 @@ export const MAX_TEMPLATE_NAME = 60;
 export const MAX_TEMPLATE_ITEMS = 40;
 export const FACTOR_MIN = 0.1;
 export const FACTOR_MAX = 10;
+// Şablon en fazla bu kadar gün ileriye eklenebilir (planlı kayıt)
+export const MAX_AHEAD_DAYS = 7;
 export const TEMPLATE_SORTS = [
   ['son', 'Son kullanılan'],
   ['sik', 'En çok kullanılan'],

@@ -61,6 +61,23 @@ describe('Coach gizlilik ayarları', () => {
     expect(summary.aylik_ozet.bu_ay.tansiyon_ort).toBeUndefined();
   });
 
+  it('kayıtlı öğünler (favori, şablon, tarif) beslenme izniyle gider, izin kapalıyken gitmez', async () => {
+    const db = await seeded();
+    await db.setSetting('food_favorites', ['f_egg']);
+    await db.put('custom_foods', { id: 'c_tarif', name: 'MERCIMEKKOFTESI', k: 180, p: 8, c: 25, f: 5, portions: [['porsiyon', 150]], recipe: { servings: 4, items: [] } });
+    await db.put('meal_templates', { name: 'SABAHSABLONU', meal: 'kahvalti', items: [{ food_id: 'f_egg', name: 'Yumurta', grams: 100, unit: 'adet', qty: 2, snap: { k: 143, p: 12.6, c: 0.7, f: 9.5 } }], use_count: 2 });
+    const { buildContext, splitContext, aiShare } = await import('../../public/js/context.js');
+    const full = await buildContext();
+    expect(full.kayitli_ogunler.favoriler[0]).toMatch(/^Yumurta/);
+    expect(full.kayitli_ogunler.sablonlar[0]).toMatch(/^SABAHSABLONU \[kahvalti\]: Yumurta 100g — \d+ kcal/);
+    expect(full.kayitli_ogunler.tarifler[0]).toMatch(/^MERCIMEKKOFTESI: 1 porsiyon 150 g, 270 kcal/);
+    const on = splitContext(full, await aiShare());
+    expect(send(on.summary)).toContain('SABAHSABLONU');
+    const off = splitContext(full, { ...(await aiShare()), beslenme: false });
+    expect(send(off.summary) + send(off.details)).not.toContain('SABAHSABLONU');
+    expect(send(off.summary)).not.toContain('MERCIMEKKOFTESI');
+  });
+
   it('kapalı kategorinin araçları tanımlanmaz (doz işaretleme dahil)', async () => {
     const { toolsFor } = await import('../../public/js/ai.js');
     const names = toolsFor({ profil: true, beslenme: true, antrenman: true, vucut: true, tahlil: false, tansiyon: false, ilac: false }).map((t) => t.name);

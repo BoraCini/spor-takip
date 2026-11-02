@@ -12,7 +12,8 @@ export const FOOD_CATEGORIES = [
   ['kuruyemis', 'Kuruyemişler ve tohumlar'],
   ['yag', 'Yağlar'],
   ['icecek', 'İçecekler'],
-  ['tatli', 'Tatlılar ve atıştırmalıklar'],
+  ['tatli', 'Tatlılar ve şekerlemeler'],
+  ['atistirmalik', 'Atıştırmalıklar'],
   ['sporcu', 'Sporcu besinleri'],
   ['paketli', 'Paketli ürünler'],
   ['yemek', 'Hazır yemekler'],
@@ -51,7 +52,8 @@ export const CATEGORY_RULES = [
   ['icecek', W('elma suyu|nar suyu|portakal suyu|meyve suyu|salgam|hindistan cevizi suyu|soya sutu|pirinc sutu')],
   ['diger', W('soya sosu|makarna sosu|ketcap|mayonez|hardal|barbeku|acı sos|aci sos|pesto|ranch|sezar sos|salsa sos|sirke|limon suyu')],
   ['icecek', W('ayran|kefir|kola|gazoz|soda|limonata|kahve|cay|yesil cay|latte|cappuccino|espresso|smoothie|milkshake|salep|boza|bira|sarap|raki|viski|votka|enerji icecegi|maden suyu')],
-  ['tatli', W('baklava|kunefe|sutlac|kazandibi|muhallebi|supangle|lokum|helva|helvasi|revani|sekerpare|tulumba|lokma|kek|kurabiye|biskuvi|gofret|cikolata|dondurma|puding|tiramisu|cheesecake|brownie|asure|kadayif|profiterol|recel|pekmez|seker|surup|jelibon|marshmallow|cips|kraker|pretzel|patlamis misir|granola bar|bal kaymak|tahin pekmez')],
+  ['atistirmalik', W('cips|kraker|pretzel|patlamis misir|granola bar|misir cipsi')],
+  ['tatli', W('baklava|kunefe|sutlac|kazandibi|muhallebi|supangle|lokum|helva|helvasi|revani|sekerpare|tulumba|lokma|kek|kurabiye|biskuvi|gofret|cikolata|dondurma|puding|tiramisu|cheesecake|brownie|asure|kadayif|profiterol|recel|pekmez|seker|surup|jelibon|marshmallow|bal kaymak|tahin pekmez')],
   ['tatli', X('bal')],
   ['yemek', W('corba|yemegi|kebap|kebabi|doner|durum|lahmacun|pide|pizza|hamburger|cheeseburger|burger|tost|sandvic|borek|boregi|gozleme|manti|kofte|dolma|sarma|musakka|guvec|kavurma|sote|zeytinyagli|pilaki|mucver|menemen|omlet|cilbir|sucuklu|sinitzel|nugget|kisir|salata|piyaz|ezme|haydari|cacik|humus|tarator|babagannus|muhammara|saksuka|fava|tarama|pilav|kumpir|kizartma|islim|hunkar|iskender|imam bayildi|karniyarik|turlu|kokorec|midye dolma|cig kofte|sosis|pure|kumru|wrap|tantuni|beyti|kiymali|etli|firin makarna|tas kebabi|yogurtlu|falafel|sushi|balik ekmek|hamsi tava|kalamar tava|izgara sebze|haslanmis sebze|atom')],
   ['et', X('hindi')],
@@ -117,18 +119,39 @@ export function newUserCatId() {
   return `uc_${Date.now().toString(36)}${r}`;
 }
 
+// Atama değeri eski sürümde tek kimlik (string), şimdi liste. İkisi de okunur.
+// Anahtar, düzeltilmiş (overrides) besinlerde orijinal kimliktir; "Orijinal değerlere dön" sonrası atama kaybolmaz.
+export const foodKey = (f) => (f && (f.overrides || f.id)) || '';
+export function assignedList(assign, key) {
+  const v = (assign || {})[key];
+  const arr = Array.isArray(v) ? v : v ? [v] : [];
+  return [...new Set(arr.filter(isUserCategory))];
+}
+// Bir besini kişisel kategoriye ekle/çıkar (bir besin birden çok kişisel kategoride olabilir)
+export function toggleAssign(assign, key, catId) {
+  const a = { ...(assign || {}) };
+  const cur = assignedList(a, key);
+  const next = cur.includes(catId) ? cur.filter((x) => x !== catId) : [...cur, catId];
+  if (next.length) a[key] = next;
+  else delete a[key];
+  return a;
+}
+
 // Kişisel kategori silinince yalnızca o kategoriye yapılan atamalar kaldırılır; besinler hazır kategorilerinde kalır, hiçbir besin silinmez.
 export function deleteUserCat(ucats, assign, id) {
   if (!isUserCategory(id)) return { ucats: cleanUserCats(ucats), assign: { ...(assign || {}) } };
   const a = {};
-  for (const [fid, cid] of Object.entries(assign || {})) if (cid !== id) a[fid] = cid;
+  for (const fid of Object.keys(assign || {})) {
+    const rest = assignedList(assign, fid).filter((c) => c !== id);
+    if (rest.length) a[fid] = rest;
+  }
   return { ucats: cleanUserCats(ucats).filter((c) => c.id !== id), assign: a };
 }
 
 // Bir besin bir kategoride mi? Hazır kategori: categoryOf; kişisel kategori: atama tablosu
 export function inCategory(food, key, assign = {}) {
   if (!food || !key) return true;
-  if (isUserCategory(key)) return (assign || {})[food.id] === key;
+  if (isUserCategory(key)) return assignedList(assign, foodKey(food)).includes(key);
   return categoryOf(food) === key;
 }
 
@@ -138,8 +161,7 @@ export function categoryCounts(pool, assign = {}) {
   for (const f of pool) {
     const c = categoryOf(f);
     out[c] = (out[c] || 0) + 1;
-    const u = (assign || {})[f.id];
-    if (isUserCategory(u)) out[u] = (out[u] || 0) + 1;
+    for (const u of assignedList(assign, foodKey(f))) out[u] = (out[u] || 0) + 1;
   }
   return out;
 }
