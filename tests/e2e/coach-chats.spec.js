@@ -16,10 +16,16 @@ async function mockClaude(page) {
 const ask = async (page, q) => {
   await page.fill('#msg', q);
   await page.click('.composer .send');
-  await expect(page.locator('.bubble.ai').last()).toContainText('Cevap: ' + q, { timeout: 15_000 });
+  // cevap ya da hata balonu gelene kadar bekle; hata varsa metnini göster
+  await expect(page.locator('.bubble.ai, .bubble.err').last()).toBeVisible({ timeout: 15_000 });
+  const err = await page.locator('.bubble.err').last().textContent().catch(() => null);
+  expect(err, 'Coach hata verdi').toBeNull();
+  await expect(page.locator('.bubble.ai').last()).toContainText('Cevap: ' + q);
 };
 
 test('Coach sohbetleri: aç, kapat, yeni sohbet, eskiye dön, sil', async ({ page }) => {
+  page.on('console', (m) => m.type() === 'error' && console.log('konsol:', m.text()));
+  page.on('requestfailed', (r) => console.log('istek başarısız:', r.method(), r.url(), r.failure() && r.failure().errorText));
   const errors = await onboard(page);
   await mockClaude(page);
   await page.evaluate(async () => {
