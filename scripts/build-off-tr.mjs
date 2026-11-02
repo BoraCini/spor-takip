@@ -71,10 +71,8 @@ export function classify(row) {
   const code = clean(row.code);
   if (!/^\d{8,14}$/.test(code)) return no('barkod geçersiz');
   if (!String(row.countries_tags || '').split(',').includes('en:turkey')) return no('Türkiye dışı');
-  let name = tidyName(row.product_name || row.generic_name);
-  if (!name || name.length < 2 || name.length > 90) return no('ad yok');
-  const brand = tidyName(String(row.brands || '').split(',')[0]);
-  const k = num(row['energy-kcal_100g']) ?? (num(row['energy_100g']) != null ? num(row['energy_100g']) / 4.184 : null);
+  const kj = num(row['energy-kj_100g']) ?? num(row['energy_100g']);
+  const k = num(row['energy-kcal_100g']) ?? (kj != null ? kj / 4.184 : null);
   const p = num(row.proteins_100g);
   const c = num(row.carbohydrates_100g);
   const f = num(row.fat_100g);
@@ -85,6 +83,11 @@ export function classify(row) {
   // tutarlılık: makrolardan hesaplanan enerji etiketteki kaloriyle çok farklıysa veri hatalıdır
   const calc = 4 * p + 4 * c + 9 * f + (fb ? 2 * fb : 0);
   if (Math.abs(calc - k) > Math.max(40, 0.3 * k)) return no('enerji tutarsız');
+  // ad: önce Türkçe, sonra ana dil, sonra diğer dillerdeki ad alanları
+  const nameRaw = [row.product_name_tr, row.product_name, row.generic_name_tr, row.generic_name, row.product_name_en, row.abbreviated_product_name, ...Object.keys(row).filter((x) => /^product_name_[a-z]{2}$/.test(x)).map((x) => row[x])].find((x) => clean(x));
+  let name = tidyName(nameRaw);
+  if (!name || name.length < 2 || name.length > 90) return no('ad yok (besin değerleri tam)');
+  const brand = tidyName(String(row.brands || '').split(',')[0]);
   const sodiumG = num(row.sodium_100g) ?? (num(row.salt_100g) != null ? num(row.salt_100g) / 2.5 : null);
   const na = sodiumG == null || sodiumG < 0 || sodiumG > 40 ? null : Math.round(sodiumG * 1000);
   const kaG = num(row.potassium_100g);
@@ -113,6 +116,7 @@ async function* lines(input) {
 export async function build({ input = null } = {}) {
   let header = null;
   let idx = null;
+  let wanted = [];
   const byCode = new Map();
   let seen = 0;
   const reasons = {};
@@ -124,15 +128,17 @@ export async function build({ input = null } = {}) {
       for (const need of ['code', 'product_name', 'brands', 'countries_tags', 'energy-kcal_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g']) {
         if (!(need in idx)) throw new Error(`Döküm biçimi değişmiş: "${need}" sütunu yok`);
       }
+      const base = ['code', 'product_name', 'generic_name', 'abbreviated_product_name', 'brands', 'countries_tags', 'quantity', 'serving_quantity', 'energy-kcal_100g', 'energy-kj_100g', 'energy_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g', 'fiber_100g', 'sodium_100g', 'salt_100g', 'potassium_100g', 'last_modified_t'];
+      wanted = [...new Set([...base, ...header.filter((h) => /^(product|generic)_name_[a-z]{2}$/.test(h))])].filter((k) => k in idx);
+      console.log('Ad sütunları: ' + header.filter((h) => /name/.test(h)).join(', '));
+      console.log('Enerji sütunları: ' + header.filter((h) => /^energy/.test(h)).join(', '));
       continue;
     }
     if (!line.includes('en:turkey')) continue; // hızlı ön süzgeç
     seen++;
     const cols = line.split('\t');
     const row = {};
-    for (const k of ['code', 'product_name', 'generic_name', 'brands', 'countries_tags', 'quantity', 'serving_quantity', 'energy-kcal_100g', 'energy_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g', 'fiber_100g', 'sodium_100g', 'salt_100g', 'potassium_100g', 'last_modified_t']) {
-      if (k in idx) row[k] = cols[idx[k]];
-    }
+    for (const k of wanted) row[k] = cols[idx[k]];
     if (String(row.countries_tags || '').split(',').includes('en:turkey')) codes.add(clean(row.code));
     const r = classify(row);
     if (!r.item) {
