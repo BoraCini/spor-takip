@@ -21,8 +21,7 @@ const ask = async (page, q) => {
   await page.click('.composer .send');
   // cevap ya da hata balonu gelene kadar bekle; hata varsa metnini göster
   await expect(page.locator('.bubble.ai', { hasText: 'Cevap: ' + q }).or(page.locator('.bubble.err')).first()).toBeVisible({ timeout: 15_000 });
-  const err = await page.locator('.bubble.err').last().textContent().catch(() => null);
-  expect(err, 'Coach hata verdi').toBeNull();
+  if (await page.locator('.bubble.err').count()) throw new Error('Coach hata verdi: ' + (await page.locator('.bubble.err').last().textContent()));
   await expect(page.locator('.bubble.ai').last()).toContainText('Cevap: ' + q);
 };
 
