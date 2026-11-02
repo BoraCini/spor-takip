@@ -46,7 +46,7 @@ Yeni sürüm yayınlarken `public/sw.js` içindeki `CACHE` adını ve `public/js
 
 ## Veri kaynakları
 
-Temel besin değerleri: USDA FoodData Central (SR Legacy), [TempoLife](https://tempolife.app) derlemesi (`tempo-food-db`) üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar bu projede eklendi. Paketli ürünler: Open Food Facts (ODbL).
+Temel besin değerleri: USDA FoodData Central (SR Legacy), [TempoLife](https://tempolife.app) derlemesi (`tempo-food-db`) üzerinden, CC-BY-4.0. Türkçe adlar ve porsiyonlar bu projede eklendi. Paketli ürünler: Open Food Facts (ODbL); Türkiye'de satılan ürünlerin listesi (`public/data/off_tr.json`) `scripts/build-off-tr.mjs` ile OFF dökümünden üretilir ve `.github/workflows/off-data.yml` ile haftalık yenilenir.
 
 QR kodlar: [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT, `public/vendor/qrcode`).
 

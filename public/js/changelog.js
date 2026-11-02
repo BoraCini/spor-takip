@@ -6,6 +6,29 @@ import { esc, openSheet } from './util.js';
 
 export const CHANGELOG = [
   {
+    version: '2.3.0',
+    date: '2 Kasım 2026',
+    title: 'Binlerce paketli ürün',
+    sections: [
+      {
+        name: 'Paketli ürünler',
+        items: [
+          'Türkiye\'de satılan yaklaşık 5.000 markalı paketli ürün (Eti, Ülker, Sütaş, Pınar…) artık aramada "Paketli ürünler" bölümünde çıkar.',
+          'Marka adıyla ararsan ("eti burçak") paketli ürünler en üste gelir.',
+          'Liste telefonda durur: internet yokken de aranır, barkodu okutunca da önce burada bakılır.',
+          'Liste her hafta Open Food Facts\'ten kendiliğinden güncellenir.',
+        ],
+      },
+      {
+        name: 'İnternette arama',
+        items: [
+          'Aradığın şey listede azsa uygulama Open Food Facts\'te de kendiliğinden arar; sonuçlar "İnternette bulunanlar" bölümünde çıkar.',
+          'Değerleri bilinmeyen lif ve sodyum artık 0 değil boş gelir; kaydetmeden önce paketle karşılaştırabilirsin.',
+        ],
+      },
+    ],
+  },
+  {
     version: '2.2.1',
     date: '2 Kasım 2026',
     title: 'Yenilikler ekranı',

@@ -3,9 +3,10 @@ import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, con
 import { refresh, go } from '../app.js';
 import { removeWithUndo } from '../undo.js';
 import { renderTemplateTab, saveMealAsTemplate } from './sablon.js';
+import { loadPackaged, packagedLoaded, packagedByBarcode, PACKAGED_ATTRIBUTION } from '../data/packaged.js';
 import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpenditure, macrosFor } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
-import { searchFoods, allFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
+import { searchFoods, searchExtra, allFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
 import { FOOD_CATEGORIES, CATEGORY_LABEL, categoryOf, inCategory, categoryCounts, isUserCategory, cleanUserCats, toggleFavorite, assignedList, toggleAssign, catNameError, newUserCatId, deleteUserCat, MAX_CAT_NAME } from '../data/food_categories.js';
 import { RECIPE_CATEGORIES, RECIPE_CAT_LABEL, RECIPE_TAGS, normalizeRecipe, resolveItem, recipeTotals, recipeNutrition, scaleItems, itemGrams } from '../recipes.js';
 
@@ -358,7 +359,7 @@ async function scanAndAdd(meal) {
   const code = await scanBarcode();
   if (!code) return;
   const food = await foodFromBarcode(code);
-  if (food) openAmount({ ...food, custom: true }, meal);
+  if (food) openAmount(food.packaged ? food : { ...food, custom: true }, meal);
 }
 
 const markCustom = (list) => list.map((c) => ({ ...c, custom: true }));
@@ -384,6 +385,7 @@ async function foodHistory(custom) {
 }
 
 function srcTag(f) {
+  if (f.src === 'off') return 'paketli';
   if (f.overrides) return 'düzeltildi';
   if (f.recipe) return 'tarif';
   if (f.custom) return 'benim';
@@ -393,6 +395,7 @@ function srcTag(f) {
 }
 
 function srcLine(f) {
+  if (f.src === 'off') return `${f.brand ? f.brand + ' · ' : ''}Open Food Facts · barkod ${f.barcode} · paketle karşılaştır`;
   if (f.overrides) return 'Senin düzelttiğin değerler';
   if (f.recipe) return `Tarifin · ${fmt(f.recipe.servings)} porsiyon`;
   if (f.custom) {
@@ -536,6 +539,9 @@ async function openCatPicker(food, after) {
 
 async function openAddFood(meal, startTab = null, startCat = null) {
   const custom = markCustom(await db.list('custom_foods'));
+  // paketli ürün listesi: geçmişteki/favorideki paketli ürünler bulunabilsin diye kısa süre beklenir, gerisi arka planda
+  const pkReady = loadPackaged();
+  await Promise.race([pkReady, new Promise((r) => setTimeout(r, 1200))]);
   const hist = await foodHistory(custom);
   const mine = custom.filter((c) => !c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
   const recipes = custom.filter((c) => c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
@@ -577,7 +583,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
       <div class="seg tabs2" role="tablist" aria-label="Listeler" id="ftabs" style="margin:12px 0 10px"></div>
       <div id="flist"></div>
       <div id="fmore"></div>
-      <p class="small muted" style="margin:16px 4px 0;line-height:17px">${esc(FOOD_ATTRIBUTION)}</p>`,
+      <p class="small muted" style="margin:16px 4px 0;line-height:17px">${esc(FOOD_ATTRIBUTION)} ${esc(PACKAGED_ATTRIBUTION)}</p>`,
   });
   const ft = document.createElement('div');
   ft.className = 'sheet-ft';
@@ -623,19 +629,33 @@ async function openAddFood(meal, startTab = null, startCat = null) {
         </select></div>`;
       // Sayı içeren cümle yazıldıysa (örn. "3 yumurta 200 g tavuk") tek seferde eklemeyi öner
       const sentence = /\d|\b(bir|iki|üç|dört|beş|yarım)\b/i.test(q) && q.split(/\s+/).length >= 2;
+      // Paketli ürünler (Türkiye, Open Food Facts listesi) ayrı bölümde; marka adıyla aranırsa öne gelir
+      const pk = packagedLoaded();
+      const pres = pk ? searchExtra(q, { custom, usage: hist.count, limit: 25, filter: cat ? (f) => inCategory(f, cat, meta.assign) : null }) : [];
+      const ql = q.toLocaleLowerCase('tr');
+      const brandFirst = !!(pres.length && pres[0].brand && ql.includes(pres[0].brand.toLocaleLowerCase('tr')));
+      const genHTML = res.length
+        ? `<div class="sec" style="padding:0 14px 6px"><h2>${brandFirst ? 'Diğer sonuçlar' : 'Sonuçlar'}${cat ? ` · ${esc(catLabel(cat))}` : ''}</h2><span class="meta">${res.length >= 60 ? '60+' : res.length} besin</span></div>${list(res, '')}`
+        : pres.length
+        ? ''
+        : `<div class="empty">${cat ? `"${esc(catLabel(cat))}" kategorisinde "${esc(q)}" bulunamadı. <button type="button" class="link" data-cat="">Tüm kategorilerde ara</button>` : `Listede "${esc(q)}" bulunamadı.`}</div>`;
+      const pkHTML = pres.length
+        ? `<div class="sec" style="padding:${res.length && !brandFirst ? '14px' : '0'} 14px 6px"><h2>Paketli ürünler</h2><span class="meta">${pres.length >= 25 ? '25+' : pres.length} ürün</span></div>${list(pres, '')}`
+        : !pk
+        ? '<p class="small muted" style="margin:10px 4px 0" data-pk-wait>Paketli ürün listesi yükleniyor…</p>'
+        : '';
       listEl.innerHTML = (sentence
         ? `<button type="button" class="card" data-act="say-text" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-bottom:10px;padding:12px 14px">
              <span style="color:var(--accent)">${icon.mic}</span><span style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:600;color:var(--accent)">Cümle olarak ekle</span>
              <span class="small muted">"${esc(q)}" içindeki besinleri miktarlarıyla tek seferde ekle</span></span></button>`
-        : '') + catSel + (res.length
-        ? `<div class="sec" style="padding:0 14px 6px"><h2>Sonuçlar${cat ? ` · ${esc(catLabel(cat))}` : ''}</h2><span class="meta">${res.length >= 60 ? '60+' : res.length} besin</span></div>${list(res, '')}`
-        : `<div class="empty">${cat ? `"${esc(catLabel(cat))}" kategorisinde "${esc(q)}" bulunamadı. <button type="button" class="link" data-cat="">Tüm kategorilerde ara</button>` : `Listede "${esc(q)}" bulunamadı.`}</div>`);
+        : '') + catSel + (brandFirst ? pkHTML + genHTML : genHTML + pkHTML) + '<div id="flive"></div>';
+      scheduleLive(q, res.length + pres.length, pres);
       moreEl.innerHTML = `<div class="sec" style="padding:14px 14px 6px"><h2>${res.length ? 'Aradığın bu değil mi?' : 'Başka yollar'}</h2></div>
          <div class="card flush">
            <button type="button" class="row" data-act="ai-est"><span class="row-main"><span class="row-title" style="color:var(--accent)">Yapay zekâyla hesapla: "${esc(q)}"</span>
              <span class="row-sub">Ev ve restoran yemekleri için kalori ve makro tahmini</span></span>${icon.chev}</button>
-           <button type="button" class="row" data-act="off-search"><span class="row-main"><span class="row-title" style="color:var(--accent)">Paketli ürünlerde ara</span>
-             <span class="row-sub">Open Food Facts'te marka veya ürün adıyla</span></span>${icon.chev}</button>
+           <button type="button" class="row" data-act="off-search"><span class="row-main"><span class="row-title" style="color:var(--accent)">Open Food Facts'te daha fazla ara</span>
+             <span class="row-sub">İnternetteki tüm paketli ürünlerde marka veya ürün adıyla</span></span>${icon.chev}</button>
          </div>`;
       return;
     }
@@ -689,6 +709,56 @@ async function openAddFood(meal, startTab = null, startCat = null) {
       )}`;
   };
 
+  // ---- İnternette canlı arama (Open Food Facts): yerel sonuç azsa, yazmayı bırakınca kendiliğinden ----
+  let live = { q: '', items: [], state: 'idle' };
+  let liveTimer = null;
+  let liveSeq = 0;
+  const drawLive = () => {
+    const el = s.el.querySelector('#flive');
+    if (!el) return;
+    if (live.state === 'wait' || live.state === 'loading') {
+      el.innerHTML = '<p class="small muted" style="margin:12px 4px 0" aria-live="polite">İnternette de aranıyor (Open Food Facts)…</p>';
+    } else if (live.state === 'done' && live.items.length) {
+      el.innerHTML = `<div class="sec" style="padding:14px 14px 6px"><h2>İnternette bulunanlar</h2><span class="meta">Open Food Facts</span></div>
+        <div class="card flush">${live.items
+          .map((f, i) => `<button type="button" class="row" data-live="${i}"><span class="row-main"><span class="row-title normal">${esc(f.name)}</span>
+            <span class="row-sub">100 g: ${fmt(f.k)} kcal · P ${fmt(f.p, 1)} · K ${fmt(f.c, 1)} · Y ${fmt(f.f, 1)}</span></span>${icon.chev}</button>`)
+          .join('')}</div>
+        <p class="small muted" style="margin:6px 4px 0">Dokununca değerleri kontrol edip listene kaydedersin.</p>`;
+    } else el.innerHTML = '';
+  };
+  const scheduleLive = (q, localCount, shown = []) => {
+    clearTimeout(liveTimer);
+    const want = q.length >= 3 && localCount < 8 && !cat && (typeof navigator === 'undefined' || navigator.onLine !== false);
+    if (!want) {
+      liveSeq++;
+      live = { q: '', items: [], state: 'idle' };
+      return drawLive();
+    }
+    if (live.q === q) return drawLive();
+    const my = ++liveSeq;
+    live = { q, items: [], state: 'wait' };
+    drawLive();
+    liveTimer = setTimeout(async () => {
+      live.state = 'loading';
+      let found = [];
+      try {
+        found = await searchProducts(q);
+      } catch {
+        found = null;
+      }
+      if (my !== liveSeq) return;
+      const known = new Set([...custom.filter((c) => c.barcode).map((c) => String(c.barcode)), ...shown.map((f) => f.barcode)]);
+      live = {
+        q,
+        // listede (paketli ya da kendi besinlerinde) olan barkodlar tekrar gösterilmez
+        items: (found || []).filter((f) => f.k != null && (!f.barcode || (!known.has(String(f.barcode)) && !packagedByBarcode(f.barcode)))).slice(0, 15),
+        state: found ? 'done' : 'error',
+      };
+      drawLive();
+    }, 700);
+  };
+
   const updateRow = (id) => {
     const f = byId.get(id);
     if (!f) return;
@@ -724,14 +794,29 @@ async function openAddFood(meal, startTab = null, startCat = null) {
 
   draw();
   inp.addEventListener('input', draw);
+  // liste geç yüklendiyse (ilk açılış, yavaş bağlantı) arama sonuçlarını yenile
+  if (!packagedLoaded())
+    pkReady.then((arr) => {
+      if (arr.length && document.body.contains(s.sheet) && inp.value.trim()) draw();
+      else s.el.querySelector('[data-pk-wait]')?.remove();
+    });
   s.sheet.addEventListener('change', (e) => {
     if (e.target.id !== 'fcat') return;
     cat = e.target.value || null;
     draw();
   });
   s.sheet.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-meal],[data-tab],[data-pick],[data-open],[data-act],[data-addall],[data-fav],[data-cat],[data-ucedit],[data-ucdel]');
+    const b = e.target.closest('[data-meal],[data-tab],[data-pick],[data-open],[data-act],[data-addall],[data-fav],[data-cat],[data-ucedit],[data-ucdel],[data-live]');
     if (!b) return;
+    if (b.dataset.live != null) {
+      const f = live.items[Number(b.dataset.live)];
+      if (!f) return;
+      s.close();
+      const mineF = f.barcode ? (await db.list('custom_foods', (x) => x.barcode === f.barcode))[0] : null;
+      if (mineF) openAmount({ ...mineF, custom: true }, selMeal);
+      else saveAndAmount(f, selMeal);
+      return;
+    }
     if (b.hasAttribute('data-fav')) {
       const f = byId.get(b.dataset.fav);
       if (!f) return;
