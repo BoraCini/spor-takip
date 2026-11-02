@@ -2,6 +2,7 @@ import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, addDays, relDay, icon, openSheet, confirmSheet, round1, weekStart, parseDate, swipeDelete } from '../util.js';
 import { refresh, go } from '../app.js';
 import { removeWithUndo } from '../undo.js';
+import { renderTemplateTab, saveMealAsTemplate } from './sablon.js';
 import { dayNutrition, targetsOf, MEALS, waterDay, waterTarget, adaptiveExpenditure, macrosFor } from '../context.js';
 import { scanBarcode, foodFromBarcode, reviewFood, searchProducts, fileToImage } from '../barcode.js';
 import { searchFoods, allFoods, nutrientsFor, findFood, defaultServing, servingText, FOOD_ATTRIBUTION, portionsOf, baseUnit, UNIT_TYPES, MAX_PORTIONS, validAmount, parsePortionRows } from '../data/foods.js';
@@ -156,7 +157,7 @@ export async function render(root, params) {
                       <span class="row-sub">${e.grams ? esc(servingText(e.unit, e.qty, e.grams, e.base || 'g')) + ' · ' : ''}P ${fmt(e.protein_g)} · K ${fmt(e.carb_g)} · Y ${fmt(e.fat_g)}</span></span>
                       <span class="row-end">${fmt(e.kcal)}</span></button>`
                   )
-                  .join('')}</div>`
+                  .join('')}<button type="button" class="meal-foot" data-act="save-template" data-meal="${mk}">${icon.copy}<span>Şablon olarak kaydet</span></button></div>`
               : y.length
               ? `<div class="meal-empty"><button type="button" class="pill" data-act="copy-meal" data-meal="${mk}" style="display:flex;align-items:center;gap:6px">${icon.copy}<span>Dünkü ${({ kahvalti: 'kahvaltıyı', ogle: 'öğle yemeğini', aksam: 'akşam yemeğini', ara: 'ara öğünü' })[mk]} ekle (${y.length})</span></button></div>`
               : `<button type="button" class="meal-empty muted" data-act="add" data-meal="${mk}">Henüz bir şey yok · eklemek için dokun</button>`
@@ -299,12 +300,17 @@ export async function render(root, params) {
     } else if (act === 'copy-meal') {
       const mk = t.dataset.meal;
       const y = yEntries.filter((x) => x.meal === mk && !x.plan_item_id);
-      for (const x of y) {
-        const { id, created_at, updated_at, user_id, ...rest } = x;
-        await db.put('food_logs', { ...rest, date: state.date, source: 'kopya' });
+      try {
+        // hepsi ya da hiçbiri
+        await db.putAtomic(y.map(({ id: _i, created_at: _c, updated_at: _u, user_id: _x, ...rest }) => ({ store: 'food_logs', obj: { ...rest, date: state.date, source: 'kopya' } })));
+      } catch (err) {
+        return toast('Eklenemedi: ' + (err.message || err), 4000);
       }
       toast(`${y.length} besin eklendi`);
       refresh();
+    } else if (act === 'save-template') {
+      const mk = t.dataset.meal;
+      saveMealAsTemplate(entries.filter((x) => x.meal === mk), mk);
     }
     else if (act === 'edit-entry') openEditEntry(entries.find((x) => x.id === t.dataset.id));
     else if (act === 'plan-add') openPlanItem(null);
@@ -538,6 +544,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
     ['kat', 'Kategoriler'],
     ['benim', 'Benim'],
     ['tarif', 'Tarifler'],
+    ['sablon', 'Şablonlar'],
   ];
 
   const s = openSheet({
@@ -653,7 +660,19 @@ async function openAddFood(meal, startTab = null, startCat = null) {
     }
     else if (tab === 'benim')
       listEl.innerHTML = `<button type="button" class="btn block" data-act="custom" style="margin-bottom:10px">+ Yeni besin</button>${list(mine, 'Kendi eklediğin, barkodla okuttuğun veya yapay zekâya hesaplattığın besinler burada durur.')}`;
-    else
+    else if (tab === 'sablon') {
+      const box = document.createElement('div');
+      listEl.replaceChildren(box);
+      renderTemplateTab(box, {
+        pool: custom,
+        date: state.date,
+        meal: () => selMeal,
+        onApplied: () => s.close(),
+        reopen: () => {
+          if (document.body.contains(s.sheet) && tab === 'sablon' && !inp.value.trim()) draw(); // listeyi tazele
+        },
+      }).catch((err) => (box.innerHTML = `<div class="empty">Şablonlar okunamadı: ${esc(err.message || err)}</div>`));
+    } else
       listEl.innerHTML = `<button type="button" class="btn block" data-act="recipe" style="margin-bottom:10px">+ Yeni tarif</button>${list(
         recipes,
         'Evde yaptığın yemeği malzemeleriyle bir kez gir; porsiyon başına kalori ve makroyu uygulama hesaplasın.'

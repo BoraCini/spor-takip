@@ -3,7 +3,7 @@
 iPhone'da ana ekrana eklenip uygulama gibi çalışan kişisel spor takip uygulaması (PWA).
 
 - **Danışman:** Claude ile sohbet (canlı yazılan cevap, sesli konuşma, önbellekli istekler). Yemek, su, set, kardiyo, doz, kilo, ölçü ve tahlil kayıtlarını onay kartıyla hazırlar; kalıcı notlar tutar; haftalık rapor hazırlar.
-- **Beslenme:** Günlük (~630 besinlik veritabanı: temel besinler USDA'dan, Türk yemekleri yaklaşık değerlerle; FatSecret tarzı ekleme ekranı: Son/Sık/Benim/Tarifler sekmeleri, porsiyonlu sonuçlar, çoklu seçim, hızlı kalori, tarif oluşturucu; barkod + Open Food Facts, yapay zekâyla hesaplama, su takibi) ve Planım.
+- **Beslenme:** Günlük (~630 besinlik veritabanı: temel besinler USDA'dan, Türk yemekleri yaklaşık değerlerle; FatSecret tarzı ekleme ekranı: Son/Sık/Favoriler/Kategoriler/Benim/Tarifler/Şablonlar sekmeleri, besine özel çoklu porsiyon, çoklu seçim, hızlı kalori, adımlı tarif oluşturucu (pişmiş ağırlık), kişisel kategoriler, öğün şablonları (çarpanla, istenen gün ve öğüne tek işlemde); barkod + Open Food Facts, yapay zekâyla hesaplama, su takibi) ve Planım.
 - **Antrenman:** 7 günlük program, set/kg/tekrar + RPE, kardiyo (süre/mesafe), kademeli ağırlık önerisi, plaka hesaplayıcı, dinlenme sayacı. **İlerleme:** haftalık kas grubu hacmi, kilo, vücut ölçüleri, ilerleme fotoğrafları, rekorlar.
 - **Kür:** Maddeler, enjeksiyon/hap takvimi, bölge rotasyonu, takvime aktarma.
 - **Kan testleri:** Değerler, referans aralıkları, gruplama ve trend.

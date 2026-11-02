@@ -1085,3 +1085,8 @@ input.input[type="date"]::-webkit-datetime-edit, input.input[type="time"]::-webk
 .cat-btn { background: var(--card); border-radius: 12px; padding: 12px; min-height: 60px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; box-shadow: var(--shadow); }
 .cat-btn .cat-name { font-weight: 600; font-size: 15px; line-height: 19px; }
 .empty .link { color: var(--accent); font-weight: 600; display: inline; min-height: 0; }
+
+/* ---------- Öğün şablonları (P1.4) ---------- */
+.meal-foot { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 44px; padding: 0 14px; border-top: 1px solid var(--sep); background: var(--card); color: var(--accent); font-size: 14px; font-weight: 600; }
+.meal-foot .ico { width: 18px; height: 18px; }
+.input.invalid { border-color: var(--red, #FF3B30); }

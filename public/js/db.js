@@ -2,7 +2,7 @@
 // v2'de (Supabase) yalnızca bu dosya değişecek: her "store" bir tabloya karşılık gelir.
 
 const DB_NAME = 'sporcoach';
-const DB_VERSION = 4;
+const DB_VERSION = 5; // 5: meal_templates (öğün şablonları)
 export const SCHEMA_VERSION = 2;
 const USER_ID = 'local';
 
@@ -31,6 +31,7 @@ export const STORES = [
   'coach_notes',
   'workout_sessions',
   'vitals',
+  'meal_templates',
 ];
 
 // Dışa aktarmaya girmeyecek gizli ayarlar

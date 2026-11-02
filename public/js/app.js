@@ -4,7 +4,7 @@ import { confirmSheet, esc, toast, today, parseNum, setAvatarCache } from './uti
 import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 
-export const APP_VERSION = '2.2.0-beta.1';
+export const APP_VERSION = '2.2.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
