@@ -91,7 +91,9 @@ test('kategoriler: hazır kategori listesi, aramayla birlikte süzme, kişisel k
   await expect(page.locator('#toast')).toContainText('hazır bir kategoride');
   await top(page).locator('#uc-name').fill('Kahvaltılıklar');
   await top(page).locator('[data-sheet-right]').click();
-  await expect(page.locator('#flist')).toContainText('Kahvaltılıklar');
+  // boş liste ipucu da "Kahvaltılıklar" örneğini içerdiği için satırın kendisi beklenir
+  await expect(page.locator('#flist [data-ucedit]')).toHaveCount(1);
+  await expect(page.locator('#flist [data-ucedit]')).toHaveAttribute('aria-label', /Kahvaltılıklar/);
   const [uc] = await setting(page, 'food_user_categories');
   expect(uc).toMatchObject({ name: 'Kahvaltılıklar' });
   expect(uc.id).toMatch(/^uc_/);
