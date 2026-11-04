@@ -6,6 +6,17 @@ import { esc, openSheet } from './util.js';
 
 export const CHANGELOG = [
   {
+    version: '2.3.1',
+    date: '4 Kasım 2026',
+    title: 'Dinlenme sayacını kapatma',
+    sections: [
+      {
+        name: 'Antrenman',
+        items: ['Ayarlar → Genel\'deki "Setler arası dinlenme sayacı" düğmesiyle sayacı kapatabilirsin. Kapalıyken set tamamlayınca geri sayım başlamaz; istediğin zaman yeniden açabilirsin.'],
+      },
+    ],
+  },
+  {
     version: '2.3.0',
     date: '2 Kasım 2026',
     title: 'Binlerce paketli ürün',

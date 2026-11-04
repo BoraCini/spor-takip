@@ -22,6 +22,7 @@ export async function renderPage(root, params, mode = 'profile') {
   const accent = (await db.getSetting('accent')) || 'pro';
   const avatar = await db.getSetting('avatar');
   const restSec = await db.getSetting('rest_seconds', 90);
+  const restOn = (await db.getSetting('rest_timer', true)) !== false;
   const pin = await hasPin();
   const faceAvail = pin && (await faceIdAvailable());
   const faceOn = await hasFaceId();
@@ -142,7 +143,8 @@ export async function renderPage(root, params, mode = 'profile') {
 
     <div class="sec"><h2>Genel</h2></div>
     <section class="card">
-      <div class="field"><label for="rest-sec">Dinlenme süresi (setler arası)</label>
+      <div class="kv" style="border-top:0"><label class="k" for="rest-on" style="display:flex;flex-direction:column;gap:2px"><span>Setler arası dinlenme sayacı</span><span class="small muted">Set tamamlanınca geri sayım başlar</span></label><span class="switch"><input id="rest-on" type="checkbox" ${restOn ? 'checked' : ''}><span></span></span></div>
+      <div class="field" id="rest-sec-f" ${restOn ? '' : 'hidden'}><label for="rest-sec">Dinlenme süresi (setler arası)</label>
         <select id="rest-sec" class="input">
           ${[45, 60, 75, 90, 120, 150, 180, 240].map((s) => `<option value="${s}" ${Number(restSec) === s ? 'selected' : ''}>${Math.floor(s / 60) ? Math.floor(s / 60) + ' dk ' : ''}${s % 60 ? (s % 60) + ' sn' : ''}</option>`).join('')}
         </select></div>
@@ -711,6 +713,14 @@ export async function renderPage(root, params, mode = 'profile') {
       toast('Kaydedildi');
     })
   );
+
+  root.querySelector('#rest-on')?.addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    await db.setSetting('rest_timer', on);
+    root.querySelector('#rest-sec-f').hidden = !on;
+    if (!on) (await import('../rest.js')).stop(); // çalışan sayaç da kapanır
+    toast(on ? 'Dinlenme sayacı açık' : 'Dinlenme sayacı kapalı');
+  });
 
   root.querySelector('#rest-sec')?.addEventListener('change', async (e) => {
     await db.setSetting('rest_seconds', Number(e.target.value));

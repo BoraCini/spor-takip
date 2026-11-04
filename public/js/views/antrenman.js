@@ -615,7 +615,8 @@ export async function render(root, params = {}) {
             }
           }
         }
-        if (isToday && restNow && row.type !== 'warmup') {
+        // Dinlenme sayacı Ayarlar'dan kapatılabilir (rest_timer: false)
+        if (isToday && restNow && row.type !== 'warmup' && (await db.getSetting('rest_timer', true)) !== false) {
           rest.start(await db.getSetting('rest_seconds', 90));
           state.wakeWanted = true;
           requestWake();
