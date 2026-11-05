@@ -5,14 +5,18 @@ test('tema: varsayılan cam; Ayarlar\'dan klasiğe geçilir, yeniden açılışt
   const errors = await onboard(page);
   const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
   expect(await theme()).toBe('glass');
-  // cam temada kartlar saydam ve bulanık
+  // cam temada kartlar yarı saydam; performans için kartlarda ve alt sayfalarda bulanıklık (backdrop-filter) yok
   await go(page, 'beslenme', 1200);
   const glassCard = await page.locator('.card').first().evaluate((el) => {
     const cs = getComputedStyle(el);
-    return { bg: cs.backgroundColor, blur: cs.backdropFilter || cs.webkitBackdropFilter };
+    return { bg: cs.backgroundColor, blur: cs.backdropFilter || cs.webkitBackdropFilter || 'none' };
   });
   expect(glassCard.bg).toMatch(/rgba\(.*0\.\d+\)/);
-  expect(glassCard.blur).toContain('blur');
+  expect(glassCard.blur).toBe('none');
+  await page.locator('.meal-add').first().click();
+  const sheetBlur = await page.locator('.sheet').last().evaluate((el) => getComputedStyle(el).backdropFilter || getComputedStyle(el).webkitBackdropFilter || 'none');
+  expect(sheetBlur).toBe('none');
+  await page.keyboard.press('Escape');
 
   await go(page, 'ayarlar', 1200);
   await expect(page.locator('[data-theme-pick="glass"]')).toHaveAttribute('aria-pressed', 'true');
