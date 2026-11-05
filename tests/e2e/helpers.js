@@ -1,7 +1,16 @@
 // Ortak adımlar
+// Open Food Facts'e giden canlı aramalar testlerde boş sonuçla yanıtlanır: testler dış servise bağlı olmasın
+// (WebKit, CORS'suz hata yanıtlarını sayfa hatası olarak bildiriyor). Taklit gereken testler kendi yanıtını üstüne ekler.
+export async function stubOFF(target) {
+  await target.route(/openfoodfacts\.org/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ products: [], hits: [], count: 0 }) })
+  );
+}
+
 export async function onboard(page) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
+  await stubOFF(page.context());
   await page.goto('/');
   await page.click('[data-go]', { timeout: 60_000 });
   await page.click('[data-nopin]', { timeout: 60_000 });
