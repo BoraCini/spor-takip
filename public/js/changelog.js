@@ -6,6 +6,29 @@ import { esc, openSheet } from './util.js';
 
 export const CHANGELOG = [
   {
+    version: '2.4.0',
+    date: '5 Kasım 2026',
+    title: 'Yeni görünüm: Cam tema',
+    sections: [
+      {
+        name: 'Görünüm',
+        items: [
+          'Uygulama artık buzlu cam görünümünde: arka planda ana renge göre renklenen yumuşak ışıklar, üstünde yarı saydam kartlar ve paneller.',
+          'Açık ve koyu modda çalışır; seçtiğin ana renk arka plan ışıklarına da yansır.',
+          'Eski görünümü istersen Ayarlar → Görünüm → Tema\'dan "Klasik"i seç.',
+          'iPhone\'da "Saydamlığı Azalt" açıksa kartlar okunaklı kalsın diye bulanıklık kapanır.',
+        ],
+      },
+      {
+        name: 'Diğer',
+        items: [
+          'Ayarlar → Genel: "Besin aramasında internete de bak" ile Open Food Facts\'te otomatik aramayı kapatabilirsin.',
+          '"Yeni sürüm hazır" şeridi artık açık bir sayfanın Kaydet ve Kapat düğmelerini örtmüyor.',
+        ],
+      },
+    ],
+  },
+  {
     version: '2.3.1',
     date: '4 Kasım 2026',
     title: 'Dinlenme sayacını kapatma',

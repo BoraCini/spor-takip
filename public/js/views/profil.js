@@ -1,6 +1,6 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, openSheet, downloadOrShare, lineChartSVG, trendChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
-import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
+import { ACCENTS, applyAccent, THEMES, applyTheme, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId, pinLength, faceIdNeedsReenroll } from '../lock.js';
 import { monthUsage } from '../ai.js';
 import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate, AI_CATEGORIES } from '../context.js';
@@ -20,9 +20,11 @@ export const render = (root, params) => renderPage(root, params, 'profile');
 export async function renderPage(root, params, mode = 'profile') {
   const p = await db.getProfile();
   const accent = (await db.getSetting('accent')) || 'pro';
+  const theme = (await db.getSetting('theme', 'glass')) || 'glass';
   const avatar = await db.getSetting('avatar');
   const restSec = await db.getSetting('rest_seconds', 90);
   const restOn = (await db.getSetting('rest_timer', true)) !== false;
+  const offLive = (await db.getSetting('off_live', true)) !== false;
   const pin = await hasPin();
   const faceAvail = pin && (await faceIdAvailable());
   const faceOn = await hasFaceId();
@@ -78,6 +80,9 @@ export async function renderPage(root, params, mode = 'profile') {
 
     <div class="sec"><h2>Görünüm</h2></div>
     <section class="card">
+      <div class="field"><span class="lbl">Tema</span>
+        <div class="theme-pick">${THEMES.map((t) => `<button type="button" class="tp-${t.id}" data-theme-pick="${t.id}" aria-pressed="${theme === t.id}"><span class="tp-chip"></span>${t.label}</button>`).join('')}</div>
+      </div>
       <div class="field" style="margin-bottom:0"><span class="lbl">Ana renk</span>
         <div class="swatches">
           ${ACCENTS.map((a) => `<button type="button" class="swatch" style="background:${a.swatch || a.value}" aria-label="${a.label}" aria-pressed="${accent === a.value}" data-accent="${a.value}"></button>`).join('')}
@@ -148,7 +153,8 @@ export async function renderPage(root, params, mode = 'profile') {
         <select id="rest-sec" class="input">
           ${[45, 60, 75, 90, 120, 150, 180, 240].map((s) => `<option value="${s}" ${Number(restSec) === s ? 'selected' : ''}>${Math.floor(s / 60) ? Math.floor(s / 60) + ' dk ' : ''}${s % 60 ? (s % 60) + ' sn' : ''}</option>`).join('')}
         </select></div>
-      <div class="kv" style="border-top:0"><label class="k" for="daily-w">Her gün ilk açılışta kilomu sor</label><span class="switch"><input id="daily-w" type="checkbox" ${dailyWeight ? 'checked' : ''}><span></span></span></div>
+      <div class="kv"><label class="k" for="off-live" style="display:flex;flex-direction:column;gap:2px"><span>Besin aramasında internete de bak</span><span class="small muted">Listede az sonuç varsa arama metni Open Food Facts'e gönderilir</span></label><span class="switch"><input id="off-live" type="checkbox" ${offLive ? 'checked' : ''}><span></span></span></div>
+      <div class="kv"><label class="k" for="daily-w">Her gün ilk açılışta kilomu sor</label><span class="switch"><input id="daily-w" type="checkbox" ${dailyWeight ? 'checked' : ''}><span></span></span></div>
     </section>
 
     <div class="sec"><h2>Güvenlik</h2></div>
@@ -488,8 +494,13 @@ export async function renderPage(root, params, mode = 'profile') {
     });
 
   root.onclick = async (e) => {
-    const t = e.target.closest('[data-act],[data-phase],[data-accent]');
+    const t = e.target.closest('[data-act],[data-phase],[data-accent],[data-theme-pick]');
     if (!t) return;
+    if (t.dataset.themePick) {
+      await db.setSetting('theme', applyTheme(t.dataset.themePick));
+      root.querySelectorAll('[data-theme-pick]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.themePick === t.dataset.themePick));
+      return;
+    }
     if (t.dataset.phase) {
       const cur = await db.getProfile();
       cur.phase = t.dataset.phase;
@@ -720,6 +731,11 @@ export async function renderPage(root, params, mode = 'profile') {
     root.querySelector('#rest-sec-f').hidden = !on;
     if (!on) (await import('../rest.js')).stop(); // çalışan sayaç da kapanır
     toast(on ? 'Dinlenme sayacı açık' : 'Dinlenme sayacı kapalı');
+  });
+
+  root.querySelector('#off-live')?.addEventListener('change', async (e) => {
+    await db.setSetting('off_live', e.target.checked);
+    toast(e.target.checked ? 'İnternette arama açık' : 'İnternette arama kapalı');
   });
 
   root.querySelector('#rest-sec')?.addEventListener('change', async (e) => {

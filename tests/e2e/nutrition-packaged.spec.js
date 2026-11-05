@@ -56,6 +56,11 @@ test('paketli ürün listesi: aramada ayrı bölüm, günlüğe ekleme, Son sekm
 
 test('yerelde az sonuç varsa Open Food Facts kendiliğinden aranır; seçilen ürün kontrol edilip kaydedilir', async ({ page }) => {
   const errors = await onboard(page);
+  // bu test canlı aramayı dener: ayar açılır (Ayarlar'daki düğme)
+  await go(page, 'ayarlar', 1200);
+  await expect(page.locator('#off-live')).not.toBeChecked();
+  await page.locator('#off-live').check({ force: true });
+  expect(await page.evaluate(async () => (await import('./js/db.js')).getSetting('off_live'))).toBe(true);
   const calls = await mockOFF(page, [
     { code: '8699999000017', product_name: 'Zqxbar Protein Bar Fıstıklı', brands: 'Zqx', serving_quantity: 45, nutriments: { 'energy-kcal_100g': 380, proteins_100g: 30, carbohydrates_100g: 35, fat_100g: 12, sodium_100g: 0.3 } },
   ]);
