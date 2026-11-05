@@ -6,6 +6,20 @@ import { esc, openSheet } from './util.js';
 
 export const CHANGELOG = [
   {
+    version: '2.4.2',
+    date: '5 Kasım 2026',
+    title: 'Cam temada geçişler ve koyu mod',
+    sections: [
+      {
+        name: 'Görünüm',
+        items: [
+          'Arka plan artık tüm sayfalarda tek ve sabit; sekme değiştirirken sayfalar onun üstünde kayıyor, eski sayfa yumuşakça kayboluyor.',
+          'iPhone\'u açık ya da koyu moda aldığında arka plan rengi de anında değişiyor.',
+        ],
+      },
+    ],
+  },
+  {
     version: '2.4.1',
     date: '5 Kasım 2026',
     title: 'Daha akıcı cam tema',
