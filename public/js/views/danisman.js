@@ -112,7 +112,7 @@ export async function render(root, params) {
             <span class="sub">${esc(doneSets ? `${doneSets} set yapıldı` : day && !day.rest ? `${items.length} hareket` : day ? 'toparlanma' : 'rutin seç')}</span>
           </a>
           <a href="#/kur" class="chipcard">
-            <span class="lbl">Kür${cyc.status === 'devam' ? ` · ${cyc.week}. hf` : ''}</span>
+            <span class="lbl">Protokol${cyc.status === 'devam' ? ` · ${cyc.week}. hf` : ''}</span>
             <span class="val">${due.total ? `${due.done} / ${due.total}` : '—'}</span>
             <span class="sub">${due.total ? 'tamamlandı' : 'bugün plan yok'}</span>
           </a>
@@ -251,7 +251,7 @@ export async function render(root, params) {
   if (params.ask === 'lab' && params.test) {
     const test = await db.get('lab_tests', params.test);
     if (test) {
-      ta.value = `${trDate(test.date)} tarihli kan testimi kürümü ve antrenmanımı dikkate alarak yorumlar mısın? Hangileri beklenen etki, hangileri dikkat gerektiriyor?`;
+      ta.value = `${trDate(test.date)} tarihli kan testimi protokolümü ve antrenmanımı dikkate alarak yorumlar mısın? Hangileri beklenen etki, hangileri dikkat gerektiriyor?`;
       autosize();
     }
     history.replaceState(null, '', '#/danisman');
@@ -292,7 +292,7 @@ async function drawBanners() {
   const t = today();
   let html = '';
   if (await db.getSetting('ai_share_notice')) {
-    box.innerHTML = `<div class="banner" role="status"><span>Coach artık yalnızca izin verdiğin verileri görüyor. Senin kurulumunda tahlil, tansiyon ve kür dahil hepsi açık bırakıldı.</span>
+    box.innerHTML = `<div class="banner" role="status"><span>Coach artık yalnızca izin verdiğin verileri görüyor. Senin kurulumunda tahlil, tansiyon ve protokol dahil hepsi açık bırakıldı.</span>
       <button type="button" class="pill" data-banner="ai-share">Ayarla</button><button type="button" class="x" data-banner="ai-share-ok" aria-label="Kapat">×</button></div>`;
     box.onclick = async (e) => {
       const b = e.target.closest('[data-banner]');
@@ -461,7 +461,7 @@ async function drawMessages({ hasKey, name, params = {} } = {}) {
       <a href="#/ayarlar" class="btn primary">Anahtarı ekle</a></div>`;
   }
   if (params.photo === '1') {
-    html += `<div class="bubble ai"><p>Sol alttaki + düğmesine dokunup tahlil raporunun fotoğrafını ya da PDF'ini ekle. Değerleri okuyup Kan testleri sayfasına kaydetmen için onay kartı hazırlarım.</p></div>`;
+    html += `<div class="bubble ai"><p>Sol alttaki + düğmesine dokunup tahlil raporunun fotoğrafını ya da PDF'ini ekle. Değerleri okuyup Kan Testleri sayfasına kaydetmen için onay kartı hazırlarım.</p></div>`;
   }
   let lastDay = '';
   for (const m of msgs) {
@@ -556,7 +556,7 @@ function cardHTML(m) {
   }
   if (c.type === 'doses') {
     return `<section class="act-card" aria-label="Doz işaretleme onayı">
-      <div class="ac-head"><span class="ac-title">Kür${dateNote}</span></div>
+      <div class="ac-head"><span class="ac-title">Protokol${dateNote}</span></div>
       ${c.items
         .map(
           (it, i) => `<div class="ac-item"><span class="row-main"><span style="font-size:15px;font-weight:500">${esc(it.name)}</span>
@@ -584,7 +584,7 @@ function cardHTML(m) {
           ${pending ? `<button type="button" class="ac-x" aria-label="${esc(v.name)} çıkar" data-rmval="${m.id}" data-i="${i}">×</button>` : ''}</div>`
         )
         .join('')}
-      ${pending ? `<p class="small muted" style="margin:8px 0 0">Değerleri rapordakiyle karşılaştır; yanlış okunan varsa çıkar, sonra Kan testleri sayfasından düzeltebilirsin.</p>` : ''}
+      ${pending ? `<p class="small muted" style="margin:8px 0 0">Değerleri rapordakiyle karşılaştır; yanlış okunan varsa çıkar, sonra Kan Testleri sayfasından düzeltebilirsin.</p>` : ''}
       ${buttons}${status}</section>`;
   }
   if (c.type === 'water') {

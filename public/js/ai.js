@@ -60,13 +60,13 @@ GÖREVLERİN
 - Kardiyo (koşu, yürüyüş, bisiklet vb.) için log_workout_sets aracında sets yerine cardio alanını kullan.
 - Drop set: Kullanıcı bir seti dinlenmeden daha düşük ağırlıkla devam ettirdiyse (örn. "30 kg 20 tekrar, hemen 20 kg 15") bunu ayrı set yapma; ilk ağırlığı set, devamlarını o setin drops alanına yaz. Antrenman geçmişinde "→ ... (drop set)" olarak görünür.
 - Kalıcı notlar: Kullanıcı kalıcı bir tercih ya da bilgi paylaştığında (örn. sevmediği/yemediği yiyecekler, antrenman saati, salondaki ekipman kısıtı, uzun vadeli hedefi) remember_note ile kısa bir not olarak kaydet. Geçici şeyleri (bugün yorgunum gibi) not etme. Kullanıcı bir notun yanlış olduğunu ya da artık geçerli olmadığını söylerse forget_note ile sil. Notlar "danisman_notlari" alanında görünür; cevaplarında bunlara uy.
-- Haftalık rapor istendiğinde "bu_hafta_ozet" ve "gecen_hafta_ozet" verilerini kullan: beslenme (kayıtlı gün, ortalama kalori ve protein, hedefe uyum), antrenman (seans, set, hacim, kas grubu başına set; 10–20 set aralığı çoğu kişi için etkilidir), kilo değişimi ve dönem hedefiyle uyumu, kür takibine uyum, su. Önce iyi gidenleri, sonra en fazla üç somut iyileştirme önerisini yaz. Kısa tut.
+- Haftalık rapor istendiğinde "bu_hafta_ozet" ve "gecen_hafta_ozet" verilerini kullan: beslenme (kayıtlı gün, ortalama kalori ve protein, hedefe uyum), antrenman (seans, set, hacim, kas grubu başına set; 10–20 set aralığı çoğu kişi için etkilidir), kilo değişimi ve dönem hedefiyle uyumu, protokol takibine uyum, su. Önce iyi gidenleri, sonra en fazla üç somut iyileştirme önerisini yaz. Kısa tut.
 - Antrenman, beslenme ve diyet konusunda kullanıcının hedefine, dönemine (bulk/cut/koruma), sakatlıklarına, notlarına ve isteklerine göre somut öneriler ver. Güncel bilimsel yaklaşımları ve sahada uzun süredir denenmiş klasik yöntemleri birlikte değerlendir; çelişiyorlarsa bunu açıkça söyle. Kullanıcı bir öneriyi kendi tercihine göre değiştirmek isterse ona uyarla.
-- Kan tahlillerini, kullanıcının kullandığı maddeleri, kür haftasını ve antrenmanını bilerek yorumla. Referans dışı her değeri kötü sayma: kürün ya da antrenmanın beklenen etkisi olanları (örn. dışarıdan hormon alımında baskılanmış LH/FSH, kas kütlesine bağlı hafif yüksek kreatinin, antrenman sonrası yüksek CK) ayrı belirt. Gerçekten takip veya müdahale gerektirenleri (örn. yükselen hematokrit, bozulan lipid profili, belirgin karaciğer enzimi yükselmesi, yüksek prolaktin veya estradiol, böbrek fonksiyonunda düşüş) açıkça söyle; neden önemli olduğunu ve önceki testlere göre gidişatı anlat.
+- Kan tahlillerini, kullanıcının kullandığı maddeleri, protokol haftasını ve antrenmanını bilerek yorumla. Referans dışı her değeri kötü sayma: protokolün ya da antrenmanın beklenen etkisi olanları (örn. dışarıdan hormon alımında baskılanmış LH/FSH, kas kütlesine bağlı hafif yüksek kreatinin, antrenman sonrası yüksek CK) ayrı belirt. Gerçekten takip veya müdahale gerektirenleri (örn. yükselen hematokrit, bozulan lipid profili, belirgin karaciğer enzimi yükselmesi, yüksek prolaktin veya estradiol, böbrek fonksiyonunda düşüş) açıkça söyle; neden önemli olduğunu ve önceki testlere göre gidişatı anlat.
 - Kullanıcının kullandığı koruyucu ilaç, vitamin ve takviyeler (marka, içerik/miktar ve kullanım sıklığıyla) "koruyucu_ilac_ve_vitaminler" alanındadır. Tahlil yorumlarında ve önerilerinde bunları hesaba kat (örn. D vitamini takviyesi alırken düşük D, B12 takviyesiyle yüksek B12, biotinin bazı hormon testlerini etkileyebilmesi, kreatin takviyesinin kreatinin değerini yükseltebilmesi). Takviye eklemeyi veya çıkarmayı önerebilirsin; reçeteli ilaçlar için doz söylemez, doktora yönlendirirsin.
 
 SINIRLARIN (her zaman geçerli)
-- İlaç, steroid, hormon, peptit ya da yardımcı ilaçlar (örn. kabergolin, aromataz inhibitörü, SERM, hCG) için doz, süre veya kullanım protokolü önermezsin; kullanıcının kürüne madde eklemez, çıkarmaz, dozunu değiştirmezsin. Bu istendiğinde nedenini bir cümleyle söyle; müdahale gereken durumda genelde hangi tür tedavinin değerlendirildiğini ve doktora neyi sorması gerektiğini anlat. Ders verir gibi değil, saygılı ve kısa ol.
+- İlaç, steroid, hormon, peptit ya da yardımcı ilaçlar (örn. kabergolin, aromataz inhibitörü, SERM, hCG) için doz, süre veya kullanım protokolü önermezsin; kullanıcının protokolüne madde eklemez, çıkarmaz, dozunu değiştirmezsin. Bu istendiğinde nedenini bir cümleyle söyle; müdahale gereken durumda genelde hangi tür tedavinin değerlendirildiğini ve doktora neyi sorması gerektiğini anlat. Ders verir gibi değil, saygılı ve kısa ol.
 - Acil durum belirtilerinde (göğüs ağrısı, nefes darlığı, tek bacakta şişlik ve ağrı, ani şiddetli baş ağrısı, bayılma, enjeksiyon bölgesinde yayılan kızarıklık/sıcaklık ile ateş) beklemeden 112'yi aramasını ya da acile gitmesini söyle.
 - Enjeksiyon sonrası şişlik veya ağrı sorularında normal enjeksiyon ağrısını enfeksiyon ve apse belirtilerinden ayırt etmesine yardım et; enfeksiyon şüphesinde doktora yönlendir.
 - Kesin teşhis koymazsın; gerektiğinde doktora yönlendirirsin.
@@ -81,7 +81,7 @@ function dynamicPrompt(ctx, custom, share) {
   const mine = custom.length && share.beslenme !== false ? `\n\nKULLANICININ KENDİ BESİNLERİ (food_id: ad — 100 g kcal):\n${custom.map((c) => `${c.id}: ${c.name} — ${c.k} kcal${c.overrides ? ` (kullanıcı ${c.overrides} değerlerini düzeltti; onun yerine bunu kullan)` : ''}`).join('\n')}` : '';
   const shared = AI_CATEGORIES.filter(([k]) => share[k]).map(([, l]) => l);
   const hidden = AI_CATEGORIES.filter(([k]) => !share[k]).map(([, l]) => l);
-  const access = `\n\nVERİ ERİŞİMİ: Kullanıcı şu kategorileri seninle paylaşıyor: ${shared.join(', ') || 'hiçbiri'}.${hidden.length ? ` Paylaşmadıkları: ${hidden.join(', ')} — bunlar hakkında hiçbir verin yok; sorarsa Ayarlar › Coach › "Coach neleri görebilir" bölümünden açabileceğini söyle, tahmin yürütme.` : ''} Aşağıdaki veriler özettir; ayrıntı gerekiyorsa (geçmiş antrenmanlar, kilo geçmişi, tahlil değerleri, tansiyon ölçümleri, kür/ilaç ayrıntıları) ilgili get_ aracını çağır. Soruyu cevaplamak için gerekmeyen veriyi isteme.`;
+  const access = `\n\nVERİ ERİŞİMİ: Kullanıcı şu kategorileri seninle paylaşıyor: ${shared.join(', ') || 'hiçbiri'}.${hidden.length ? ` Paylaşmadıkları: ${hidden.join(', ')} — bunlar hakkında hiçbir verin yok; sorarsa Ayarlar › Coach › "Coach neleri görebilir" bölümünden açabileceğini söyle, tahmin yürütme.` : ''} Aşağıdaki veriler özettir; ayrıntı gerekiyorsa (geçmiş antrenmanlar, kilo geçmişi, tahlil değerleri, tansiyon ölçümleri, protokol/ilaç ayrıntıları) ilgili get_ aracını çağır. Soruyu cevaplamak için gerekmeyen veriyi isteme.`;
   return `KULLANICININ GÜNCEL VERİLERİ (uygulamadan otomatik eklenir, kullanıcı her seferinde anlatmak zorunda kalmasın diye kullan):\n${JSON.stringify(ctx)}${mine}${access}`;
 }
 
@@ -91,7 +91,7 @@ const READ_TOOLS = [
   { name: 'get_body_history', description: 'Kilo geçmişi ve vücut çevre ölçüleri. Kilo/ölçü değişimi sorularında kullan.' },
   { name: 'get_lab_results', description: 'Kayıtlı kan tahlili sonuçları (değer, birim, referans) ve sonraki tahlil tarihi. Tahlil yorumunda kullan.' },
   { name: 'get_vitals', description: 'Tansiyon ve nabız ölçümleri.' },
-  { name: 'get_medications', description: 'Kür maddeleri ve takvimi, son enjeksiyonlar, koruyucu ilaç ve vitaminler, stok durumu.' },
+  { name: 'get_medications', description: 'Protokol maddeleri ve takvimi, son enjeksiyonlar, koruyucu ilaç ve vitaminler, stok durumu.' },
 ].map((t) => ({ ...t, input_schema: { type: 'object', properties: {} } }));
 
 export function toolsFor(share) {
@@ -175,7 +175,7 @@ export const TOOLS = [
   },
   {
     name: 'mark_doses',
-    description: 'Kullanıcının kürdeki hap/enjeksiyonlarını aldığını işaretlemek için kart hazırlar. Sadece kullanıcının kür listesinde olan maddeler için.',
+    description: 'Kullanıcının protokoldeki hap/enjeksiyonlarını aldığını işaretlemek için kart hazırlar. Sadece kullanıcının protokol listesinde olan maddeler için.',
     input_schema: {
       type: 'object',
       properties: {
@@ -187,7 +187,7 @@ export const TOOLS = [
   },
   {
     name: 'add_lab_results',
-    description: 'Kan tahlili sonuçlarını (metinden veya fotoğraftan okunan) Kan testleri sayfasına kaydetmek için kart hazırlar.',
+    description: 'Kan tahlili sonuçlarını (metinden veya fotoğraftan okunan) Kan Testleri sayfasına kaydetmek için kart hazırlar.',
     input_schema: {
       type: 'object',
       properties: {
@@ -340,7 +340,7 @@ function cardSummary(card) {
   if (card.type === 'sets') return `Onay kartı gösterildi: ${card.exercise} — ${card.sets.map((s) => `${s.weight_kg}×${s.reps}${s.drops ? s.drops.map((d) => ` → ${d.weight_kg}×${d.reps}`).join('') + ' (drop)' : ''}`).join(', ')}`;
   if (card.type === 'cardio') return `Onay kartı gösterildi: ${card.exercise} — ${card.duration_min} dk${card.distance_km ? ', ' + card.distance_km + ' km' : ''}`;
   if (card.type === 'doses')
-    return card.items.length ? `Onay kartı gösterildi: ${card.items.map((i) => `${i.name} (${i.slot})`).join(', ')}` : 'Bu tarih için işaretlenecek, henüz alınmamış bir doz bulunamadı (kür listesi boş olabilir ya da hepsi zaten işaretli).';
+    return card.items.length ? `Onay kartı gösterildi: ${card.items.map((i) => `${i.name} (${i.slot})`).join(', ')}` : 'Bu tarih için işaretlenecek, henüz alınmamış bir doz bulunamadı (protokol listesi boş olabilir ya da hepsi zaten işaretli).';
   if (card.type === 'labs') return `Onay kartı gösterildi: ${card.values.length} değer (${card.date})`;
   if (card.type === 'weight') return `Onay kartı gösterildi: ${card.weight_kg} kg`;
   if (card.type === 'measures') return Object.keys(card.values).length ? `Onay kartı gösterildi: ${Object.keys(card.values).join(', ')}` : 'Ölçü değeri yoktu.';

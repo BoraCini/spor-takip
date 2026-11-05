@@ -144,7 +144,7 @@ export async function renderProgress(el) {
       <div class="kv"><span class="k">Kilo eğilimi</span><span class="v num">${rep.weight.change == null ? '–' : `${kg(rep.weight.start)} → ${kg(rep.weight.end)} kg (${signed(rep.weight.change, ' kg')})`}</span></div>
       <div class="kv"><span class="k">Ortalama kalori / protein</span><span class="v num">${rep.nutrition.avg_kcal ? `${fmt(rep.nutrition.avg_kcal)} kcal · ${fmt(rep.nutrition.avg_protein)} g` : '–'}${rep.nutrition.logged_days ? ` <small>(${rep.nutrition.logged_days} gün)</small>` : ''}</span></div>
       ${rep.training.cardio_min ? `<div class="kv"><span class="k">Kardiyo</span><span class="v num">${fmt(rep.training.cardio_min)} dk</span></div>` : ''}
-      ${rep.doses.total ? `<div class="kv"><span class="k">Kür / ilaç uyumu</span><span class="v num">%${Math.round((rep.doses.done / rep.doses.total) * 100)} (${rep.doses.done}/${rep.doses.total})</span></div>` : ''}
+      ${rep.doses.total ? `<div class="kv"><span class="k">Protokol / ilaç uyumu</span><span class="v num">%${Math.round((rep.doses.done / rep.doses.total) * 100)} (${rep.doses.done}/${rep.doses.total})</span></div>` : ''}
       ${rep.vitals.n ? `<div class="kv"><span class="k">Ortalama tansiyon / nabız</span><span class="v num">${rep.vitals.sys ? `${rep.vitals.sys}/${rep.vitals.dia}` : '–'}${rep.vitals.hr ? ` · ${rep.vitals.hr} atım` : ''}</span></div>` : ''}
       ${topRegions.length ? `<div class="kv"><span class="k">En çok çalışan</span><span class="v">${esc(topRegions.slice(0, 3).map(([k]) => regionLabel(k)).join(', '))}</span></div>` : ''}
       ${

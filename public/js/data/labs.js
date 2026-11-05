@@ -1,6 +1,6 @@
 // Kan değeri kataloğu — yetişkin erkek için yaygın referans aralıkları.
 // Laboratuvarlar farklı aralık kullanır; kullanıcı her değerde rapordaki aralığı girebilir/düzeltebilir.
-// cycle: kür sırasında beklenen yön ('low' | 'high'); training: yoğun antrenmanla beklenen yön.
+// cycle: protokol sırasında beklenen yön ('low' | 'high'); training: yoğun antrenmanla beklenen yön.
 export const LAB_CATEGORIES = ['Kan sayımı', 'Karaciğer', 'Böbrek', 'Lipid', 'Şeker', 'Hormon', 'Tiroid', 'Vitamin / mineral', 'Diğer'];
 
 export const LABS = [
@@ -36,7 +36,7 @@ export const LABS = [
   { key: 'ldl', name: 'LDL', unit: 'mg/dL', lo: null, hi: 130, cat: 'Lipid', alias: 'ldl',
     note: 'Yüksek LDL kalp-damar riskini artırır.' },
   { key: 'hdl', name: 'HDL', unit: 'mg/dL', lo: 40, hi: null, cat: 'Lipid', alias: 'hdl',
-    note: 'Düşük HDL kalp-damar riskini artırır; kür sırasında sık görülür ama yine de takip gerektirir.' },
+    note: 'Düşük HDL kalp-damar riskini artırır; protokol sırasında sık görülür ama yine de takip gerektirir.' },
   { key: 'tg', name: 'Trigliserid', unit: 'mg/dL', lo: null, hi: 150, cat: 'Lipid', alias: 'trigliserid tg' },
 
   { key: 'glu', name: 'Açlık kan şekeri', unit: 'mg/dL', lo: 70, hi: 100, cat: 'Şeker', alias: 'glukoz aclik seker' },

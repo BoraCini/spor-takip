@@ -63,7 +63,7 @@ async function api(path, body) {
   return data;
 }
 
-// Kür, program ve tercihlere göre hatırlatma listesi
+// Protokol, program ve tercihlere göre hatırlatma listesi
 export async function buildReminders(prefs) {
   const out = [];
   const comps = await db.list('compounds', (c) => c.active !== false);

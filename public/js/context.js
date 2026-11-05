@@ -287,7 +287,7 @@ export async function previousSession(exerciseId, beforeDate) {
   return { date: last, sets: sets.filter((s) => s.date === last).sort((a, b) => a.set_no - b.set_no) };
 }
 
-// ---------- Kür ----------
+// ---------- Protokol (eski adı kür) ----------
 export async function cycleInfo(date = today()) {
   const cycles = await db.list('cycles');
   const c = cycles[cycles.length - 1] || null;
@@ -512,7 +512,7 @@ export async function buildContext() {
             const r = c.range || {};
             const ref = r.comparable ? `${REF_SOURCES[r.source] || 'aralık'}: ${r.lo ?? ''}–${r.hi ?? ''}` : r.reason === 'birim' || r.reason === 'birim-yok' ? `birim uyuşmuyor, kıyaslanmadı (genel aralık birimi ${r.catalogUnit})` : 'aralık yok';
             const flag = c.st === 'high' ? 'YÜKSEK' : c.st === 'low' ? 'DÜŞÜK' : '';
-            return `${v.name}: ${v.value} ${v.unit || ''} (${ref}) ${flag}${c.expect ? ` [olası neden: ${c.expect.why === 'kur' ? 'kayıtlı kür bağlamı' : 'antrenman'}]` : ''}`.trim();
+            return `${v.name}: ${v.value} ${v.unit || ''} (${ref}) ${flag}${c.expect ? ` [olası neden: ${c.expect.why === 'kur' ? 'kayıtlı protokol bağlamı' : 'antrenman'}]` : ''}`.trim();
           }),
         };
       })
@@ -776,12 +776,12 @@ export const AI_CATEGORIES = [
   ['vucut', 'Vücut ölçüleri ve kilo', 'Kilo geçmişi ve eğilimi, çevre ölçüleri', true],
   ['tahlil', 'Kan tahlilleri', 'Tahlil sonuçların ve sonraki tahlil tarihi', false],
   ['tansiyon', 'Tansiyon ve nabız', 'Tansiyon ve nabız ölçümlerin', false],
-  ['ilac', 'İlaç, kür ve takviyeler', 'Kür maddelerin, doz/enjeksiyon kayıtların, koruyucu ilaç ve vitaminler, stok', false],
+  ['ilac', 'İlaç, protokol ve takviyeler', 'Protokol maddelerin, doz/enjeksiyon kayıtların, koruyucu ilaç ve vitaminler, stok', false],
 ];
 export const AI_CAT_LABEL = Object.fromEntries(AI_CATEGORIES.map(([k, l]) => [k, l]));
 
 // Ayar yoksa: önceden Coach'u kullanan kurulumda bugünkü davranış bozulmasın diye hepsi açık (bir kerelik bilgi gösterilir);
-// yeni kurulumda tahlil, tansiyon ve ilaç/kür kapalı.
+// yeni kurulumda tahlil, tansiyon ve ilaç/protokol kapalı.
 export async function aiShare() {
   let s = await db.getSetting('ai_share');
   if (s && typeof s === 'object') return { ...Object.fromEntries(AI_CATEGORIES.map(([k, , , d]) => [k, d])), ...s };
@@ -875,9 +875,9 @@ export function splitContext(ctx, share) {
   return { summary, details };
 }
 
-// ---------- Tahlil tarihindeki kayıtlı kür bağlamı ----------
+// ---------- Tahlil tarihindeki kayıtlı protokol bağlamı ----------
 // Yalnızca aktif madde varlığına ya da sabit bir zaman penceresine değil, tahlil tarihindeki gerçek kayıtlara bakar:
-// o tarihte süren bir kür, bitişinden sonraki ilk 4 hafta, ya da tahlilden önceki 14 günde kür dozu kaydı.
+// o tarihte süren bir protokol, bitişinden sonraki ilk 4 hafta, ya da tahlilden önceki 14 günde protokol dozu kaydı.
 export async function cycleContextAt(date) {
   const cycles = (await db.list('cycles')).filter((c) => c.start_date);
   const comps = await db.list('compounds');
@@ -886,16 +886,16 @@ export async function cycleContextAt(date) {
     const end = c.end_date || (c.weeks ? addDays(c.start_date, c.weeks * 7 - 1) : null);
     if (c.start_date <= date && (!end || date <= end)) {
       const week = Math.floor(daysBetween(c.start_date, date) / 7) + 1;
-      return { active: true, kind: 'kur', week, text: `Tahlil tarihi kayıtlı kür dönemine denk geliyor (${week}. hafta); bu değer bu dönemde sık görülür. Yine de doktorunla değerlendir.` };
+      return { active: true, kind: 'kur', week, text: `Tahlil tarihi kayıtlı protokol dönemine denk geliyor (${week}. hafta); bu değer bu dönemde sık görülür. Yine de doktorunla değerlendir.` };
     }
     if (end && date > end && daysBetween(end, date) <= 28) {
       const n = daysBetween(end, date);
-      return { active: true, kind: 'sonrasi', text: `Tahlil, kayıtlı kürün bitişinden ${n} gün sonra; bu değer kür sonrası dönemde de görülebilir. Yine de doktorunla değerlendir.` };
+      return { active: true, kind: 'sonrasi', text: `Tahlil, kayıtlı protokolün bitişinden ${n} gün sonra; bu değer protokol sonrası dönemde de görülebilir. Yine de doktorunla değerlendir.` };
     }
   }
   const from = addDays(date, -14);
   const inWin = (l) => l.date >= from && l.date <= date && kurIds.has(l.compound_id);
   const n = (await db.list('dose_logs', inWin)).length + (await db.list('injection_logs', inWin)).length;
-  if (n) return { active: true, kind: 'doz', text: 'Tahlilden önceki 14 günde kür dozu kaydın var; bu değer bununla ilişkili olabilir. Yine de doktorunla değerlendir.' };
+  if (n) return { active: true, kind: 'doz', text: 'Tahlilden önceki 14 günde protokol dozu kaydın var; bu değer bununla ilişkili olabilir. Yine de doktorunla değerlendir.' };
   return { active: false, kind: null, text: '' };
 }

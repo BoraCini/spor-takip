@@ -31,7 +31,7 @@ test('önceden Coach kullanan kurulumda bir kerelik bilgi gösterilir', async ({
   });
   await go(page, 'danisman', 1500);
   await expect(page.getByText('Coach artık yalnızca izin verdiğin verileri görüyor')).toBeVisible();
-  await expect(page.locator('.share-line')).toContainText('İlaç/kür');
+  await expect(page.locator('.share-line')).toContainText('İlaç/protokol');
   await page.click('[data-banner="ai-share-ok"]');
   await expect(page.getByText('Coach artık yalnızca izin verdiğin verileri görüyor')).toHaveCount(0);
   expect(errors).toEqual([]);

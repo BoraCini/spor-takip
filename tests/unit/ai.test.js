@@ -133,7 +133,7 @@ describe('Coach isteği — yalnızca gereken veri', () => {
     const { runTurn } = await import('../../public/js/ai.js');
     await runTurn({ text: 'merhaba' });
     const sys = bodies[0].system.map((b) => b.text).join('\n');
-    expect(sys).toMatch(/Paylaşmadıkları: Kan tahlilleri, Tansiyon ve nabız, İlaç, kür ve takviyeler/);
+    expect(sys).toMatch(/Paylaşmadıkları: Kan tahlilleri, Tansiyon ve nabız, İlaç, protokol ve takviyeler/);
   });
 
   it('API anahtarı yedeğe ve isteğin gövdesine girmez', async () => {

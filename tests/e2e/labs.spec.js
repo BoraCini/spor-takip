@@ -15,7 +15,7 @@ test('tahlil ekranı: kaynak etiketleri, kıyaslanamayanlar, kür notu ve elle a
   const out = page.locator('.sec', { hasText: 'Referans dışında' });
   await expect(out).toBeVisible();
   await expect(page.locator('.lab-row', { hasText: 'LH' })).toContainText('Laboratuvar aralığı');
-  await expect(page.locator('.lab-row', { hasText: 'LH' })).toContainText('kayıtlı kür dönemine denk geliyor');
+  await expect(page.locator('.lab-row', { hasText: 'LH' })).toContainText('kayıtlı protokol dönemine denk geliyor');
   await expect(page.locator('.lab-row', { hasText: 'Hematokrit' })).toContainText('Genel aralık');
   await expect(page.locator('.lab-row', { hasText: 'Hematokrit' })).toContainText('raporda aralık yoktu');
   await expect(page.locator('.sec', { hasText: 'Otomatik kıyaslanamayanlar' })).toBeVisible();

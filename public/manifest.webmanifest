@@ -1,7 +1,7 @@
 {
   "name": "Pro Coach",
   "short_name": "Pro Coach",
-  "description": "Kişisel antrenman, beslenme, kür ve kan testi takibi",
+  "description": "Kişisel antrenman, beslenme, protokol ve kan testi takibi",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
