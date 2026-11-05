@@ -541,6 +541,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
   const custom = markCustom(await db.list('custom_foods'));
   // paketli ürün listesi: geçmişteki/favorideki paketli ürünler bulunabilsin diye kısa süre beklenir, gerisi arka planda
   const pkReady = loadPackaged();
+  const liveOn = (await db.getSetting('off_live', true)) !== false; // Ayarlar: aramada internete de bak
   await Promise.race([pkReady, new Promise((r) => setTimeout(r, 1200))]);
   const hist = await foodHistory(custom);
   const mine = custom.filter((c) => !c.recipe).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
@@ -729,7 +730,7 @@ async function openAddFood(meal, startTab = null, startCat = null) {
   };
   const scheduleLive = (q, localCount, shown = []) => {
     clearTimeout(liveTimer);
-    const want = q.length >= 3 && localCount < 8 && !cat && (typeof navigator === 'undefined' || navigator.onLine !== false);
+    const want = liveOn && q.length >= 3 && localCount < 8 && !cat && (typeof navigator === 'undefined' || navigator.onLine !== false);
     if (!want) {
       liveSeq++;
       live = { q: '', items: [], state: 'idle' };

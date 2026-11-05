@@ -19,6 +19,13 @@ export const CHANGELOG = [
           'iPhone\'da "Saydamlığı Azalt" açıksa kartlar okunaklı kalsın diye bulanıklık kapanır.',
         ],
       },
+      {
+        name: 'Diğer',
+        items: [
+          'Ayarlar → Genel: "Besin aramasında internete de bak" ile Open Food Facts\'te otomatik aramayı kapatabilirsin.',
+          '"Yeni sürüm hazır" şeridi artık açık bir sayfanın Kaydet ve Kapat düğmelerini örtmüyor.',
+        ],
+      },
     ],
   },
   {

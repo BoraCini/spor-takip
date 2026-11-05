@@ -15,6 +15,8 @@ export async function onboard(page) {
   await page.click('[data-go]', { timeout: 60_000 });
   await page.click('[data-nopin]', { timeout: 60_000 });
   await page.waitForTimeout(600);
+  // Canlı Open Food Facts araması testlerde kapalı (dış servis); deneyen testler açar
+  await page.evaluate(async () => (await import('./js/db.js')).setSetting('off_live', false));
   return errors;
 }
 export async function go(page, hash, wait = 1200) {

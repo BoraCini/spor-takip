@@ -24,6 +24,7 @@ export async function renderPage(root, params, mode = 'profile') {
   const avatar = await db.getSetting('avatar');
   const restSec = await db.getSetting('rest_seconds', 90);
   const restOn = (await db.getSetting('rest_timer', true)) !== false;
+  const offLive = (await db.getSetting('off_live', true)) !== false;
   const pin = await hasPin();
   const faceAvail = pin && (await faceIdAvailable());
   const faceOn = await hasFaceId();
@@ -152,7 +153,8 @@ export async function renderPage(root, params, mode = 'profile') {
         <select id="rest-sec" class="input">
           ${[45, 60, 75, 90, 120, 150, 180, 240].map((s) => `<option value="${s}" ${Number(restSec) === s ? 'selected' : ''}>${Math.floor(s / 60) ? Math.floor(s / 60) + ' dk ' : ''}${s % 60 ? (s % 60) + ' sn' : ''}</option>`).join('')}
         </select></div>
-      <div class="kv" style="border-top:0"><label class="k" for="daily-w">Her gün ilk açılışta kilomu sor</label><span class="switch"><input id="daily-w" type="checkbox" ${dailyWeight ? 'checked' : ''}><span></span></span></div>
+      <div class="kv"><label class="k" for="off-live" style="display:flex;flex-direction:column;gap:2px"><span>Besin aramasında internete de bak</span><span class="small muted">Listede az sonuç varsa arama metni Open Food Facts'e gönderilir</span></label><span class="switch"><input id="off-live" type="checkbox" ${offLive ? 'checked' : ''}><span></span></span></div>
+      <div class="kv"><label class="k" for="daily-w">Her gün ilk açılışta kilomu sor</label><span class="switch"><input id="daily-w" type="checkbox" ${dailyWeight ? 'checked' : ''}><span></span></span></div>
     </section>
 
     <div class="sec"><h2>Güvenlik</h2></div>
@@ -729,6 +731,11 @@ export async function renderPage(root, params, mode = 'profile') {
     root.querySelector('#rest-sec-f').hidden = !on;
     if (!on) (await import('../rest.js')).stop(); // çalışan sayaç da kapanır
     toast(on ? 'Dinlenme sayacı açık' : 'Dinlenme sayacı kapalı');
+  });
+
+  root.querySelector('#off-live')?.addEventListener('change', async (e) => {
+    await db.setSetting('off_live', e.target.checked);
+    toast(e.target.checked ? 'İnternette arama açık' : 'İnternette arama kapalı');
   });
 
   root.querySelector('#rest-sec')?.addEventListener('change', async (e) => {
