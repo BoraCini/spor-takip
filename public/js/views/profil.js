@@ -1,6 +1,6 @@
 import * as db from '../db.js';
 import { esc, fmt, parseNum, toast, today, trDate, icon, confirmSheet, openSheet, downloadOrShare, lineChartSVG, trendChartSVG, MONTHS_SHORT, parseDate, avatarHTML, setAvatarCache, dateStr } from '../util.js';
-import { ACCENTS, applyAccent, go, refresh, APP_VERSION } from '../app.js';
+import { ACCENTS, applyAccent, THEMES, applyTheme, go, refresh, APP_VERSION } from '../app.js';
 import { hasPin, setupPinFlow, clearPin, showLock, faceIdAvailable, hasFaceId, enableFaceId, disableFaceId, pinLength, faceIdNeedsReenroll } from '../lock.js';
 import { monthUsage } from '../ai.js';
 import { waterTarget, energyBreakdown, activityOf, JOBS, INTENSITY, adaptiveExpenditure, macrosFor, weightTrend, trendRate, AI_CATEGORIES } from '../context.js';
@@ -20,6 +20,7 @@ export const render = (root, params) => renderPage(root, params, 'profile');
 export async function renderPage(root, params, mode = 'profile') {
   const p = await db.getProfile();
   const accent = (await db.getSetting('accent')) || 'pro';
+  const theme = (await db.getSetting('theme', 'glass')) || 'glass';
   const avatar = await db.getSetting('avatar');
   const restSec = await db.getSetting('rest_seconds', 90);
   const restOn = (await db.getSetting('rest_timer', true)) !== false;
@@ -78,6 +79,9 @@ export async function renderPage(root, params, mode = 'profile') {
 
     <div class="sec"><h2>Görünüm</h2></div>
     <section class="card">
+      <div class="field"><span class="lbl">Tema</span>
+        <div class="theme-pick">${THEMES.map((t) => `<button type="button" class="tp-${t.id}" data-theme-pick="${t.id}" aria-pressed="${theme === t.id}"><span class="tp-chip"></span>${t.label}</button>`).join('')}</div>
+      </div>
       <div class="field" style="margin-bottom:0"><span class="lbl">Ana renk</span>
         <div class="swatches">
           ${ACCENTS.map((a) => `<button type="button" class="swatch" style="background:${a.swatch || a.value}" aria-label="${a.label}" aria-pressed="${accent === a.value}" data-accent="${a.value}"></button>`).join('')}
@@ -488,8 +492,13 @@ export async function renderPage(root, params, mode = 'profile') {
     });
 
   root.onclick = async (e) => {
-    const t = e.target.closest('[data-act],[data-phase],[data-accent]');
+    const t = e.target.closest('[data-act],[data-phase],[data-accent],[data-theme-pick]');
     if (!t) return;
+    if (t.dataset.themePick) {
+      await db.setSetting('theme', applyTheme(t.dataset.themePick));
+      root.querySelectorAll('[data-theme-pick]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.themePick === t.dataset.themePick));
+      return;
+    }
     if (t.dataset.phase) {
       const cur = await db.getProfile();
       cur.phase = t.dataset.phase;

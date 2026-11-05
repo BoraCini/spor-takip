@@ -5,7 +5,7 @@ import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 import { checkWhatsNew, markVersionSeen } from './changelog.js';
 
-export const APP_VERSION = '2.3.1';
+export const APP_VERSION = '2.4.0';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -30,6 +30,20 @@ export const ACCENTS = [
   { id: 'turuncu', label: 'Turuncu', value: '#C2451A' },
   { id: 'mor', label: 'Mor', value: '#6B4FD8' },
 ];
+
+export const THEMES = [
+  { id: 'glass', label: 'Cam' },
+  { id: 'classic', label: 'Klasik' },
+];
+// Görünüm teması: cam (varsayılan) ya da klasik. Açılışta renk sıçraması olmasın diye telefonda da tutulur.
+export function applyTheme(value) {
+  const t = THEMES.some((x) => x.id === value) ? value : 'glass';
+  document.documentElement.dataset.theme = t;
+  try {
+    localStorage.setItem('sporcoach_theme', t);
+  } catch {}
+  return t;
+}
 
 export function applyAccent(value) {
   const r = document.documentElement.style;
@@ -467,6 +481,7 @@ async function start() {
     return;
   }
   applyAccent(await db.getSetting('accent'));
+  applyTheme(await db.getSetting('theme', 'glass'));
   setAvatarCache(await db.getSetting('avatar'));
   registerSW();
   initRest();
