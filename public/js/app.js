@@ -5,7 +5,7 @@ import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 import { checkWhatsNew, markVersionSeen } from './changelog.js';
 
-export const APP_VERSION = '2.4.0';
+export const APP_VERSION = '2.4.1';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {

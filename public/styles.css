@@ -1119,7 +1119,7 @@ body.conv-open .chat-top .chips { display: none; }
    Saydamlığı azalt erişilebilirlik ayarı açıksa bulanıklık kapanır, kartlar opaklaşır. */
 html[data-theme="glass"] {
   --bg: #F1EEF4;
-  --card: rgba(255, 255, 255, 0.5);
+  --card: rgba(255, 255, 255, 0.56);
   --fill: rgba(118, 118, 128, 0.13);
   --fill2: rgba(118, 118, 128, 0.09);
   --sep: rgba(60, 60, 67, 0.13);
@@ -1130,7 +1130,7 @@ html[data-theme="glass"] {
   --input-bg: rgba(255, 255, 255, 0.55);
   --card-line: rgba(255, 255, 255, 0.8);
   --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 8px 26px rgba(40, 20, 50, 0.07), 0 1px 2px rgba(40, 20, 50, 0.05);
-  --sheet-bg: rgba(246, 244, 249, 0.78);
+  --sheet-bg: #F7F5FA;
   --blob-a: color-mix(in srgb, var(--accent) 48%, transparent);
   --blob-b: rgba(212, 170, 94, 0.5);
   --blob-c: rgba(80, 150, 210, 0.3);
@@ -1143,7 +1143,7 @@ html[data-theme="glass"] {
 @media (prefers-color-scheme: dark) {
   html[data-theme="glass"] {
     --bg: #0A090E;
-    --card: rgba(46, 44, 54, 0.4);
+    --card: rgba(46, 44, 54, 0.46);
     --fill: rgba(118, 118, 128, 0.24);
     --fill2: rgba(118, 118, 128, 0.17);
     --sep: rgba(255, 255, 255, 0.09);
@@ -1154,7 +1154,7 @@ html[data-theme="glass"] {
     --input-bg: rgba(255, 255, 255, 0.06);
     --card-line: rgba(255, 255, 255, 0.09);
     --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 10px 30px rgba(0, 0, 0, 0.4);
-    --sheet-bg: rgba(22, 21, 27, 0.8);
+    --sheet-bg: #16151B;
     --blob-a: color-mix(in srgb, var(--accent) 36%, transparent);
     --blob-b: rgba(140, 34, 52, 0.7);
     --blob-c: rgba(40, 90, 170, 0.4);
@@ -1169,36 +1169,30 @@ html[data-theme="glass"] {
 html[data-theme="glass"] body { background: transparent; }
 html[data-theme="glass"] body::before {
   content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--app-bg);
+  transform: translateZ(0); /* kendi katmanında kalsın: kaydırırken yeniden çizilmesin */
 }
 /* Sayfa geçişleri ve kilit ekranı düz renk yerine aynı arka planı taşır */
 html[data-theme="glass"] .view-ghost,
 html[data-theme="glass"] #view.slide-new,
 html[data-theme="glass"] .lock { background: var(--app-bg), var(--bg); }
 
-html[data-theme="glass"] .card {
-  border: .5px solid var(--card-line); box-shadow: var(--card-shadow);
-  -webkit-backdrop-filter: blur(22px) saturate(170%); backdrop-filter: blur(22px) saturate(170%);
-}
-html[data-theme="glass"] .seg {
-  background: var(--fill); border: .5px solid var(--card-line);
-  -webkit-backdrop-filter: blur(18px) saturate(160%); backdrop-filter: blur(18px) saturate(160%);
-}
+/* Performans: kartların arkası yumuşak, sabit bir renk geçişi; orada bulanıklık gözle görülür fark yaratmıyor ama
+   her kaydırma/geçiş karesinde yeniden hesaplanıp telefonu yoruyor. Bu yüzden kartlar bulanıklaştırılmaz;
+   cam hissini yarı saydam dolgu, ince parlak kenar ve iç ışık verir. Bulanıklık yalnızca içeriğin üstünde
+   yüzen öğelerde kalır (sekme çubuğu, dinlenme şeridi, düğmeler). */
+html[data-theme="glass"] .card { border: .5px solid var(--card-line); box-shadow: var(--card-shadow); }
+html[data-theme="glass"] .seg { background: var(--fill); border: .5px solid var(--card-line); }
 html[data-theme="glass"] .seg button[aria-selected="true"] { background: var(--glass-strong); box-shadow: 0 1px 4px rgba(0, 0, 0, .1), inset 0 .5px 0 var(--card-line); }
 html[data-theme="glass"] .input,
 html[data-theme="glass"] select.input,
 html[data-theme="glass"] textarea.input { background: var(--input-bg); border-color: var(--sep); }
 
 /* Alt sayfalar: buzlu cam panel; içindeki kartlar tekrar bulanıklaştırılmaz (performans) */
-html[data-theme="glass"] .sheet {
-  background: var(--sheet-bg); border-top: .5px solid var(--glass-line);
-  -webkit-backdrop-filter: blur(34px) saturate(180%); backdrop-filter: blur(34px) saturate(180%);
-}
-html[data-theme="glass"] .sheet .card,
-html[data-theme="glass"] .sheet .seg { -webkit-backdrop-filter: none; backdrop-filter: none; }
+/* Alt sayfalar: açılış animasyonunda her karede bulanıklık hesaplanmasın diye neredeyse opak cam yüzey */
+html[data-theme="glass"] .sheet { background: var(--sheet-bg); border-top: .5px solid var(--glass-line); will-change: transform; }
 html[data-theme="glass"] .sheet-ft { background: transparent; }
 
 @media (prefers-reduced-transparency: reduce) {
-  html[data-theme="glass"] .card, html[data-theme="glass"] .seg, html[data-theme="glass"] .sheet { -webkit-backdrop-filter: none; backdrop-filter: none; }
   html[data-theme="glass"] { --card: rgba(255, 255, 255, 0.92); --sheet-bg: #F6F4F9; }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {

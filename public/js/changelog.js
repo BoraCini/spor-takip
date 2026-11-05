@@ -6,6 +6,17 @@ import { esc, openSheet } from './util.js';
 
 export const CHANGELOG = [
   {
+    version: '2.4.1',
+    date: '5 Kasım 2026',
+    title: 'Daha akıcı cam tema',
+    sections: [
+      {
+        name: 'Görünüm',
+        items: ['Cam temada sayfa geçişleri, açılan pencereler ve kaydırma artık takılmıyor. Görünüm aynı kaldı; telefonu yoran arka plan bulanıklığı kartlardan ve pencerelerden kaldırıldı.'],
+      },
+    ],
+  },
+  {
     version: '2.4.0',
     date: '5 Kasım 2026',
     title: 'Yeni görünüm: Cam tema',
