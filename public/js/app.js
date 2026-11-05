@@ -5,7 +5,7 @@ import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 import { checkWhatsNew, markVersionSeen } from './changelog.js';
 
-export const APP_VERSION = '2.4.1';
+export const APP_VERSION = '2.4.2';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -167,15 +167,19 @@ async function route(keepScroll = false) {
     if (seq !== renderSeq) return;
     const D = 420;
     const E = 'cubic-bezier(.2, .9, .25, 1)';
+    // Cam temada sayfalar saydam: arka plan yerinde kalır, eski sayfa kayarken solar, yeni sayfa belirerek gelir
+    const glass = document.documentElement.dataset.theme === 'glass';
+    const out = glass ? [{ opacity: 1 }, { opacity: 0, offset: 0.4 }, { opacity: 0 }] : null;
+    const kf = (from, to, fade) => (glass ? [{ transform: from, opacity: fade[0] }, { transform: to, opacity: fade[1] }] : [{ transform: from }, { transform: to }]);
     const anims =
       slide === 'fwd'
         ? [
-            viewEl.animate([{ transform: 'translate3d(100%,0,0)' }, { transform: 'translate3d(0,0,0)' }], { duration: D, easing: E }),
-            ghost.animate([{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(-30%,0,0)' }], { duration: D, easing: E }),
+            viewEl.animate(kf('translate3d(100%,0,0)', 'translate3d(0,0,0)', [0.4, 1]), { duration: D, easing: E }),
+            ghost.animate(glass ? out.map((o, i) => ({ ...o, transform: ['translate3d(0,0,0)', 'translate3d(-12%,0,0)', 'translate3d(-30%,0,0)'][i] })) : kf('translate3d(0,0,0)', 'translate3d(-30%,0,0)'), { duration: D, easing: E }),
           ]
         : [
-            viewEl.animate([{ transform: 'translate3d(-30%,0,0)' }, { transform: 'translate3d(0,0,0)' }], { duration: D, easing: E }),
-            ghost.animate([{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(100%,0,0)' }], { duration: D, easing: E }),
+            viewEl.animate(kf('translate3d(-30%,0,0)', 'translate3d(0,0,0)', [0, 1]), { duration: D, easing: E }),
+            ghost.animate(glass ? out.map((o, i) => ({ ...o, transform: ['translate3d(0,0,0)', 'translate3d(40%,0,0)', 'translate3d(100%,0,0)'][i] })) : kf('translate3d(0,0,0)', 'translate3d(100%,0,0)'), { duration: D, easing: E }),
           ];
     viewEl.style.transform = '';
     sliding = { ghost, anims };
@@ -429,6 +433,19 @@ function registerSW() {
   });
 }
 
+// ---------- Açık / koyu görünüm: telefonun ayarı html[data-scheme] olarak izlenir ----------
+// Cam temanın arka planı buna bağlı; iPhone'da görünüm değişince anında güncellensin.
+export function syncScheme() {
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  const set = () => {
+    document.documentElement.dataset.scheme = mq.matches ? 'dark' : 'light';
+  };
+  set();
+  mq.addEventListener?.('change', set);
+  // ana ekran uygulamasında görünüm, uygulama arka plandayken değişebilir
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && set());
+}
+
 // ---------- Ana ekran simgesi: telefon koyu temadaysa koyu logo ----------
 // iPhone ana ekrana eklerken o anki simgeyi alır; sonradan kendisi değiştirmez.
 function syncTouchIcon() {
@@ -473,6 +490,7 @@ window.addEventListener('unhandledrejection', (e) => {
 
 async function start() {
   syncTouchIcon();
+  syncScheme();
   try {
     await db.init();
   } catch (err) {

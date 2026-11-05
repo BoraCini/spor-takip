@@ -1140,40 +1140,39 @@ html[data-theme="glass"] {
     radial-gradient(90% 50% at 10% 100%, var(--blob-c), transparent 75%),
     linear-gradient(180deg, #F6F3F8 0%, #EEEBF3 100%);
 }
-@media (prefers-color-scheme: dark) {
-  html[data-theme="glass"] {
-    --bg: #0A090E;
-    --card: rgba(46, 44, 54, 0.46);
-    --fill: rgba(118, 118, 128, 0.24);
-    --fill2: rgba(118, 118, 128, 0.17);
-    --sep: rgba(255, 255, 255, 0.09);
-    --track: rgba(255, 255, 255, 0.16);
-    --glass: rgba(34, 33, 40, 0.5);
-    --glass-strong: rgba(38, 37, 44, 0.68);
-    --glass-line: rgba(255, 255, 255, 0.13);
-    --input-bg: rgba(255, 255, 255, 0.06);
-    --card-line: rgba(255, 255, 255, 0.09);
-    --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 10px 30px rgba(0, 0, 0, 0.4);
-    --sheet-bg: #16151B;
-    --blob-a: color-mix(in srgb, var(--accent) 36%, transparent);
-    --blob-b: rgba(140, 34, 52, 0.7);
-    --blob-c: rgba(40, 90, 170, 0.4);
-    --app-bg:
-      radial-gradient(85% 50% at 0% 0%, var(--blob-a), transparent 75%),
-      radial-gradient(75% 45% at 100% 35%, var(--blob-b), transparent 75%),
-      radial-gradient(90% 50% at 10% 100%, var(--blob-c), transparent 75%),
-      linear-gradient(180deg, #0D0B12 0%, #07060A 100%);
-  }
+/* Koyu mod: telefonun görünüm ayarı JS ile html[data-scheme] olarak izlenir (iOS, açık uygulamada
+   medya sorgusu değişince sabit arka plan katmanını her zaman yeniden boyamıyor) */
+html[data-theme="glass"][data-scheme="dark"] {
+  --bg: #0A090E;
+  --card: rgba(46, 44, 54, 0.46);
+  --fill: rgba(118, 118, 128, 0.24);
+  --fill2: rgba(118, 118, 128, 0.17);
+  --sep: rgba(255, 255, 255, 0.09);
+  --track: rgba(255, 255, 255, 0.16);
+  --glass: rgba(34, 33, 40, 0.5);
+  --glass-strong: rgba(38, 37, 44, 0.68);
+  --glass-line: rgba(255, 255, 255, 0.13);
+  --input-bg: rgba(255, 255, 255, 0.06);
+  --card-line: rgba(255, 255, 255, 0.09);
+  --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 10px 30px rgba(0, 0, 0, 0.4);
+  --sheet-bg: #16151B;
+  --blob-a: color-mix(in srgb, var(--accent) 36%, transparent);
+  --blob-b: rgba(140, 34, 52, 0.7);
+  --blob-c: rgba(40, 90, 170, 0.4);
+  --app-bg:
+    radial-gradient(85% 50% at 0% 0%, var(--blob-a), transparent 75%),
+    radial-gradient(75% 45% at 100% 35%, var(--blob-b), transparent 75%),
+    radial-gradient(90% 50% at 10% 100%, var(--blob-c), transparent 75%),
+    linear-gradient(180deg, #0D0B12 0%, #07060A 100%);
 }
 /* body saydam: arka plan katmanı (body::before) body'nin altında kalmasın */
 html[data-theme="glass"] body { background: transparent; }
 html[data-theme="glass"] body::before {
   content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--app-bg);
-  transform: translateZ(0); /* kendi katmanında kalsın: kaydırırken yeniden çizilmesin */
 }
-/* Sayfa geçişleri ve kilit ekranı düz renk yerine aynı arka planı taşır */
+/* Sayfa geçişleri: arka plan tek ve sabit katman; sayfalar saydam, üstünde kayar (eski sayfa kayarken solar) */
 html[data-theme="glass"] .view-ghost,
-html[data-theme="glass"] #view.slide-new,
+html[data-theme="glass"] #view.slide-new { background: transparent; box-shadow: none; }
 html[data-theme="glass"] .lock { background: var(--app-bg), var(--bg); }
 
 /* Performans: kartların arkası yumuşak, sabit bir renk geçişi; orada bulanıklık gözle görülür fark yaratmıyor ama
@@ -1195,8 +1194,8 @@ html[data-theme="glass"] .sheet-ft { background: transparent; }
 @media (prefers-reduced-transparency: reduce) {
   html[data-theme="glass"] { --card: rgba(255, 255, 255, 0.92); --sheet-bg: #F6F4F9; }
 }
-@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  html[data-theme="glass"] { --card: rgba(36, 35, 42, 0.95); --sheet-bg: #16151B; }
+@media (prefers-reduced-transparency: reduce) {
+  html[data-theme="glass"][data-scheme="dark"] { --card: rgba(36, 35, 42, 0.95); --sheet-bg: #16151B; }
 }
 
 .theme-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

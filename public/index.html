@@ -10,6 +10,7 @@
 <script>
   // Tema boyamadan önce uygulanır (açılışta renk sıçraması olmasın); asıl ayar uygulama verisinde
   try { document.documentElement.dataset.theme = localStorage.getItem('sporcoach_theme') || 'glass'; } catch (e) { document.documentElement.dataset.theme = 'glass'; }
+  try { document.documentElement.dataset.scheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch (e) {}
 </script>
 <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
