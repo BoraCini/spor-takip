@@ -1,4 +1,4 @@
-// Koruyucu ilaç, vitamin ve takviye kataloğu (Kür › Koruma & vitamin sekmesi).
+// Koruyucu ilaç, vitamin ve takviye kataloğu (Protokol › Koruma ve Vitamin sekmesi).
 // Yalnızca tanımlayıcı bilgi: ad, grup, yaygın biçimler ve kısa kullanım amacı. Doz önerisi içermez.
 // Alanlar: id, ad, arama kelimeleri, grup, biçimler, not, reçeteli mi
 const S = (id, name, alias, group, forms, note = '', rx = false) => ({ id, name, alias, group, forms, note, rx });

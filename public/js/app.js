@@ -5,7 +5,7 @@ import { initRest } from './rest.js';
 import { syncSoon } from './push.js';
 import { checkWhatsNew, markVersionSeen } from './changelog.js';
 
-export const APP_VERSION = '2.4.2';
+export const APP_VERSION = '2.4.3';
 const LOCK_AFTER_MS = 5 * 60 * 1000;
 
 const views = {
@@ -294,7 +294,7 @@ function welcome() {
     el.innerHTML = `
       <picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img class="logo" src="icons/logo.png" alt="Pro Coach"></picture>
       <h1>Pro Coach'a hoş geldin</h1>
-      <p>Antrenmanın, beslenmen, kürün ve kan testlerin tek yerde. Verilerin yalnızca bu telefonda saklanır.</p>
+      <p>Antrenmanın, beslenmen, protokolün ve kan testlerin tek yerde. Verilerin yalnızca bu telefonda saklanır.</p>
       <button type="button" class="btn primary" style="min-width:220px" data-go>Başla</button>`;
     el.querySelector('[data-go]').addEventListener('click', () => {
       el.remove();
@@ -312,7 +312,7 @@ function lockChoice() {
     el.innerHTML = `
       <picture class="logo-pic"><source srcset="icons/logo-dark.png" media="(prefers-color-scheme: dark)"><img class="logo" src="icons/logo.png" alt="Pro Coach"></picture>
       <h1>Uygulama kilitlensin mi?</h1>
-      <p>Kür, kan değerleri ve kilon gibi kişisel bilgilerin burada duracak. İstersen uygulamayı bir PIN ile koruyabilirsin.</p>
+      <p>Protokol, kan değerleri ve kilon gibi kişisel bilgilerin burada duracak. İstersen uygulamayı bir PIN ile koruyabilirsin.</p>
       <div class="choice-list">
         <button type="button" class="choice" data-pin>
           <span class="choice-ic">${lockIcon}</span>

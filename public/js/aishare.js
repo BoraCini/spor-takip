@@ -8,7 +8,7 @@ export async function sharedLabels() {
   return AI_CATEGORIES.filter(([k]) => s[k]).map(([, l]) => l);
 }
 
-const SHORT = { profil: 'Profil', beslenme: 'Beslenme', antrenman: 'Antrenman', vucut: 'Vücut', tahlil: 'Tahlil', tansiyon: 'Tansiyon', ilac: 'İlaç/kür' };
+const SHORT = { profil: 'Profil', beslenme: 'Beslenme', antrenman: 'Antrenman', vucut: 'Vücut', tahlil: 'Tahlil', tansiyon: 'Tansiyon', ilac: 'İlaç/protokol' };
 
 // Mesaj kutusunun üstünde: bu mesajla neler paylaşılacak
 export async function shareLineHTML(attachments = []) {
@@ -34,7 +34,7 @@ export async function openAiShareSheet(onChange) {
             <span class="switch"><input id="ais-${k}" type="checkbox" data-cat="${k}" ${s[k] ? 'checked' : ''}><span></span></span></div>`
         ).join('')}
       </section>
-      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Coach her mesajda kısa bir özet görür; geçmiş antrenmanlar, tahlil değerleri, tansiyon ölçümleri ya da kür ayrıntıları gibi verileri yalnızca sorunun cevabı için gerektiğinde ister ve sohbette "baktı" olarak gösterilir. Eklediğin fotoğraf ve dosyalar ise her zaman gönderilir.</p>`,
+      <p class="small muted" style="margin:10px 4px 0;line-height:18px">Coach her mesajda kısa bir özet görür; geçmiş antrenmanlar, tahlil değerleri, tansiyon ölçümleri ya da protokol ayrıntıları gibi verileri yalnızca sorunun cevabı için gerektiğinde ister ve sohbette "baktı" olarak gösterilir. Eklediğin fotoğraf ve dosyalar ise her zaman gönderilir.</p>`,
     onClose: () => onChange && onChange(),
   });
   sheet.el.addEventListener('change', async (e) => {

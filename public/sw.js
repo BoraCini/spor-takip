@@ -1,5 +1,5 @@
 // Service worker — uygulama kabuğunu önbelleğe alır, çevrimdışı çalışır.
-const CACHE = 'sporcoach-v43';
+const CACHE = 'sporcoach-v44';
 const SHELL = [
   './',
   'index.html',

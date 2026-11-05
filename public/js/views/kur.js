@@ -12,9 +12,9 @@ const FORMS = ['kapsül', 'yumuşak kapsül', 'tablet', 'dil altı tablet', 'çi
 const state = { tab: 'kur' };
 export const isSupp = (c) => c && c.category === 'destek';
 
-const segHTML = () => `<div class="seg" role="tablist" aria-label="Kür sekmeleri">
-    <button type="button" role="tab" aria-selected="${state.tab === 'kur'}" data-tab="kur">Kür</button>
-    <button type="button" role="tab" aria-selected="${state.tab === 'destek'}" data-tab="destek">Koruma &amp; vitamin</button>
+const segHTML = () => `<div class="seg" role="tablist" aria-label="Protokol sekmeleri">
+    <button type="button" role="tab" aria-selected="${state.tab === 'kur'}" data-tab="kur">Protokol</button>
+    <button type="button" role="tab" aria-selected="${state.tab === 'destek'}" data-tab="destek">Koruma ve Vitamin</button>
   </div>`;
 
 export async function render(root, params = {}) {
@@ -46,7 +46,7 @@ export async function render(root, params = {}) {
     <header class="hdr">
       <div class="hdr-text">
         <span class="eyebrow">${esc(trDate(t, true))}</span>
-        <h1 class="title">Kür</h1>
+        <h1 class="title">Protokol</h1>
       </div>
       <div class="hdr-actions">
         <button type="button" class="icon-btn" aria-label="Takvime aktar" data-act="ics">${icon.calendar}</button>
@@ -193,7 +193,7 @@ async function renderSupp(root) {
   const done = pills.filter((x) => x.done).length + inj.filter((x) => x.done).length;
   root.innerHTML = `
     <header class="hdr">
-      <div class="hdr-text"><span class="eyebrow">${esc(trDate(t, true))}</span><h1 class="title">Kür</h1></div>
+      <div class="hdr-text"><span class="eyebrow">${esc(trDate(t, true))}</span><h1 class="title">Protokol</h1></div>
       <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Vitamin veya ilaç ekle" data-act="add">${icon.plus}</button></div>
     </header>
     ${segHTML()}
@@ -656,11 +656,11 @@ function openCompound(c, preset = null, typedName = '') {
   });
 }
 
-// Kür kartı: başlangıç, bitiş, kaçıncı hafta/gün, kalan süre
+// Protokol kartı: başlangıç, bitiş, kaçıncı hafta/gün, kalan süre
 function cycleCard(ci) {
   if (!ci.cycle?.start_date)
-    return `<button type="button" class="card cyc-card" data-act="cycle" aria-label="Kür bilgisi ekle">
-      <span class="cyc-empty-t">Kür takvimi</span>
+    return `<button type="button" class="card cyc-card" data-act="cycle" aria-label="Protokol bilgisi ekle">
+      <span class="cyc-empty-t">Protokol takvimi</span>
       <span class="small muted" style="line-height:18px">Başlangıç ve bitiş tarihini gir; kaçıncı haftada olduğun, kalan süre ve tahlil yorumları buna göre hesaplanır.</span>
       <span class="pill" style="align-self:flex-start;margin-top:4px">Tarihleri gir</span></button>`;
   const left = ci.left;
@@ -675,12 +675,12 @@ function cycleCard(ci) {
       ? 'Bugün son gün'
       : `${Math.floor(left / 7) ? Math.floor(left / 7) + ' hafta ' : ''}${left % 7 ? (left % 7) + ' gün ' : ''}kaldı`;
   const ticks = ci.totalWeeks && ci.totalWeeks <= 30 ? Array.from({ length: ci.totalWeeks }, (_, i) => i + 1) : [];
-  return `<button type="button" class="card cyc-card" data-act="cycle" aria-label="Kür bilgilerini düzenle">
+  return `<button type="button" class="card cyc-card" data-act="cycle" aria-label="Protokol bilgilerini düzenle">
     <div class="cyc-top">
       <div class="cyc-week">
         <span class="cyc-lbl">${ci.status === 'baslamadi' ? 'Başlamadı' : ci.status === 'bitti' ? 'Tamamlandı' : 'Şu an'}</span>
         <span class="cyc-big num">${ci.status === 'devam' ? `${ci.week}.<small> hafta</small>` : ci.status === 'bitti' ? `${ci.totalWeeks || ci.week}<small> hafta</small>` : `${ci.startsIn}<small> gün</small>`}</span>
-        <span class="small muted num">${ci.status === 'devam' ? `${ci.dayNo}. gün${ci.totalWeeks ? ` · ${ci.totalWeeks} haftalık kür` : ''}` : ci.status === 'baslamadi' ? 'sonra başlıyor' : `${ci.totalDays || ''}${ci.totalDays ? ' gün sürdü' : ''}`}</span>
+        <span class="small muted num">${ci.status === 'devam' ? `${ci.dayNo}. gün${ci.totalWeeks ? ` · ${ci.totalWeeks} haftalık protokol` : ''}` : ci.status === 'baslamadi' ? 'sonra başlıyor' : `${ci.totalDays || ''}${ci.totalDays ? ' gün sürdü' : ''}`}</span>
       </div>
       <div class="cyc-dates">
         <span><small>Başlangıç</small><b>${esc(trDateYear(ci.cycle.start_date))}</b></span>
@@ -702,7 +702,7 @@ function cycleCard(ci) {
 
 function openCycle(cy) {
   const s = openSheet({
-    title: 'Kür takvimi',
+    title: 'Protokol takvimi',
     leftLabel: 'Vazgeç',
     rightLabel: 'Kaydet',
     body: `
@@ -715,7 +715,7 @@ function openCycle(cy) {
         <p class="small muted" id="cy-sum" style="margin:10px 0 0;line-height:18px"></p>
       </section>
       <div class="field"><label for="cy-notes">Notlar</label><textarea id="cy-notes" class="input" placeholder="Hedef, dikkat ettiğin yan etkiler, kontrol tahlili tarihleri…">${esc(cy?.notes || '')}</textarea></div>
-      ${cy ? '<button type="button" class="btn danger block" data-new style="background:var(--card)">Yeni kür başlat</button><p class="small muted" style="margin:8px 4px 0">Yeni kür başlatınca mevcut kür bilgisi geçmişte kalır; maddelerin ve kayıtların silinmez.</p>' : ''}`,
+      ${cy ? '<button type="button" class="btn danger block" data-new style="background:var(--card)">Yeni protokol başlat</button><p class="small muted" style="margin:8px 4px 0">Yeni protokol başlatınca mevcut protokol bilgisi geçmişte kalır; maddelerin ve kayıtların silinmez.</p>' : ''}`,
     onRight: async (api) => {
       const start = st.value;
       if (!start) return toast('Başlangıç tarihi gerekli');
@@ -740,7 +740,7 @@ function openCycle(cy) {
     }
     const days = daysBetween(st.value, en.value) + 1;
     const d = daysBetween(st.value, today());
-    sum.textContent = `${days} gün (${Math.floor(days / 7)} hafta${days % 7 ? ' ' + (days % 7) + ' gün' : ''}). ${d < 0 ? `${-d} gün sonra başlıyor.` : d >= days ? 'Bu kürün süresi dolmuş.' : `Bugün ${Math.floor(d / 7) + 1}. haftadasın (${d + 1}. gün).`}`;
+    sum.textContent = `${days} gün (${Math.floor(days / 7)} hafta${days % 7 ? ' ' + (days % 7) + ' gün' : ''}). ${d < 0 ? `${-d} gün sonra başlıyor.` : d >= days ? 'Bu protokolün süresi dolmuş.' : `Bugün ${Math.floor(d / 7) + 1}. haftadasın (${d + 1}. gün).`}`;
   };
   // hafta ↔ bitiş tarihi birbirini doldurur
   const fromWeeks = () => {
@@ -776,7 +776,7 @@ function buildIcs(comps, ci, hideNames) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const startDate = today().replace(/-/g, '');
   const until = ci.end ? ci.end.replace(/-/g, '') + 'T235959' : null;
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ProCoach//TR', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Pro Coach Kür'];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ProCoach//TR', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Pro Coach Protokol'];
   let n = 0;
   for (const c of comps.filter((x) => x.active !== false)) {
     const days = c.days && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6];
@@ -821,7 +821,7 @@ function openIcs(comps, ci) {
         <span class="switch"><input id="ics-hide" type="checkbox" checked><span></span></span>
       </div>
       <p class="small muted" style="margin:0 4px 14px">Takvim bildirimleri kilit ekranında görünebileceği için adları gizli tutmak daha güvenli.</p>
-      ${ci.end ? `<p class="small muted" style="margin:0 4px 14px">Etkinlikler kürün bitiş tarihi olan ${esc(trDateYear(ci.end))}'e kadar tekrarlanır.</p>` : ''}
+      ${ci.end ? `<p class="small muted" style="margin:0 4px 14px">Etkinlikler protokolün bitiş tarihi olan ${esc(trDateYear(ci.end))}'e kadar tekrarlanır.</p>` : ''}
       <button type="button" class="btn primary block" data-go>Dosyayı oluştur</button>`,
   });
   s.el.querySelector('[data-go]').addEventListener('click', async () => {

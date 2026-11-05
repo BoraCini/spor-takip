@@ -52,7 +52,7 @@ export async function render(root) {
 
   if (!tests.length) {
     root.innerHTML = `
-      <header class="hdr"><div class="hdr-text"><span class="eyebrow">Tahlil takibi</span><h1 class="title">Kan testleri</h1></div>
+      <header class="hdr"><div class="hdr-text"><span class="eyebrow">Tahlil takibi</span><h1 class="title">Kan Testleri</h1></div>
         <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Test ekle" data-act="add">${icon.plus}</button></div></header>
       <section class="card" style="text-align:center;padding:24px 16px">
         <p style="margin:0 0 6px;font-size:17px;font-weight:600">Henüz test eklemedin</p>
@@ -79,7 +79,7 @@ export async function render(root) {
   if (!state.testId || !tests.find((x) => x.test.id === state.testId)) state.testId = tests[0].test.id;
   const cur = tests.find((x) => x.test.id === state.testId);
   const date = cur.test.date;
-  // tahlil tarihindeki gerçek kayıtlı bağlam (o tarihte süren kür, bitişten sonraki 4 hafta, son 14 günde doz kaydı)
+  // tahlil tarihindeki gerçek kayıtlı bağlam (o tarihte süren protokol, bitişten sonraki 4 hafta, son 14 günde doz kaydı)
   const cycleCtx = await cycleContextAt(date);
   const cycWeek = cycleCtx.kind === 'kur' ? cycleCtx.week : null;
 
@@ -124,7 +124,7 @@ export async function render(root) {
 
   root.innerHTML = `
     <header class="hdr">
-      <div class="hdr-text"><span class="eyebrow">${tests.length} test kayıtlı</span><h1 class="title">Kan testleri</h1></div>
+      <div class="hdr-text"><span class="eyebrow">${tests.length} test kayıtlı</span><h1 class="title">Kan Testleri</h1></div>
       <div class="hdr-actions"><button type="button" class="icon-btn" aria-label="Test ekle" data-act="add">${icon.plus}</button></div>
     </header>
 
@@ -142,7 +142,7 @@ export async function render(root) {
           <span style="font-size:17px;font-weight:600">${esc(trDateYear(date))}</span>
           ${cur.test.lab_name ? `<span class="small muted">${esc(cur.test.lab_name)}</span>` : ''}
         </div>
-        ${cycWeek && cycWeek > 0 ? `<span class="pill" style="height:28px;font-size:13px;display:inline-flex;align-items:center;color:var(--sub)">Kür haftası ${cycWeek}</span>` : ''}
+        ${cycWeek && cycWeek > 0 ? `<span class="pill" style="height:28px;font-size:13px;display:inline-flex;align-items:center;color:var(--sub)">Protokol haftası ${cycWeek}</span>` : ''}
       </div>
       <div class="stat3">
         <div><b class="${groups.attention.length ? 'warn' : ''}">${groups.attention.length}</b><span>referans dışı</span></div>
@@ -209,7 +209,7 @@ async function healthExtras() {
         next
           ? `<div><b>${esc(trDateYear(next))}</b><span class="small ${days < 0 ? 'warn' : 'muted'}">${days > 0 ? `${days} gün sonra` : days === 0 ? 'Bugün' : `${-days} gün geçti — sonucu eklediysen yeni tarih belirle`}</span></div>
              <span class="small muted">Bildirimler açıksa o sabah hatırlatırım.</span>`
-          : '<span class="small muted" style="line-height:18px">Kür boyunca düzenli tahlil (ör. başlangıç, 6. hafta ve bitiş sonrası) değişimleri erken görmeni sağlar. Bir tarih belirlersen hatırlatırım.</span>'
+          : '<span class="small muted" style="line-height:18px">Protokol boyunca düzenli tahlil (ör. başlangıç, 6. hafta ve bitiş sonrası) değişimleri erken görmeni sağlar. Bir tarih belirlersen hatırlatırım.</span>'
       }
     </section>
 
@@ -234,7 +234,7 @@ async function healthExtras() {
                   <span class="small ${bpCategory(v.sys, v.dia)?.warn ? 'warn' : 'muted'}">${esc(bpCategory(v.sys, v.dia)?.label || '')}</span></div>`
               )
               .join('')}</div>`
-          : '<span class="small muted" style="line-height:18px">Kür ve yoğun antrenman tansiyonu ve nabzı yükseltebilir. Haftada birkaç kez, sabah oturarak 5 dakika dinlendikten sonra ölçüp kaydetmen değişimi görmeni sağlar.</span>'
+          : '<span class="small muted" style="line-height:18px">Protokol ve yoğun antrenman tansiyonu ve nabzı yükseltebilir. Haftada birkaç kez, sabah oturarak 5 dakika dinlendikten sonra ölçüp kaydetmen değişimi görmeni sağlar.</span>'
       }
     </section>
     ${last ? '<p class="note">Sınıflama ACC/AHA 2017 kılavuzuna göredir, bilgi amaçlıdır. Silmek için ölçümü sola kaydır.</p>' : ''}`;
@@ -307,8 +307,8 @@ async function openNextLab() {
   ];
   if (ci.cycle && ci.cycle.start_date) {
     const w6 = addDays(ci.cycle.start_date, 35);
-    if (w6 > today()) opts.push(['Kürün 6. haftası', w6]);
-    if (ci.end) opts.push(['Kür bitiminden 4 hafta sonra', addDays(ci.end, 28)]);
+    if (w6 > today()) opts.push(['Protokolün 6. haftası', w6]);
+    if (ci.end) opts.push(['Protokol bitiminden 4 hafta sonra', addDays(ci.end, 28)]);
   }
   const s = openSheet({
     title: 'Sonraki tahlil',

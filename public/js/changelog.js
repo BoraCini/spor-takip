@@ -6,6 +6,20 @@ import { esc, openSheet } from './util.js';
 
 export const CHANGELOG = [
   {
+    version: '2.4.3',
+    date: '5 Kasım 2026',
+    title: '"Kür" artık "Protokol"',
+    sections: [
+      {
+        name: 'Adlar',
+        items: [
+          'Alt menüdeki "Kür" sekmesinin adı "Protokol" oldu; sayfa başlıkları, Coach\'un metinleri ve takvime aktarılan etkinlikler de bu adı kullanıyor. Kayıtların aynen duruyor.',
+          'Başlıklar düzeltildi: "Kan Testleri", "Koruma ve Vitamin".',
+        ],
+      },
+    ],
+  },
+  {
     version: '2.4.2',
     date: '5 Kasım 2026',
     title: 'Cam temada geçişler ve koyu mod',

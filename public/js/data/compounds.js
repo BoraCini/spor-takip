@@ -1,4 +1,4 @@
-// Kür takibi için madde kataloğu. Yalnızca tanımlayıcı bilgi içerir (ad, kullanım şekli, ester, yaklaşık yarılanma ömrü).
+// Protokol takibi için madde kataloğu. Yalnızca tanımlayıcı bilgi içerir (ad, kullanım şekli, ester, yaklaşık yarılanma ömrü).
 // Doz, süre veya kullanım önerisi içermez. Yarılanma ömürleri literatürdeki yaklaşık değerlerdir; kaynağa göre değişir.
 // Alanlar: id, ad, arama kelimeleri, tür (enjeksiyon | hap), grup, ester sınıfı, yaklaşık yarılanma ömrü, not
 const C = (id, name, alias, kind, group, ester, hl, note = '') => ({ id, name, alias, kind, group, ester, hl, note });
