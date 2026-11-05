@@ -53,13 +53,22 @@ test('cam tema: telefon açık/koyu değiştirince arka plan anında değişir; 
   expect(dark).toContain('linear-gradient');
 
   // sekme geçişinde sayfalar saydam (arka plan katmanı yerinde), eski sayfa solar
-  await page.click('#tabbar [data-tab="antrenman"]');
-  const during = await page.evaluate(() => {
-    const g = document.querySelector('.view-ghost');
-    const v = document.getElementById('view');
-    return g && { ghostBg: getComputedStyle(g).backgroundImage, viewBg: getComputedStyle(v).backgroundImage, anims: g.getAnimations().length };
+  // geçiş sırasında eklenen eski sayfa görüntüsü yakalanır (zamanlamadan bağımsız)
+  await page.evaluate(() => {
+    window.__ghost = null;
+    new MutationObserver((muts, obs) => {
+      for (const m of muts)
+        for (const n of m.addedNodes)
+          if (n.classList && n.classList.contains('view-ghost')) {
+            const v = document.getElementById('view');
+            window.__ghost = { ghostBg: getComputedStyle(n).backgroundImage, viewBg: getComputedStyle(v).backgroundImage };
+            obs.disconnect();
+          }
+    }).observe(document.body, { childList: true });
   });
-  expect(during).toBeTruthy();
+  await page.click('#tabbar [data-tab="antrenman"]');
+  await page.waitForFunction(() => window.__ghost, null, { timeout: 5000 });
+  const during = await page.evaluate(() => window.__ghost);
   expect(during.ghostBg).toBe('none');
   expect(during.viewBg).toBe('none');
   await expect(page.locator('.view-ghost')).toHaveCount(0, { timeout: 3000 });
